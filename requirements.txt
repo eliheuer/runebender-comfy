@@ -1,0 +1,4 @@
+# ComfyUI provides numpy + torch + Pillow already; listed for fresh-venv installs.
+numpy
+Pillow
+torch

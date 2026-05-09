@@ -1,0 +1,28 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Rust
+/rust-core/target/
+**/*.rs.bk
+Cargo.lock.user
+
+# WASM build output
+/web/public/wasm/
+/rust-core/pkg/
+
+# Node / Vite
+/web/node_modules/
+/web/dist/
+/web/.vite/
+*.log
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
