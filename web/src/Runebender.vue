@@ -42,7 +42,13 @@ onMounted(async () => {
   }
 
   try {
-    const mod = await import("/wasm/runebender_comfy_core.js");
+    // The wasm-pack output lives under /public/wasm/ and is served as
+    // a static asset. Vite's dev server analyzer rejects literal
+    // dynamic imports of files in /public, so we route the path
+    // through a variable + @vite-ignore to keep both dev and prod
+    // happy. (Production externalises /wasm/ in vite.config.ts.)
+    const wasmModuleUrl = "/wasm/runebender_comfy_core.js";
+    const mod = await import(/* @vite-ignore */ wasmModuleUrl);
     await mod.default();
 
     const dpr = window.devicePixelRatio || 1;
