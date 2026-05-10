@@ -4,6 +4,7 @@
 // Skips Xilem deliberately: the host UI is Vue (ComfyUI's frontend),
 // so we expose a thin wasm-bindgen surface that Vue can drive.
 
+pub mod editing;
 pub mod model;
 pub mod path;
 
