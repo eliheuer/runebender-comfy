@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Runebender (dev)</title>
+    <style>
+      html, body, #app { height: 100%; margin: 0; padding: 0; }
+      body { background: #1f1a14; color: #f0e6d2; font: 13px ui-sans-serif, system-ui, sans-serif; }
+      .help {
+        position: fixed; top: 8px; left: 8px;
+        padding: 8px 10px; max-width: 320px;
+        background: rgba(58, 47, 36, 0.85);
+        border: 1px solid #5a4a38; border-radius: 4px;
+        line-height: 1.5; pointer-events: none;
+      }
+      .help kbd {
+        display: inline-block; padding: 0 4px;
+        background: #1f1a14; border: 1px solid #5a4a38;
+        border-radius: 3px; font: 11px ui-monospace, monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div class="help">
+      <strong>Runebender dev preview</strong><br />
+      Click point: select &middot; <kbd>Shift</kbd>+click: add<br />
+      Drag empty: marquee &middot; Drag point: move<br />
+      Middle-drag or <kbd>Alt</kbd>+drag: pan<br />
+      Wheel: zoom &middot; <kbd>Cmd</kbd>+<kbd>Z</kbd> / <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>: undo / redo
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

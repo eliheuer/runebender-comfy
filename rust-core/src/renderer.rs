@@ -37,11 +37,16 @@ const POINT_SELECTED: AlphaColor<vello::peniko::color::Srgb> =
     AlphaColor::from_rgba8(0xff, 0xa6, 0x40, 0xff);
 const POINT_OUTLINE: AlphaColor<vello::peniko::color::Srgb> =
     AlphaColor::from_rgba8(0x1f, 0x1a, 0x14, 0xff);
+const MARQUEE_FILL: AlphaColor<vello::peniko::color::Srgb> =
+    AlphaColor::from_rgba8(0xff, 0xa6, 0x40, 0x22);
+const MARQUEE_STROKE: AlphaColor<vello::peniko::color::Srgb> =
+    AlphaColor::from_rgba8(0xff, 0xa6, 0x40, 0xcc);
 
 const ON_CURVE_RADIUS_PX: f64 = 4.5;
 const OFF_CURVE_HALF_PX: f64 = 3.0;
 const POINT_OUTLINE_PX: f64 = 1.0;
 const HANDLE_LINE_PX: f64 = 1.0;
+const MARQUEE_STROKE_PX: f64 = 1.0;
 
 // ============================================================================
 // RENDERER
@@ -135,6 +140,10 @@ impl Renderer {
         for path in &state.paths {
             self.draw_points(path, view, &state.selection);
         }
+
+        if let Some(rect) = state.marquee {
+            self.draw_marquee(rect);
+        }
     }
 
     /// Draw thin lines connecting each off-curve handle to its
@@ -224,6 +233,19 @@ impl Renderer {
                 }
             }
         }
+    }
+
+    fn draw_marquee(&mut self, rect: kurbo::Rect) {
+        // Marquee is already in screen space; draw with identity.
+        self.scene
+            .fill(Fill::NonZero, Affine::IDENTITY, MARQUEE_FILL, None, &rect);
+        self.scene.stroke(
+            &Stroke::new(MARQUEE_STROKE_PX),
+            Affine::IDENTITY,
+            MARQUEE_STROKE,
+            None,
+            &rect,
+        );
     }
 
     fn present(&mut self) -> Result<(), JsValue> {

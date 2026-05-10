@@ -10,6 +10,9 @@ type Editor = {
   pointerMove(x: number, y: number, mods: number): void;
   pointerUp(x: number, y: number, button: number, mods: number): void;
   pointerCancel(): void;
+  wheel(x: number, y: number, deltaY: number): void;
+  undo(): void;
+  redo(): void;
   render(): void;
   resize(w: number, h: number): void;
   setGlyphSvg(svg: string): void;
@@ -60,6 +63,7 @@ onMounted(async () => {
 
     resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(canvas.value);
+    window.addEventListener("keydown", onKeyDown);
   } catch (e) {
     console.error(e);
     status.value = `failed: ${e}`;
@@ -140,9 +144,54 @@ function onPointerCancel() {
   requestRender();
 }
 
+function onWheel(e: WheelEvent) {
+  if (!editor) return;
+  e.preventDefault();
+  const c = canvasCoords(e as unknown as PointerEvent);
+  if (!c) return;
+  // Normalize wheel deltas across deltaMode (pixels / lines / pages).
+  // Lines ~= 16px, pages ~= a screen (~800px is fine as a rough scale).
+  const lineFactor = 16;
+  const pageFactor = 800;
+  const dy =
+    e.deltaMode === 1
+      ? e.deltaY * lineFactor
+      : e.deltaMode === 2
+        ? e.deltaY * pageFactor
+        : e.deltaY;
+  editor.wheel(c[0], c[1], dy);
+  requestRender();
+}
+
+function onKeyDown(e: KeyboardEvent) {
+  if (!editor) return;
+  // Ignore when the user is typing in another field.
+  const target = e.target as HTMLElement | null;
+  if (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target?.isContentEditable
+  ) {
+    return;
+  }
+  const meta = e.metaKey || e.ctrlKey;
+  if (meta && e.key.toLowerCase() === "z") {
+    e.preventDefault();
+    if (e.shiftKey) editor.redo();
+    else editor.undo();
+    requestRender();
+  } else if (meta && e.key.toLowerCase() === "y") {
+    // Windows-style redo.
+    e.preventDefault();
+    editor.redo();
+    requestRender();
+  }
+}
+
 onBeforeUnmount(() => {
   cancelAnimationFrame(raf);
   resizeObserver?.disconnect();
+  window.removeEventListener("keydown", onKeyDown);
   editor?.free();
   editor = null;
 });
@@ -161,6 +210,8 @@ function enterFullscreen() {
       @pointermove="onPointerMove"
       @pointerup="onPointerUp"
       @pointercancel="onPointerCancel"
+      @wheel.prevent="onWheel"
+      @contextmenu.prevent
     />
     <button class="fs-btn" @click="enterFullscreen">Full screen</button>
     <div v-if="status !== 'ready'" class="status">{{ status }}</div>

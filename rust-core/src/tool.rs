@@ -1,17 +1,25 @@
 // Editing tools — for now just a single Select tool that handles
-// click-to-select and drag-to-translate.
+// click-to-select, drag-to-translate, box-select, and pan.
 
-use kurbo::Vec2;
+use kurbo::{Rect, Vec2};
 
-use crate::editing::hit_test::{MIN_CLICK_DISTANCE, find_closest};
+use crate::editing::hit_test::MIN_CLICK_DISTANCE;
 use crate::editing::{Drag, MouseDelegate, MouseEvent, Selection};
 use crate::editor::EditorState;
 
+/// What the in-progress left-button drag is doing. Set in `left_down`
+/// and consulted by the drag callbacks.
+#[derive(Debug, Clone)]
+enum DragKind {
+    None,
+    Translate,
+    BoxSelect { initial: Selection },
+    Pan,
+}
+
 #[derive(Default)]
 pub struct SelectTool {
-    /// Last design-space position seen for the active drag, used to
-    /// produce frame-by-frame deltas.
-    drag_prev: Option<kurbo::Point>,
+    drag_kind: Option<DragKind>,
 }
 
 impl MouseDelegate for SelectTool {
@@ -19,60 +27,117 @@ impl MouseDelegate for SelectTool {
 
     fn left_down(&mut self, event: MouseEvent, state: &mut Self::Data) {
         let design_pt = state.viewport.screen_to_design(event.pos);
-        // Replace selection with whatever's under the cursor (or
-        // clear if nothing's hit).
-        let hit_radius_design =
-            screen_to_design_distance(state, MIN_CLICK_DISTANCE);
-        let candidates = state.paths.iter().flat_map(|path| {
-            path.points()
-                .iter()
-                .map(|pt| (pt.id, pt.point, pt.is_on_curve()))
-                .collect::<Vec<_>>()
-        });
+        let hit_radius = MIN_CLICK_DISTANCE / state.viewport.zoom.max(1e-6);
+        let hit = state.hit_test_point(design_pt, hit_radius);
 
-        let mut new_selection = Selection::new();
-        if let Some(hit) = find_closest(design_pt, candidates, hit_radius_design) {
-            new_selection.insert(hit.entity);
+        // alt+left-drag is a pan, regardless of what's under the cursor.
+        if event.mods.alt {
+            self.drag_kind = Some(DragKind::Pan);
+            return;
         }
-        state.selection = new_selection;
 
-        self.drag_prev = Some(design_pt);
+        match (hit, event.mods.shift) {
+            (Some(id), false) => {
+                // Plain click on a point — replace selection with it,
+                // prepare for translate.
+                let mut sel = Selection::new();
+                sel.insert(id);
+                state.selection = sel;
+                self.drag_kind = Some(DragKind::Translate);
+            }
+            (Some(id), true) => {
+                // Shift-click toggles the hit point. If we just added
+                // it, prepare for translate; if we removed it, no
+                // drag (None).
+                if state.selection.contains(&id) {
+                    state.selection.remove(&id);
+                    self.drag_kind = Some(DragKind::None);
+                } else {
+                    state.selection.insert(id);
+                    self.drag_kind = Some(DragKind::Translate);
+                }
+            }
+            (None, false) => {
+                // Click in empty space — clear and set up box-select.
+                state.selection = Selection::new();
+                self.drag_kind = Some(DragKind::BoxSelect {
+                    initial: Selection::new(),
+                });
+            }
+            (None, true) => {
+                // Shift+click in empty space — start box-select that
+                // adds to the existing selection.
+                self.drag_kind = Some(DragKind::BoxSelect {
+                    initial: state.selection.clone(),
+                });
+            }
+        }
     }
 
     fn left_drag_changed(
         &mut self,
-        event: MouseEvent,
-        _drag: Drag,
+        _event: MouseEvent,
+        drag: Drag,
         state: &mut Self::Data,
     ) {
-        let design_pt = state.viewport.screen_to_design(event.pos);
-        let prev = self.drag_prev.unwrap_or(design_pt);
-        let delta = Vec2::new(design_pt.x - prev.x, design_pt.y - prev.y);
-        state.translate_selection(delta);
-        self.drag_prev = Some(design_pt);
+        let kind = match self.drag_kind.clone() {
+            Some(k) => k,
+            None => return,
+        };
+        match kind {
+            DragKind::Translate => {
+                let screen_delta = drag.current - drag.prev;
+                let design_delta = screen_to_design_delta(state, screen_delta);
+                state.translate_selection(design_delta);
+            }
+            DragKind::BoxSelect { initial } => {
+                let rect = Rect::from_points(drag.start, drag.current);
+                state.marquee = Some(rect);
+                state.select_in_screen_rect(rect, &initial);
+            }
+            DragKind::Pan => {
+                let delta = drag.current - drag.prev;
+                state.viewport.offset += delta;
+            }
+            DragKind::None => {}
+        }
     }
 
     fn left_drag_ended(
         &mut self,
         _event: MouseEvent,
         _drag: Drag,
-        _state: &mut Self::Data,
+        state: &mut Self::Data,
     ) {
-        self.drag_prev = None;
+        state.marquee = None;
+        self.drag_kind = None;
     }
 
     fn left_up(&mut self, _event: MouseEvent, _state: &mut Self::Data) {
-        self.drag_prev = None;
+        // No-op for clicks (drag-end already cleaned up).
+        self.drag_kind = None;
     }
 
-    fn cancel(&mut self, _state: &mut Self::Data) {
-        self.drag_prev = None;
+    // Middle-button drag pans the viewport.
+    fn other_drag_changed(
+        &mut self,
+        _event: MouseEvent,
+        drag: Drag,
+        state: &mut Self::Data,
+    ) {
+        let delta = drag.current - drag.prev;
+        state.viewport.offset += delta;
+    }
+
+    fn cancel(&mut self, state: &mut Self::Data) {
+        state.marquee = None;
+        self.drag_kind = None;
     }
 }
 
-/// Convert a screen-space pixel distance to the equivalent design-space
-/// distance at the current zoom. Uses the inverse of `viewport.zoom`.
-fn screen_to_design_distance(state: &EditorState, screen_dist: f64) -> f64 {
+/// Screen-space pixel delta → design-space delta (divide by zoom,
+/// flip Y).
+fn screen_to_design_delta(state: &EditorState, screen_delta: Vec2) -> Vec2 {
     let zoom = state.viewport.zoom.max(1e-6);
-    screen_dist / zoom
+    Vec2::new(screen_delta.x / zoom, -screen_delta.y / zoom)
 }
