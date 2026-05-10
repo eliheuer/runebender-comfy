@@ -1,7 +1,11 @@
-// runebender-comfy-core — Vello + Kurbo WASM core for the Runebender node.
+// runebender-comfy-core — Vello + Kurbo WASM core for the Runebender
+// ComfyUI node, ported from runebender-xilem (Apache-2.0).
 //
 // Skips Xilem deliberately: the host UI is Vue (ComfyUI's frontend),
 // so we expose a thin wasm-bindgen surface that Vue can drive.
+
+pub mod model;
+pub mod path;
 
 use wasm_bindgen::prelude::*;
 
@@ -12,7 +16,7 @@ pub fn init() {
 
 #[wasm_bindgen]
 pub struct GlyphEditor {
-    // TODO: hold Vello renderer, Kurbo BezPath store, edit state.
+    // TODO: hold renderer, BezPath store, edit state.
 }
 
 #[wasm_bindgen]

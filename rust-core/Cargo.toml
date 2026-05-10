@@ -1,30 +1,38 @@
 [package]
 name = "runebender-comfy-core"
 version = "0.0.1"
-edition = "2021"
+edition = "2024"
+rust-version = "1.88"
 license = "GPL-3.0-or-later"
-description = "WASM core for runebender-comfy-nodes — Vello + Kurbo glyph editor"
+description = "WASM core for runebender-comfy-nodes — glyph editor ported from runebender-xilem"
 repository = "https://github.com/eliheuer/runebender-comfy-nodes"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# Vello renders, Kurbo handles geometry. No Xilem — UI lives in Vue.
-vello = "0.3"
-kurbo = "0.11"
+# Geometry (Linebender). Matches runebender-xilem's kurbo version so types
+# graft without translation. Vello + parley + peniko deferred to Wave 3.
+kurbo = "0.12"
+# spline solves on kurbo 0.9; we keep both versions side by side and
+# convert points at the boundary, exactly as runebender-xilem does.
+kurbo_09 = { package = "kurbo", version = "0.9.5" }
+spline = { git = "https://github.com/linebender/spline" }
+
+# Serialization (used by glyph data types).
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error types.
+thiserror = "1.0"
+
+# WASM bindings. Render-side bindings (web-sys, vello) come in Wave 3.
 wasm-bindgen = "0.2"
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
 
-[dependencies.web-sys]
-version = "0.3"
-features = [
-    "HtmlCanvasElement",
-    "Window",
-    "Document",
-    "GpuCanvasContext",
-]
+# spline (git, Linebender) — hyperbezier solver. Pulled in when we port
+# path/hyper.rs (Wave 1, task 7).
 
 [profile.release]
 opt-level = "z"
