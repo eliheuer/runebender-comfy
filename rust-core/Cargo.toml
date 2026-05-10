@@ -11,9 +11,9 @@ repository = "https://github.com/eliheuer/runebender-comfy-nodes"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# Geometry (Linebender). Matches runebender-xilem's kurbo version so types
-# graft without translation. Vello + parley + peniko deferred to Wave 3.
-kurbo = "0.12"
+# Geometry (Linebender). Matches runebender-xilem's kurbo version so
+# types graft without translation.
+kurbo = "0.13"
 # spline solves on kurbo 0.9; we keep both versions side by side and
 # convert points at the boundary, exactly as runebender-xilem does.
 kurbo_09 = { package = "kurbo", version = "0.9.5" }
@@ -26,13 +26,37 @@ serde_json = "1.0"
 # Error types.
 thiserror = "1.0"
 
-# WASM bindings. Render-side bindings (web-sys, vello) come in Wave 3.
+# WASM bindings.
 wasm-bindgen = "0.2"
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
 
-# spline (git, Linebender) — hyperbezier solver. Pulled in when we port
-# path/hyper.rs (Wave 1, task 7).
+# Render path (Wave 3). Vello re-exports wgpu and peniko, so we use
+# those rather than picking versions ourselves.
+vello = "0.8"
+peniko = "0.5"
+
+# Enable WebGPU canvas surface support for wasm32 targets. Vello pulls
+# in wgpu but with default-features off and no `webgpu`, so the
+# `HtmlCanvasElement → SurfaceTarget` impl isn't available unless we
+# add it ourselves. Native targets don't need this.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { version = "28", default-features = false, features = ["webgpu", "wgsl"] }
+
+# Async runtime for WebGPU init (only used in WASM builds, but keeping
+# it unconditional lets `cargo test` build cleanly without target
+# gating noise).
+wasm-bindgen-futures = "0.4"
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "Window",
+    "console",
+]
 
 [profile.release]
 opt-level = "z"
