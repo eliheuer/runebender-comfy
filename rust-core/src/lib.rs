@@ -5,8 +5,10 @@
 // so we expose a thin wasm-bindgen surface that Vue can drive.
 
 pub mod editing;
+pub mod editor;
 pub mod model;
 pub mod path;
+pub mod tool;
 
 #[cfg(target_arch = "wasm32")]
 pub mod renderer;

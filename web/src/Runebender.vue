@@ -3,14 +3,29 @@ import { onBeforeUnmount, onMounted, ref } from "vue";
 
 const canvas = ref<HTMLCanvasElement | null>(null);
 const status = ref<string>("initializing");
+const selectionCount = ref<number>(0);
 
-let editor: { render: () => void; resize: (w: number, h: number) => void; free: () => void } | null = null;
+type Editor = {
+  pointerDown(x: number, y: number, button: number, mods: number): void;
+  pointerMove(x: number, y: number, mods: number): void;
+  pointerUp(x: number, y: number, button: number, mods: number): void;
+  pointerCancel(): void;
+  render(): void;
+  resize(w: number, h: number): void;
+  setGlyphSvg(svg: string): void;
+  setZoom(z: number): void;
+  setOffset(x: number, y: number): void;
+  selectionCount(): number;
+  free(): void;
+};
+
+let editor: Editor | null = null;
 let raf = 0;
 let resizeObserver: ResizeObserver | null = null;
 
-// Placeholder glyph — capital "I" centered around the origin in
-// design space (Y-up). Real glyphs land here from the Python side
-// once the ComfyUI integration is in place.
+// Placeholder glyph — capital "I" in design space (Y-up). Real
+// glyphs land here from the Python side once the ComfyUI integration
+// is in place.
 const PLACEHOLDER_SVG =
   "M -50 0 L 50 0 L 50 50 L 25 50 L 25 650 L 50 650 L 50 700 L -50 700 L -50 650 L -25 650 L -25 50 L -50 50 Z";
 
@@ -18,7 +33,8 @@ onMounted(async () => {
   if (!canvas.value) return;
 
   if (!("gpu" in navigator)) {
-    status.value = "WebGPU is not available in this browser. Try Chrome 113+, Edge, or Safari Tech Preview.";
+    status.value =
+      "WebGPU is not available in this browser. Try Chrome 113+, Edge, or Safari Tech Preview.";
     return;
   }
 
@@ -33,15 +49,14 @@ onMounted(async () => {
     canvas.value.width = width;
     canvas.value.height = height;
 
-    editor = await mod.GlyphEditor.new(canvas.value, width, height);
+    editor = (await mod.GlyphEditor.new(canvas.value, width, height)) as Editor;
 
-    // Center the glyph in the canvas at 0.5x design-units-per-pixel.
-    editor!.setGlyphSvg(PLACEHOLDER_SVG);
-    editor!.setZoom(0.5 * dpr);
-    editor!.setOffset(width / 2, height / 2 + 175 * dpr);
+    editor.setGlyphSvg(PLACEHOLDER_SVG);
+    editor.setZoom(0.5 * dpr);
+    editor.setOffset(width / 2, height / 2 + 175 * dpr);
 
     status.value = "ready";
-    scheduleRender();
+    requestRender();
 
     resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(canvas.value);
@@ -51,10 +66,12 @@ onMounted(async () => {
   }
 });
 
-function scheduleRender() {
+function requestRender() {
   if (!editor) return;
+  cancelAnimationFrame(raf);
   raf = requestAnimationFrame(() => {
     editor?.render();
+    if (editor) selectionCount.value = editor.selectionCount();
   });
 }
 
@@ -68,7 +85,59 @@ function handleResize() {
   canvas.value.width = width;
   canvas.value.height = height;
   editor.resize(width, height);
-  scheduleRender();
+  requestRender();
+}
+
+// Map a DOM PointerEvent to canvas-backing-store coords (the renderer
+// works in physical pixels, not CSS pixels).
+function canvasCoords(e: PointerEvent): [number, number] | null {
+  if (!canvas.value) return null;
+  const rect = canvas.value.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const x = (e.clientX - rect.left) * dpr;
+  const y = (e.clientY - rect.top) * dpr;
+  return [x, y];
+}
+
+function modBits(e: PointerEvent): number {
+  return (
+    (e.shiftKey ? 1 : 0) |
+    (e.ctrlKey ? 2 : 0) |
+    (e.altKey ? 4 : 0) |
+    (e.metaKey ? 8 : 0)
+  );
+}
+
+function onPointerDown(e: PointerEvent) {
+  if (!editor) return;
+  const c = canvasCoords(e);
+  if (!c) return;
+  (e.target as Element).setPointerCapture?.(e.pointerId);
+  editor.pointerDown(c[0], c[1], e.button, modBits(e));
+  requestRender();
+}
+
+function onPointerMove(e: PointerEvent) {
+  if (!editor) return;
+  const c = canvasCoords(e);
+  if (!c) return;
+  editor.pointerMove(c[0], c[1], modBits(e));
+  requestRender();
+}
+
+function onPointerUp(e: PointerEvent) {
+  if (!editor) return;
+  const c = canvasCoords(e);
+  if (!c) return;
+  editor.pointerUp(c[0], c[1], e.button, modBits(e));
+  (e.target as Element).releasePointerCapture?.(e.pointerId);
+  requestRender();
+}
+
+function onPointerCancel() {
+  if (!editor) return;
+  editor.pointerCancel();
+  requestRender();
 }
 
 onBeforeUnmount(() => {
@@ -85,9 +154,19 @@ function enterFullscreen() {
 
 <template>
   <div class="runebender-host">
-    <canvas ref="canvas" class="runebender-canvas" />
+    <canvas
+      ref="canvas"
+      class="runebender-canvas"
+      @pointerdown="onPointerDown"
+      @pointermove="onPointerMove"
+      @pointerup="onPointerUp"
+      @pointercancel="onPointerCancel"
+    />
     <button class="fs-btn" @click="enterFullscreen">Full screen</button>
     <div v-if="status !== 'ready'" class="status">{{ status }}</div>
+    <div v-if="status === 'ready' && selectionCount > 0" class="status">
+      {{ selectionCount }} selected
+    </div>
   </div>
 </template>
 
@@ -96,12 +175,14 @@ function enterFullscreen() {
   position: relative;
   width: 100%;
   height: 100%;
-  background: #1f1a14; /* warm dark — campfire palette */
+  background: #1f1a14;
 }
 .runebender-canvas {
   width: 100%;
   height: 100%;
   display: block;
+  cursor: crosshair;
+  touch-action: none;
 }
 .fs-btn {
   position: absolute;
