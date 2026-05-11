@@ -13,6 +13,7 @@ __pycache__/
 Cargo.lock.user
 
 # WASM build output
+/web/wasm/
 /web/public/wasm/
 /rust-core/pkg/
 

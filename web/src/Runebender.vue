@@ -1,5 +1,11 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
+// wasm-pack output lives in ../wasm/ (a normal source directory, not
+// /public/). Vite resolves this as a regular ES module; the shim's
+// internal `new URL('..._bg.wasm', import.meta.url)` then resolves
+// to a sibling URL that Vite serves automatically in dev and rewrites
+// to a bundled asset in prod.
+import init, { GlyphEditor } from "../wasm/runebender_comfy_core.js";
 
 const canvas = ref<HTMLCanvasElement | null>(null);
 const status = ref<string>("initializing");
@@ -42,14 +48,7 @@ onMounted(async () => {
   }
 
   try {
-    // The wasm-pack output lives under /public/wasm/ and is served as
-    // a static asset. Vite's dev server analyzer rejects literal
-    // dynamic imports of files in /public, so we route the path
-    // through a variable + @vite-ignore to keep both dev and prod
-    // happy. (Production externalises /wasm/ in vite.config.ts.)
-    const wasmModuleUrl = "/wasm/runebender_comfy_core.js";
-    const mod = await import(/* @vite-ignore */ wasmModuleUrl);
-    await mod.default();
+    await init();
 
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.value.getBoundingClientRect();
@@ -58,7 +57,7 @@ onMounted(async () => {
     canvas.value.width = width;
     canvas.value.height = height;
 
-    editor = (await mod.GlyphEditor.new(canvas.value, width, height)) as Editor;
+    editor = (await GlyphEditor.new(canvas.value, width, height)) as unknown as Editor;
 
     editor.setGlyphSvg(PLACEHOLDER_SVG);
     editor.setZoom(0.5 * dpr);
