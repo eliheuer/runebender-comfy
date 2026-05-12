@@ -1,0 +1,87 @@
+# cargo-deny config for runebender-comfy-core.
+#
+# Run from rust-core/ with:
+#
+#     cargo deny check
+#
+# Four passes:
+#   - advisories : RustSec database (known-vulnerable + yanked crates)
+#   - licenses   : SPDX-expression allowlist, GPL-3.0-compatible only
+#   - bans       : flag duplicate versions of the same crate
+#   - sources    : restrict to crates.io and the one Linebender git URL
+#
+# This is a *reactive* defense — RustSec finds malicious or vulnerable
+# crates after the fact. For a proactive cooldown (refuse anything
+# published in the last 7 days, mirroring our pnpm `minimum-release-age`
+# config), see ../tools/check-crate-age.
+
+# ============================================================================
+# advisories
+# ============================================================================
+
+[advisories]
+version = 2
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+ignore = []
+
+# ============================================================================
+# licenses
+# ============================================================================
+#
+# This crate is GPL-3.0. Compatible inbound licenses (we can include
+# them) are listed below. We don't list "GPL-3.0" itself because
+# cargo-deny ignores the workspace's own license by default.
+
+[licenses]
+version = 2
+confidence-threshold = 0.8
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
+    "0BSD",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+]
+# When a crate has no machine-readable license, fall back to manually
+# verifying and listing it here (name + clarification entry).
+exceptions = []
+
+# ============================================================================
+# bans
+# ============================================================================
+
+[bans]
+# Warn on dependency duplicates (same crate at multiple versions in
+# the tree). spline pulls kurbo 0.9 alongside our kurbo 0.13, so we
+# explicitly allow that pair.
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+deny = []
+skip = [
+    { name = "kurbo", version = "=0.9.5" },
+]
+skip-tree = []
+
+# ============================================================================
+# sources
+# ============================================================================
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = [
+    "https://github.com/linebender/spline",
+]

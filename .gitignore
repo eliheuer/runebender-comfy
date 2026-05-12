@@ -9,6 +9,7 @@ __pycache__/
 
 # Rust
 /rust-core/target/
+/tools/check-crate-age/target/
 **/*.rs.bk
 Cargo.lock.user
 

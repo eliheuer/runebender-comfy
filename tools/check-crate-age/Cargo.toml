@@ -1,0 +1,18 @@
+[package]
+name = "check-crate-age"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-3.0-or-later"
+description = "Supply-chain cooldown check for Cargo.lock — refuses crates younger than N days"
+publish = false
+
+[[bin]]
+name = "check-crate-age"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+ureq = { version = "2", features = ["json"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
