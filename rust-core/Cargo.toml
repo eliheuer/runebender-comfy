@@ -26,6 +26,9 @@ serde_json = "1.0"
 # Error types.
 thiserror = "1.0"
 
+# UFO parsing (Linebender) — same library runebender-xilem uses.
+norad = "0.13"
+
 # WASM bindings.
 wasm-bindgen = "0.2"
 js-sys = "0.3"
@@ -42,6 +45,9 @@ peniko = "0.5"
 # add it ourselves. Native targets don't need this.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wgpu = { version = "28", default-features = false, features = ["webgpu", "wgsl"] }
+# uuid (pulled in transitively by norad) needs its `js` feature on
+# wasm32 to source randomness from js-sys.
+uuid = { version = "1", features = ["js"] }
 
 # Async runtime for WebGPU init (only used in WASM builds, but keeping
 # it unconditional lets `cargo test` build cleanly without target

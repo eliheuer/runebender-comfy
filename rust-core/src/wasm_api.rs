@@ -59,6 +59,27 @@ impl GlyphEditor {
         Ok(())
     }
 
+    /// Replace the displayed glyph from a UFO `.glif` file's raw
+    /// bytes. Parses via `norad`, then walks the result into the
+    /// editor's own contour representation. Clears undo history.
+    #[wasm_bindgen(js_name = setGlyphGlif)]
+    pub fn set_glyph_glif(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
+        let glyph = norad::Glyph::parse_raw(bytes)
+            .map_err(|e| JsValue::from_str(&format!("parse .glif: {e}")))?;
+        self.state.set_glyph_from_norad(&glyph);
+        self.undo.clear();
+        self.pending_snapshot = None;
+        Ok(())
+    }
+
+    /// Auto-zoom and center the loaded glyph for a canvas of the
+    /// given backing-store size. Called from JS after loading a real
+    /// glyph so the user doesn't have to hunt for it.
+    #[wasm_bindgen(js_name = fitToCanvas)]
+    pub fn fit_to_canvas(&mut self, width: f64, height: f64) {
+        self.state.fit_to_canvas(width, height);
+    }
+
     #[wasm_bindgen(js_name = setZoom)]
     pub fn set_zoom(&mut self, zoom: f64) {
         self.state.viewport.zoom = zoom.max(1e-4);

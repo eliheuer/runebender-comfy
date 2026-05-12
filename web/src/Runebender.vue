@@ -8,8 +8,11 @@ import { onBeforeUnmount, onMounted, ref } from "vue";
 import init, { GlyphEditor } from "../wasm/runebender_comfy_core.js";
 
 const canvas = ref<HTMLCanvasElement | null>(null);
+const fileInput = ref<HTMLInputElement | null>(null);
 const status = ref<string>("initializing");
 const selectionCount = ref<number>(0);
+const glyphName = ref<string>("");
+const dragHover = ref<boolean>(false);
 
 type Editor = {
   pointerDown(x: number, y: number, button: number, mods: number): void;
@@ -22,6 +25,8 @@ type Editor = {
   render(): void;
   resize(w: number, h: number): void;
   setGlyphSvg(svg: string): void;
+  setGlyphGlif(bytes: Uint8Array): void;
+  fitToCanvas(w: number, h: number): void;
   setZoom(z: number): void;
   setOffset(x: number, y: number): void;
   selectionCount(): number;
@@ -149,6 +154,53 @@ function onPointerCancel() {
   requestRender();
 }
 
+async function loadGlifFile(file: File) {
+  if (!editor || !canvas.value) return;
+  if (!/\.glif$/i.test(file.name)) {
+    status.value = `not a .glif: ${file.name}`;
+    return;
+  }
+  try {
+    const buf = await file.arrayBuffer();
+    editor.setGlyphGlif(new Uint8Array(buf));
+    editor.fitToCanvas(canvas.value.width, canvas.value.height);
+    glyphName.value = file.name.replace(/\.glif$/i, "");
+    status.value = "ready";
+    requestRender();
+  } catch (e) {
+    console.error(e);
+    status.value = `failed to load: ${e}`;
+  }
+}
+
+function onLoadButton() {
+  fileInput.value?.click();
+}
+
+function onFileChange(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (file) loadGlifFile(file);
+  // Reset so picking the same file again still fires `change`.
+  input.value = "";
+}
+
+function onDragOver(e: DragEvent) {
+  e.preventDefault();
+  dragHover.value = true;
+}
+
+function onDragLeave() {
+  dragHover.value = false;
+}
+
+function onDrop(e: DragEvent) {
+  e.preventDefault();
+  dragHover.value = false;
+  const file = e.dataTransfer?.files?.[0];
+  if (file) loadGlifFile(file);
+}
+
 function onWheel(e: WheelEvent) {
   if (!editor) return;
   e.preventDefault();
@@ -211,16 +263,33 @@ function enterFullscreen() {
     <canvas
       ref="canvas"
       class="runebender-canvas"
+      :class="{ 'drag-hover': dragHover }"
       @pointerdown="onPointerDown"
       @pointermove="onPointerMove"
       @pointerup="onPointerUp"
       @pointercancel="onPointerCancel"
       @wheel.prevent="onWheel"
       @contextmenu.prevent
+      @dragover="onDragOver"
+      @dragleave="onDragLeave"
+      @drop="onDrop"
     />
-    <button class="fs-btn" @click="enterFullscreen">Full screen</button>
+    <div class="toolbar">
+      <button class="btn" @click="onLoadButton">Load .glif</button>
+      <button class="btn" @click="enterFullscreen">Full screen</button>
+    </div>
+    <input
+      ref="fileInput"
+      type="file"
+      accept=".glif"
+      class="file-input"
+      @change="onFileChange"
+    />
     <div v-if="status !== 'ready'" class="status">{{ status }}</div>
-    <div v-if="status === 'ready' && selectionCount > 0" class="status">
+    <div v-else-if="glyphName" class="status">
+      {{ glyphName }}{{ selectionCount > 0 ? ` — ${selectionCount} selected` : "" }}
+    </div>
+    <div v-else-if="selectionCount > 0" class="status">
       {{ selectionCount }} selected
     </div>
   </div>
@@ -240,16 +309,31 @@ function enterFullscreen() {
   cursor: crosshair;
   touch-action: none;
 }
-.fs-btn {
+.toolbar {
   position: absolute;
   top: 8px;
   right: 8px;
+  display: flex;
+  gap: 6px;
+}
+.btn {
   padding: 4px 8px;
   background: #3a2f24;
   color: #f0e6d2;
   border: 1px solid #5a4a38;
   border-radius: 4px;
   cursor: pointer;
+  font: 11px ui-sans-serif, system-ui, sans-serif;
+}
+.btn:hover {
+  background: #4a3d2e;
+}
+.file-input {
+  display: none;
+}
+.runebender-canvas.drag-hover {
+  outline: 2px dashed #ffa640;
+  outline-offset: -2px;
 }
 .status {
   position: absolute;

@@ -3,10 +3,12 @@
 // Renderer reads from this; mouse/keyboard handlers mutate it. Lives
 // outside the wasm-bindgen surface so it's testable on native too.
 
-use kurbo::{BezPath, PathEl, Point, Rect, Vec2};
+use kurbo::{BezPath, PathEl, Point, Rect, Shape, Vec2};
 
 use crate::editing::{Selection, ViewPort};
 use crate::model::EntityId;
+use crate::model::workspace::{self, Contour as WsContour, ContourPoint as WsContourPoint,
+    PointType as WsPointType};
 use crate::path::{CubicPath, Path, PathPoint, PathPoints, PointType};
 
 /// In-memory state for one open glyph.
@@ -71,6 +73,63 @@ impl EditorState {
             }
         }
         flush(&mut self.paths, &mut current_points, false);
+    }
+
+    /// Replace the glyph from a `norad::Glyph` (parsed from a `.glif`
+    /// file). Walks norad's contours into our `workspace::Contour`
+    /// representation, then uses the existing `Path::from_contour`
+    /// dispatch which detects cubic / quadratic / hyperbezier shapes.
+    pub fn set_glyph_from_norad(&mut self, glyph: &norad::Glyph) {
+        self.paths.clear();
+        self.selection = Selection::new();
+        self.marquee = None;
+
+        for norad_contour in &glyph.contours {
+            let ws_contour = convert_norad_contour(norad_contour);
+            self.paths.push(Path::from_contour(&ws_contour));
+        }
+    }
+
+    /// Bounding box of all paths in design space, or `None` if empty.
+    pub fn glyph_bbox(&self) -> Option<Rect> {
+        let mut bbox: Option<Rect> = None;
+        for path in &self.paths {
+            let bez = path.to_bezpath();
+            if bez.elements().is_empty() {
+                continue;
+            }
+            let b = bez.bounding_box();
+            if !b.x0.is_finite() || !b.y0.is_finite() {
+                continue;
+            }
+            bbox = Some(match bbox {
+                Some(prev) => prev.union(b),
+                None => b,
+            });
+        }
+        bbox
+    }
+
+    /// Auto-zoom and center the glyph in a `width × height` canvas
+    /// (in screen-space pixels). Adds 10% margin around the bbox.
+    pub fn fit_to_canvas(&mut self, width: f64, height: f64) {
+        let Some(bbox) = self.glyph_bbox() else {
+            return;
+        };
+        let bw = bbox.width().max(1.0);
+        let bh = bbox.height().max(1.0);
+        let margin = 0.9;
+        let zoom_x = width * margin / bw;
+        let zoom_y = height * margin / bh;
+        let zoom = zoom_x.min(zoom_y).max(1e-3);
+        self.viewport.zoom = zoom;
+        // Center bbox.center() in screen space. Screen y is flipped:
+        //   screen.y = -design.y * zoom + offset.y
+        let center = bbox.center();
+        self.viewport.offset = Vec2::new(
+            width / 2.0 - center.x * zoom,
+            height / 2.0 + center.y * zoom,
+        );
     }
 
     /// Translate every selected point by `delta` (in design space).
@@ -178,3 +237,29 @@ fn translate_in_path(path: &mut Path, selection: &Selection, delta: Vec2) {
 fn rect_contains(rect: &Rect, p: Point) -> bool {
     p.x >= rect.min_x() && p.x <= rect.max_x() && p.y >= rect.min_y() && p.y <= rect.max_y()
 }
+
+fn convert_norad_contour(contour: &norad::Contour) -> WsContour {
+    WsContour {
+        points: contour.points.iter().map(convert_norad_point).collect(),
+    }
+}
+
+fn convert_norad_point(pt: &norad::ContourPoint) -> WsContourPoint {
+    WsContourPoint {
+        x: pt.x,
+        y: pt.y,
+        point_type: match pt.typ {
+            norad::PointType::Move => WsPointType::Move,
+            norad::PointType::Line => WsPointType::Line,
+            norad::PointType::OffCurve => WsPointType::OffCurve,
+            norad::PointType::Curve => WsPointType::Curve,
+            norad::PointType::QCurve => WsPointType::QCurve,
+        },
+        smooth: pt.smooth,
+    }
+}
+
+// Quiet unused-import lint on `workspace` while the only use is via
+// the WsContour / WsContourPoint / WsPointType aliases above.
+#[allow(dead_code)]
+fn _suppress(_: workspace::Glyph) {}
