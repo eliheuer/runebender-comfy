@@ -238,13 +238,28 @@ fn rect_contains(rect: &Rect, p: Point) -> bool {
     p.x >= rect.min_x() && p.x <= rect.max_x() && p.y >= rect.min_y() && p.y <= rect.max_y()
 }
 
-fn convert_norad_contour(contour: &norad::Contour) -> WsContour {
+/// Convert a norad Glyph into a single combined BezPath. Used by
+/// both the live editor (via `set_glyph_from_norad`) and any callers
+/// that just need a renderable path — e.g. the wasm `glifToSvg`
+/// helper that builds the grid view.
+pub fn norad_glyph_to_bezpath(glyph: &norad::Glyph) -> BezPath {
+    let mut combined = BezPath::new();
+    for norad_contour in &glyph.contours {
+        let ws_contour = convert_norad_contour(norad_contour);
+        for el in Path::from_contour(&ws_contour).to_bezpath().elements() {
+            combined.push(*el);
+        }
+    }
+    combined
+}
+
+pub fn convert_norad_contour(contour: &norad::Contour) -> WsContour {
     WsContour {
         points: contour.points.iter().map(convert_norad_point).collect(),
     }
 }
 
-fn convert_norad_point(pt: &norad::ContourPoint) -> WsContourPoint {
+pub fn convert_norad_point(pt: &norad::ContourPoint) -> WsContourPoint {
     WsContourPoint {
         x: pt.x,
         y: pt.y,

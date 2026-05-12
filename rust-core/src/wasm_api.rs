@@ -4,14 +4,38 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use kurbo::{BezPath, Point, Vec2};
+use kurbo::{BezPath, Point, Shape, Vec2};
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
 
 use crate::editing::{Modifiers, Mouse, MouseButton, MouseEvent, UndoState};
-use crate::editor::EditorState;
+use crate::editor::{EditorState, norad_glyph_to_bezpath};
 use crate::renderer::Renderer;
 use crate::tool::SelectTool;
+
+/// Parse a .glif file's bytes and return an SVG string fit for an
+/// `<img>` or inline render in the glyph grid. Uses the same
+/// norad → BezPath path that the live editor uses, then wraps in a
+/// viewBox sized to the glyph's own bbox with a Y-flip so UFO's
+/// y-up coordinates display correctly.
+#[wasm_bindgen(js_name = glifToSvg)]
+pub fn glif_to_svg(bytes: &[u8]) -> Result<String, JsValue> {
+    let glyph = norad::Glyph::parse_raw(bytes)
+        .map_err(|e| JsValue::from_str(&format!("parse .glif: {e}")))?;
+    let bez = norad_glyph_to_bezpath(&glyph);
+    if bez.elements().is_empty() {
+        return Ok(String::new());
+    }
+    let bbox = bez.bounding_box();
+    Ok(format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="{} {} {} {}" preserveAspectRatio="xMidYMid meet"><path d="{}" fill="currentColor" fill-rule="nonzero" transform="scale(1 -1)"/></svg>"#,
+        bbox.x0,
+        -bbox.y1,
+        bbox.width(),
+        bbox.height(),
+        bez.to_svg(),
+    ))
+}
 
 #[wasm_bindgen]
 pub struct GlyphEditor {

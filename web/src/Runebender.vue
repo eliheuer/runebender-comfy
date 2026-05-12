@@ -5,7 +5,10 @@ import { onBeforeUnmount, onMounted, ref } from "vue";
 // internal `new URL('..._bg.wasm', import.meta.url)` then resolves
 // to a sibling URL that Vite serves automatically in dev and rewrites
 // to a bundled asset in prod.
-import init, { GlyphEditor } from "../wasm/runebender_comfy_core.js";
+import init, {
+  GlyphEditor,
+  glifToSvg,
+} from "../wasm/runebender_comfy_core.js";
 
 const canvas = ref<HTMLCanvasElement | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
@@ -15,6 +18,10 @@ const dragHover = ref<boolean>(false);
 const glyphNames = ref<string[]>([]);
 const currentGlyph = ref<string>("");
 const fontLabel = ref<string>("");
+const viewMode = ref<"grid" | "editor">("grid");
+// Pre-computed SVG strings for the grid cells, keyed by glyph name.
+// Set once per UFO load; consulted only by the template.
+const glyphSvgs = ref<Map<string, string>>(new Map());
 
 type Editor = {
   pointerDown(x: number, y: number, button: number, mods: number): void;
@@ -40,7 +47,7 @@ let raf = 0;
 let resizeObserver: ResizeObserver | null = null;
 // Holds raw bytes for every loaded glyph, keyed by the glyph's UFO
 // name (NOT the mangled filename). Set when a UFO is loaded; consulted
-// when the dropdown changes.
+// when the user clicks a grid cell.
 const glyphBytes = new Map<string, Uint8Array>();
 
 onMounted(async () => {
@@ -65,7 +72,6 @@ onMounted(async () => {
     editor = (await GlyphEditor.new(canvas.value, width, height)) as unknown as Editor;
 
     status.value = "ready";
-    requestRender();
 
     resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(canvas.value);
@@ -77,7 +83,7 @@ onMounted(async () => {
 });
 
 function requestRender() {
-  if (!editor) return;
+  if (!editor || viewMode.value !== "editor") return;
   cancelAnimationFrame(raf);
   raf = requestAnimationFrame(() => {
     editor?.render();
@@ -161,17 +167,6 @@ function parseGlyphName(bytes: Uint8Array): string | null {
   return match?.[1] ?? null;
 }
 
-/// Pick a sensible glyph to land on after loading a UFO. Try "A"
-/// first (common test glyph), else "a", else .notdef, else the first
-/// glyph alphabetically.
-function pickInitialGlyph(names: string[]): string | null {
-  if (names.length === 0) return null;
-  for (const preferred of ["A", "a", ".notdef"]) {
-    if (names.includes(preferred)) return preferred;
-  }
-  return names[0];
-}
-
 async function loadGlifFiles(files: File[]) {
   if (!editor || !canvas.value) return;
 
@@ -179,7 +174,6 @@ async function loadGlifFiles(files: File[]) {
   if (files.some((f) => /\.designspace$/i.test(f.name))) {
     status.value =
       "designspace files aren't supported yet — open one of the referenced .ufo folders for now";
-    // Continue: if there are also .glif files in the drop, those still load.
   }
 
   // From a UFO directory, prefer the main `glyphs/` layer. Falls
@@ -201,10 +195,11 @@ async function loadGlifFiles(files: File[]) {
 
   glyphBytes.clear();
   glyphNames.value = [];
-  status.value = `loading ${glifs.length} glyph${glifs.length === 1 ? "" : "s"}…`;
+  glyphSvgs.value = new Map();
+  currentGlyph.value = "";
+  status.value = `reading ${glifs.length} glyph${glifs.length === 1 ? "" : "s"}…`;
 
-  // Read all glyphs in parallel. For UFOs with thousands of glyphs
-  // this is bounded by browser file-read throughput, not CPU.
+  // Read all glyphs in parallel; bound by file-read throughput.
   const loaded = await Promise.all(
     glifs.map(async (f) => {
       const bytes = new Uint8Array(await f.arrayBuffer());
@@ -218,34 +213,65 @@ async function loadGlifFiles(files: File[]) {
   glyphNames.value = names;
 
   // Label the UFO by the folder name (best-effort) — match any
-  // ".ufo" segment in the path, regardless of how deeply nested.
+  // ".ufo" segment in the path, regardless of nesting depth.
   const sample = relPath(glifs[0]);
   const ufoMatch = sample.match(/([^/]+\.ufo)\//i);
   fontLabel.value = ufoMatch ? ufoMatch[1] : "";
 
-  const initial = pickInitialGlyph(names);
-  if (initial) selectGlyph(initial);
+  status.value = `rendering grid (${names.length})…`;
+  // Render grid SVGs in chunks so we yield to the event loop and
+  // the "loading…" status pill actually paints for big UFOs.
+  await buildGridSvgs(names);
+
   status.value = "ready";
+  viewMode.value = "grid";
 }
 
-function selectGlyph(name: string) {
+async function buildGridSvgs(names: string[]) {
+  const chunkSize = 64;
+  const svgs = new Map<string, string>();
+  for (let i = 0; i < names.length; i += chunkSize) {
+    for (let j = i; j < Math.min(i + chunkSize, names.length); j++) {
+      const name = names[j];
+      const bytes = glyphBytes.get(name);
+      if (!bytes) continue;
+      try {
+        const svg = glifToSvg(bytes);
+        if (svg) svgs.set(name, svg);
+      } catch {
+        // Skip malformed glyphs silently — they'll appear as empty
+        // cells but won't break the rest of the UFO.
+      }
+    }
+    // Let Vue/browser breathe between chunks.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+  glyphSvgs.value = svgs;
+}
+
+function openGlyph(name: string) {
   if (!editor || !canvas.value) return;
   const bytes = glyphBytes.get(name);
   if (!bytes) return;
   try {
     editor.setGlyphGlif(bytes);
-    editor.fitToCanvas(canvas.value.width, canvas.value.height);
+    viewMode.value = "editor";
     currentGlyph.value = name;
-    requestRender();
+    // Canvas was visually hidden; let layout settle before sizing.
+    requestAnimationFrame(() => {
+      if (!editor || !canvas.value) return;
+      handleResize();
+      editor.fitToCanvas(canvas.value.width, canvas.value.height);
+      requestRender();
+    });
   } catch (e) {
     console.error(e);
     status.value = `failed to load ${name}: ${e}`;
   }
 }
 
-function onGlyphSelect(e: Event) {
-  const name = (e.target as HTMLSelectElement).value;
-  if (name) selectGlyph(name);
+function backToGrid() {
+  viewMode.value = "grid";
 }
 
 // macOS treats `.ufo` as a package bundle when any font tool is
@@ -269,17 +295,13 @@ async function onLoadButton() {
       return;
     } catch (e) {
       const err = e as Error;
-      if (err.name === "AbortError") return; // user cancelled
-      // Fall through to the legacy picker on any other error.
+      if (err.name === "AbortError") return;
       console.warn("showDirectoryPicker failed, falling back:", err);
     }
   }
   fileInput.value?.click();
 }
 
-/// Recursively flatten a FileSystemDirectoryHandle into File objects
-/// with synthetic webkitRelativePath set, so the existing UFO filter
-/// logic sees a uniform shape across all entry points.
 async function filesFromDirectoryHandle(
   handle: FileSystemDirectoryHandle,
   prefix: string,
@@ -297,10 +319,7 @@ async function filesFromDirectoryHandle(
           value: path,
           configurable: true,
         });
-      } catch {
-        // Some browsers disallow this; the "any .glif" fallback still
-        // catches the file, just without the `/glyphs/` filter.
-      }
+      } catch {}
       out.push(file);
     } else {
       out.push(
@@ -319,12 +338,10 @@ function onFileChange(e: Event) {
 }
 
 // ---------------------------------------------------------------------
-// Drag-drop: handle both single .glif files and full UFO folders.
+// Drag-drop
 // ---------------------------------------------------------------------
 
 function relPath(f: File): string {
-  // webkitdirectory sets webkitRelativePath; for drag-drop we attach
-  // it ourselves via Object.defineProperty in `readEntry`.
   return (f as File & { webkitRelativePath?: string }).webkitRelativePath ?? f.name;
 }
 
@@ -345,17 +362,12 @@ async function readEntry(entry: FsEntry): Promise<File[]> {
     return new Promise((resolve, reject) =>
       entry.file!(
         (f) => {
-          // Attach the entry's fullPath as a synthetic relative path
-          // so the UFO `glyphs/` filter works for drag-drop too.
           try {
             Object.defineProperty(f, "webkitRelativePath", {
               value: entry.fullPath.replace(/^\//, ""),
               configurable: true,
             });
-          } catch {
-            // Some browsers don't allow redefining File props; the
-            // fallback filter ("any .glif") will still catch it.
-          }
+          } catch {}
           resolve([f]);
         },
         (err) => reject(err),
@@ -364,7 +376,6 @@ async function readEntry(entry: FsEntry): Promise<File[]> {
   }
   if (entry.isDirectory && entry.createReader) {
     const reader = entry.createReader();
-    // readEntries returns up to ~100 entries per call; loop until empty.
     const all: FsEntry[] = [];
     while (true) {
       const batch: FsEntry[] = await new Promise((resolve, reject) =>
@@ -395,7 +406,7 @@ async function onDrop(e: DragEvent) {
   if (!items) return;
 
   const collected: File[] = [];
-  const itemsCopy = Array.from(items); // items is live; snapshot first
+  const itemsCopy = Array.from(items);
   for (const item of itemsCopy) {
     const entry = (
       item as DataTransferItem & {
@@ -444,6 +455,17 @@ function onKeyDown(e: KeyboardEvent) {
   ) {
     return;
   }
+
+  // Esc returns to the grid view from the editor.
+  if (e.key === "Escape" && viewMode.value === "editor") {
+    e.preventDefault();
+    backToGrid();
+    return;
+  }
+
+  // Undo/redo only apply in the editor.
+  if (viewMode.value !== "editor") return;
+
   const meta = e.metaKey || e.ctrlKey;
   if (meta && e.key.toLowerCase() === "z") {
     e.preventDefault();
@@ -472,10 +494,15 @@ function enterFullscreen() {
 
 <template>
   <div class="runebender-host">
+    <!-- Canvas is always in the DOM so the WebGPU surface stays
+         bound to it; hidden via CSS in grid mode rather than v-if. -->
     <canvas
       ref="canvas"
       class="runebender-canvas"
-      :class="{ 'drag-hover': dragHover }"
+      :class="{
+        'drag-hover': dragHover,
+        'is-hidden': viewMode !== 'editor',
+      }"
       @pointerdown="onPointerDown"
       @pointermove="onPointerMove"
       @pointerup="onPointerUp"
@@ -486,20 +513,42 @@ function enterFullscreen() {
       @dragleave="onDragLeave"
       @drop="onDrop"
     />
-    <div class="toolbar">
-      <button class="btn" @click="onLoadButton">Open UFO…</button>
-      <select
-        v-if="glyphNames.length > 0"
-        class="btn glyph-select"
-        :value="currentGlyph"
-        @change="onGlyphSelect"
+
+    <!-- Grid of glyph cells -->
+    <div
+      v-if="viewMode === 'grid' && glyphNames.length > 0"
+      class="grid-view"
+      @dragover="onDragOver"
+      @dragleave="onDragLeave"
+      @drop="onDrop"
+    >
+      <div
+        v-for="name in glyphNames"
+        :key="name"
+        class="cell"
+        :class="{ current: name === currentGlyph }"
+        :title="name"
+        @click="openGlyph(name)"
       >
-        <option v-for="name in glyphNames" :key="name" :value="name">
-          {{ name }}
-        </option>
-      </select>
+        <div class="cell-glyph" v-html="glyphSvgs.get(name) ?? ''"></div>
+        <div class="cell-name">{{ name }}</div>
+      </div>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="toolbar">
+      <button
+        v-if="viewMode === 'editor'"
+        class="btn"
+        @click="backToGrid"
+        title="Back to glyph grid (Esc)"
+      >
+        ← Grid
+      </button>
+      <button class="btn" @click="onLoadButton">Open UFO…</button>
       <button class="btn" @click="enterFullscreen">Full screen</button>
     </div>
+
     <input
       ref="fileInput"
       type="file"
@@ -508,15 +557,25 @@ function enterFullscreen() {
       multiple
       @change="onFileChange"
     />
+
+    <!-- Status pill -->
     <div v-if="status !== 'ready'" class="status">{{ status }}</div>
-    <div v-else-if="currentGlyph || fontLabel" class="status">
+    <div
+      v-else-if="viewMode === 'editor' && (currentGlyph || fontLabel)"
+      class="status"
+    >
       <span v-if="fontLabel">{{ fontLabel }} · </span>
       <span v-if="currentGlyph">{{ currentGlyph }}</span>
       <span v-if="selectionCount > 0"> · {{ selectionCount }} selected</span>
     </div>
-    <div v-else-if="selectionCount > 0" class="status">
-      {{ selectionCount }} selected
+    <div
+      v-else-if="viewMode === 'grid' && fontLabel"
+      class="status"
+    >
+      {{ fontLabel }} · {{ glyphNames.length }} glyph{{ glyphNames.length === 1 ? "" : "s" }}
     </div>
+
+    <!-- Drop hint shown only when no UFO is loaded -->
     <div
       v-if="status === 'ready' && glyphNames.length === 0"
       class="drop-hint"
@@ -540,13 +599,81 @@ function enterFullscreen() {
   height: 100%;
   background: #1f1a14;
 }
+
 .runebender-canvas {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   display: block;
   cursor: crosshair;
   touch-action: none;
 }
+.runebender-canvas.is-hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+.runebender-canvas.drag-hover {
+  outline: 2px dashed #ffa640;
+  outline-offset: -2px;
+}
+
+/* ----- Grid ----- */
+.grid-view {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  padding: 12px;
+  padding-top: 48px; /* room for toolbar */
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 6px;
+  background: #1f1a14;
+}
+.cell {
+  display: flex;
+  flex-direction: column;
+  height: 110px;
+  background: #2a221a;
+  border: 1px solid #3a2f24;
+  border-radius: 4px;
+  cursor: pointer;
+  overflow: hidden;
+  transition: background-color 0.08s, border-color 0.08s;
+}
+.cell:hover {
+  background: #3a2f24;
+  border-color: #5a4a38;
+}
+.cell.current {
+  border-color: #ffa640;
+}
+.cell-glyph {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #f0e6d2;
+  padding: 6px;
+  min-height: 0;
+}
+.cell-glyph :deep(svg) {
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
+}
+.cell-name {
+  font: 10px ui-monospace, monospace;
+  text-align: center;
+  color: #c8ae88;
+  padding: 2px 4px;
+  background: rgba(0, 0, 0, 0.25);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ----- Toolbar ----- */
 .toolbar {
   position: absolute;
   top: 8px;
@@ -554,6 +681,7 @@ function enterFullscreen() {
   display: flex;
   gap: 6px;
   align-items: center;
+  z-index: 10;
 }
 .btn {
   padding: 4px 8px;
@@ -567,17 +695,11 @@ function enterFullscreen() {
 .btn:hover {
   background: #4a3d2e;
 }
-.glyph-select {
-  min-width: 90px;
-  max-width: 200px;
-}
 .file-input {
   display: none;
 }
-.runebender-canvas.drag-hover {
-  outline: 2px dashed #ffa640;
-  outline-offset: -2px;
-}
+
+/* ----- Status + drop hint ----- */
 .status {
   position: absolute;
   bottom: 8px;
@@ -588,6 +710,7 @@ function enterFullscreen() {
   background: rgba(58, 47, 36, 0.85);
   border-radius: 4px;
   pointer-events: none;
+  z-index: 10;
 }
 .drop-hint {
   position: absolute;

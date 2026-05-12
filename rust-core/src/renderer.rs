@@ -122,14 +122,19 @@ impl Renderer {
         let view = state.viewport.affine();
 
         // Glyph fill (in design space — viewport applies the Y-flip).
+        // Combine every contour into ONE BezPath before filling so the
+        // NonZero winding rule treats opposite-wound inner contours as
+        // holes (UFO/PostScript convention). Filling each contour
+        // separately would paint counters solid.
+        let mut combined = kurbo::BezPath::new();
         for path in &state.paths {
-            self.scene.fill(
-                Fill::NonZero,
-                view,
-                GLYPH_FILL,
-                None,
-                &path.to_bezpath(),
-            );
+            for el in path.to_bezpath().elements() {
+                combined.push(*el);
+            }
+        }
+        if !combined.elements().is_empty() {
+            self.scene
+                .fill(Fill::NonZero, view, GLYPH_FILL, None, &combined);
         }
 
         // Handle lines and points are drawn in screen space so they
@@ -146,22 +151,38 @@ impl Renderer {
         }
     }
 
-    /// Draw thin lines connecting each off-curve handle to its
-    /// adjacent on-curve point(s).
+    /// Draw thin lines connecting each on-curve point to its
+    /// IMMEDIATELY-adjacent off-curve handle, in either direction.
+    /// Matches runebender-xilem's `draw_control_handles` —
+    /// iterating off-curves and searching for the nearest on-curve
+    /// would leap over intermediate off-curves and draw lines across
+    /// the glyph.
     fn draw_handle_lines(&mut self, path: &Path, view: Affine) {
         let points: Vec<PathPoint> = path.points().iter().cloned().collect();
         if points.len() < 2 {
             return;
         }
+        let closed = path_is_closed(path);
         let stroke = Stroke::new(HANDLE_LINE_PX);
+        let n = points.len();
         for (i, pt) in points.iter().enumerate() {
-            if !pt.is_off_curve() {
+            if !pt.is_on_curve() {
                 continue;
             }
-            let off = view * pt.point;
-            // Connect to nearest on-curve neighbour on each side.
-            if let Some(prev_on) = nearest_on_curve_before(&points, i) {
-                let on = view * prev_on.point;
+            let on = view * pt.point;
+
+            // Forward neighbour.
+            let next_i = if i + 1 < n {
+                Some(i + 1)
+            } else if closed {
+                Some(0)
+            } else {
+                None
+            };
+            if let Some(ni) = next_i
+                && points[ni].is_off_curve()
+            {
+                let off = view * points[ni].point;
                 self.scene.stroke(
                     &stroke,
                     Affine::IDENTITY,
@@ -170,14 +191,25 @@ impl Renderer {
                     &Line::new(on, off),
                 );
             }
-            if let Some(next_on) = nearest_on_curve_after(&points, i) {
-                let on = view * next_on.point;
+
+            // Backward neighbour.
+            let prev_i = if i > 0 {
+                Some(i - 1)
+            } else if closed {
+                Some(n - 1)
+            } else {
+                None
+            };
+            if let Some(pi) = prev_i
+                && points[pi].is_off_curve()
+            {
+                let off = view * points[pi].point;
                 self.scene.stroke(
                     &stroke,
                     Affine::IDENTITY,
                     HANDLE_LINE,
                     None,
-                    &Line::new(off, on),
+                    &Line::new(on, off),
                 );
             }
         }
@@ -298,29 +330,13 @@ impl Renderer {
     }
 }
 
-fn nearest_on_curve_before(points: &[PathPoint], idx: usize) -> Option<&PathPoint> {
-    for offset in 1..=points.len() {
-        let i = (idx + points.len() - offset) % points.len();
-        if i == idx {
-            break;
-        }
-        if points[i].is_on_curve() {
-            return Some(&points[i]);
-        }
+/// Whether the path is a closed contour (so handle/point wrap-around
+/// is allowed). All three Path variants expose a `closed: bool`.
+fn path_is_closed(path: &Path) -> bool {
+    match path {
+        Path::Cubic(c) => c.closed,
+        Path::Quadratic(q) => q.closed,
+        Path::Hyper(h) => h.closed,
     }
-    None
-}
-
-fn nearest_on_curve_after(points: &[PathPoint], idx: usize) -> Option<&PathPoint> {
-    for offset in 1..=points.len() {
-        let i = (idx + offset) % points.len();
-        if i == idx {
-            break;
-        }
-        if points[i].is_on_curve() {
-            return Some(&points[i]);
-        }
-    }
-    None
 }
 

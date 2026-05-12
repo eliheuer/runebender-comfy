@@ -7,7 +7,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "wasm": "cd ../rust-core && wasm-pack build --target web --out-dir ../web/wasm --dev",
+    "wasm:release": "cd ../rust-core && wasm-pack build --target web --out-dir ../web/wasm --release"
   },
   "dependencies": {
     "vue": "^3.4.0"
