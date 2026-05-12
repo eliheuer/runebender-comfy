@@ -4,8 +4,8 @@ version = "0.0.1"
 edition = "2024"
 rust-version = "1.88"
 license = "GPL-3.0-or-later"
-description = "WASM core for runebender-comfy-nodes — glyph editor ported from runebender-xilem"
-repository = "https://github.com/eliheuer/runebender-comfy-nodes"
+description = "WASM core for runebender-comfy — glyph editor ported from runebender-xilem"
+repository = "https://github.com/eliheuer/runebender-comfy"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

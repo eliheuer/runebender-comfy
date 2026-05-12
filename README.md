@@ -1,4 +1,4 @@
-# runebender-comfy-nodes
+# runebender-comfy
 
 ComfyUI custom nodes that bring Rust-powered type-design tools into the
 graph: a full-screen glyph editor ported from
@@ -44,25 +44,42 @@ an existing JS host (ComfyUI's Vue frontend), Vello + Kurbo via
 
 1. Clone into ComfyUI's `custom_nodes/`:
    ```bash
-   ln -s ~/GH/repos/runebender-comfy-nodes \
-         ~/Work/comfy/repos/ComfyUI/custom_nodes/runebender-comfy-nodes
+   ln -s ~/GH/repos/runebender-comfy \
+         ~/Work/comfy/repos/ComfyUI/custom_nodes/runebender-comfy
    ```
 
-2. Build the WASM core:
-   ```bash
-   cd rust-core
-   wasm-pack build --target web --out-dir ../web/public/wasm
-   ```
-
-3. Build the Vue widget:
+2. Install web deps and build the WASM core + the Vue widget:
    ```bash
    cd web
-   pnpm install && pnpm build
+   pnpm install
+   pnpm wasm          # cargo + wasm-pack build into ./wasm/
+   pnpm build         # vite build into ./dist/ (consumed by ComfyUI)
    ```
 
-4. Restart ComfyUI.
+3. Restart ComfyUI.
+
+## Dev preview (without ComfyUI)
+
+```bash
+cd web
+pnpm dev
+```
+
+Opens at `http://localhost:5173/` — the editor runs standalone in
+Chrome/Edge/Safari (needs WebGPU).
+
+## Supply-chain checks
+
+See [SECURITY.md](SECURITY.md) for the npm and cargo audit setup.
+Run all checks at once:
+
+```bash
+./scripts/audit.sh
+```
 
 ## License
 
 GPL-3.0. Sources mined from `runebender-xilem` (Apache-2.0) and
-`designbot` (see its repo) — both GPL-3.0 compatible.
+`designbot` — both GPL-3.0 compatible inbound. The pnpm
+`minimum-release-age` cooldown plus `cargo-deny` + `check-crate-age`
+on the Rust side cover supply-chain hygiene.

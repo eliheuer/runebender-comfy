@@ -26,7 +26,7 @@ use serde::Deserialize;
 const DEFAULT_COOLDOWN_DAYS: i64 = 7;
 const CRATES_IO_REGISTRY: &str = "registry+https://github.com/rust-lang/crates.io-index";
 const USER_AGENT: &str =
-    "check-crate-age (https://github.com/eliheuer/runebender-comfy-nodes)";
+    "check-crate-age (https://github.com/eliheuer/runebender-comfy)";
 
 // ============================================================================
 // Cargo.lock + crates.io shapes

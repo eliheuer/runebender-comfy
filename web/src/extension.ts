@@ -10,7 +10,7 @@ import { createApp } from "vue";
 import Runebender from "./Runebender.vue";
 
 app.registerExtension({
-  name: "runebender-comfy-nodes.Runebender",
+  name: "runebender-comfy.Runebender",
   async beforeRegisterNodeDef(nodeType: any, nodeData: any) {
     if (nodeData.name !== "Runebender") return;
 
