@@ -11,8 +11,10 @@ const canvas = ref<HTMLCanvasElement | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 const status = ref<string>("initializing");
 const selectionCount = ref<number>(0);
-const glyphName = ref<string>("");
 const dragHover = ref<boolean>(false);
+const glyphNames = ref<string[]>([]);
+const currentGlyph = ref<string>("");
+const fontLabel = ref<string>("");
 
 type Editor = {
   pointerDown(x: number, y: number, button: number, mods: number): void;
@@ -36,10 +38,13 @@ type Editor = {
 let editor: Editor | null = null;
 let raf = 0;
 let resizeObserver: ResizeObserver | null = null;
+// Holds raw bytes for every loaded glyph, keyed by the glyph's UFO
+// name (NOT the mangled filename). Set when a UFO is loaded; consulted
+// when the dropdown changes.
+const glyphBytes = new Map<string, Uint8Array>();
 
-// Placeholder glyph — capital "I" in design space (Y-up). Real
-// glyphs land here from the Python side once the ComfyUI integration
-// is in place.
+// Placeholder glyph — capital "I" in design space (Y-up). Shown on
+// first mount until the user loads a real UFO.
 const PLACEHOLDER_SVG =
   "M -50 0 L 50 0 L 50 50 L 25 50 L 25 650 L 50 650 L 50 700 L -50 700 L -50 650 L -25 650 L -25 50 L -50 50 Z";
 
@@ -102,8 +107,6 @@ function handleResize() {
   requestRender();
 }
 
-// Map a DOM PointerEvent to canvas-backing-store coords (the renderer
-// works in physical pixels, not CSS pixels).
 function canvasCoords(e: PointerEvent): [number, number] | null {
   if (!canvas.value) return null;
   const rect = canvas.value.getBoundingClientRect();
@@ -154,23 +157,93 @@ function onPointerCancel() {
   requestRender();
 }
 
-async function loadGlifFile(file: File) {
+// ---------------------------------------------------------------------
+// UFO loading
+// ---------------------------------------------------------------------
+
+/// Extract `<glyph name="...">` from a .glif XML buffer without
+/// pulling in DOMParser overhead. The attribute is always near the
+/// top of the file.
+function parseGlyphName(bytes: Uint8Array): string | null {
+  const head = new TextDecoder().decode(bytes.slice(0, 512));
+  const match = /<glyph\s+name="([^"]+)"/.exec(head);
+  return match?.[1] ?? null;
+}
+
+/// Pick a sensible glyph to land on after loading a UFO. Try "A"
+/// first (common test glyph), else "a", else .notdef, else the first
+/// glyph alphabetically.
+function pickInitialGlyph(names: string[]): string | null {
+  if (names.length === 0) return null;
+  for (const preferred of ["A", "a", ".notdef"]) {
+    if (names.includes(preferred)) return preferred;
+  }
+  return names[0];
+}
+
+async function loadGlifFiles(files: File[]) {
   if (!editor || !canvas.value) return;
-  if (!/\.glif$/i.test(file.name)) {
-    status.value = `not a .glif: ${file.name}`;
+
+  // From a UFO directory, prefer the main `glyphs/` layer. Falls
+  // back to "any .glif" so a single-file drop still works.
+  let glifs = files.filter(
+    (f) => /\.glif$/i.test(f.name) && /\/glyphs\//.test(relPath(f)),
+  );
+  if (glifs.length === 0) {
+    glifs = files.filter((f) => /\.glif$/i.test(f.name));
+  }
+
+  if (glifs.length === 0) {
+    status.value = "no .glif files found in selection";
     return;
   }
+
+  glyphBytes.clear();
+  glyphNames.value = [];
+  status.value = `loading ${glifs.length} glyph${glifs.length === 1 ? "" : "s"}…`;
+
+  // Read all glyphs in parallel. For UFOs with thousands of glyphs
+  // this is bounded by browser file-read throughput, not CPU.
+  const loaded = await Promise.all(
+    glifs.map(async (f) => {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      return { name: parseGlyphName(bytes), bytes };
+    }),
+  );
+  for (const { name, bytes } of loaded) {
+    if (name) glyphBytes.set(name, bytes);
+  }
+  const names = Array.from(glyphBytes.keys()).sort();
+  glyphNames.value = names;
+
+  // Label the UFO by the folder name (best-effort).
+  const sample = relPath(glifs[0]);
+  const ufoMatch = sample.match(/^([^/]+\.ufo)\//i);
+  fontLabel.value = ufoMatch ? ufoMatch[1] : "";
+
+  const initial = pickInitialGlyph(names);
+  if (initial) selectGlyph(initial);
+  status.value = "ready";
+}
+
+function selectGlyph(name: string) {
+  if (!editor || !canvas.value) return;
+  const bytes = glyphBytes.get(name);
+  if (!bytes) return;
   try {
-    const buf = await file.arrayBuffer();
-    editor.setGlyphGlif(new Uint8Array(buf));
+    editor.setGlyphGlif(bytes);
     editor.fitToCanvas(canvas.value.width, canvas.value.height);
-    glyphName.value = file.name.replace(/\.glif$/i, "");
-    status.value = "ready";
+    currentGlyph.value = name;
     requestRender();
   } catch (e) {
     console.error(e);
-    status.value = `failed to load: ${e}`;
+    status.value = `failed to load ${name}: ${e}`;
   }
+}
+
+function onGlyphSelect(e: Event) {
+  const name = (e.target as HTMLSelectElement).value;
+  if (name) selectGlyph(name);
 }
 
 function onLoadButton() {
@@ -179,10 +252,70 @@ function onLoadButton() {
 
 function onFileChange(e: Event) {
   const input = e.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (file) loadGlifFile(file);
-  // Reset so picking the same file again still fires `change`.
+  const files = Array.from(input.files ?? []);
+  loadGlifFiles(files);
   input.value = "";
+}
+
+// ---------------------------------------------------------------------
+// Drag-drop: handle both single .glif files and full UFO folders.
+// ---------------------------------------------------------------------
+
+function relPath(f: File): string {
+  // webkitdirectory sets webkitRelativePath; for drag-drop we attach
+  // it ourselves via Object.defineProperty in `readEntry`.
+  return (f as File & { webkitRelativePath?: string }).webkitRelativePath ?? f.name;
+}
+
+type FsEntry = {
+  isFile: boolean;
+  isDirectory: boolean;
+  fullPath: string;
+  file?: (cb: (f: File) => void, err?: (e: unknown) => void) => void;
+  createReader?: () => FsDirReader;
+};
+
+type FsDirReader = {
+  readEntries: (cb: (entries: FsEntry[]) => void, err?: (e: unknown) => void) => void;
+};
+
+async function readEntry(entry: FsEntry): Promise<File[]> {
+  if (entry.isFile && entry.file) {
+    return new Promise((resolve, reject) =>
+      entry.file!(
+        (f) => {
+          // Attach the entry's fullPath as a synthetic relative path
+          // so the UFO `glyphs/` filter works for drag-drop too.
+          try {
+            Object.defineProperty(f, "webkitRelativePath", {
+              value: entry.fullPath.replace(/^\//, ""),
+              configurable: true,
+            });
+          } catch {
+            // Some browsers don't allow redefining File props; the
+            // fallback filter ("any .glif") will still catch it.
+          }
+          resolve([f]);
+        },
+        (err) => reject(err),
+      ),
+    );
+  }
+  if (entry.isDirectory && entry.createReader) {
+    const reader = entry.createReader();
+    // readEntries returns up to ~100 entries per call; loop until empty.
+    const all: FsEntry[] = [];
+    while (true) {
+      const batch: FsEntry[] = await new Promise((resolve, reject) =>
+        reader.readEntries(resolve, (e) => reject(e)),
+      );
+      if (batch.length === 0) break;
+      all.push(...batch);
+    }
+    const results = await Promise.all(all.map(readEntry));
+    return results.flat();
+  }
+  return [];
 }
 
 function onDragOver(e: DragEvent) {
@@ -194,20 +327,39 @@ function onDragLeave() {
   dragHover.value = false;
 }
 
-function onDrop(e: DragEvent) {
+async function onDrop(e: DragEvent) {
   e.preventDefault();
   dragHover.value = false;
-  const file = e.dataTransfer?.files?.[0];
-  if (file) loadGlifFile(file);
+  const items = e.dataTransfer?.items;
+  if (!items) return;
+
+  const collected: File[] = [];
+  const itemsCopy = Array.from(items); // items is live; snapshot first
+  for (const item of itemsCopy) {
+    const entry = (
+      item as DataTransferItem & {
+        webkitGetAsEntry?: () => FsEntry | null;
+      }
+    ).webkitGetAsEntry?.();
+    if (entry) {
+      collected.push(...(await readEntry(entry)));
+    } else {
+      const f = item.getAsFile();
+      if (f) collected.push(f);
+    }
+  }
+  if (collected.length > 0) loadGlifFiles(collected);
 }
+
+// ---------------------------------------------------------------------
+// Wheel + keyboard
+// ---------------------------------------------------------------------
 
 function onWheel(e: WheelEvent) {
   if (!editor) return;
   e.preventDefault();
   const c = canvasCoords(e as unknown as PointerEvent);
   if (!c) return;
-  // Normalize wheel deltas across deltaMode (pixels / lines / pages).
-  // Lines ~= 16px, pages ~= a screen (~800px is fine as a rough scale).
   const lineFactor = 16;
   const pageFactor = 800;
   const dy =
@@ -222,11 +374,11 @@ function onWheel(e: WheelEvent) {
 
 function onKeyDown(e: KeyboardEvent) {
   if (!editor) return;
-  // Ignore when the user is typing in another field.
   const target = e.target as HTMLElement | null;
   if (
     target instanceof HTMLInputElement ||
     target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement ||
     target?.isContentEditable
   ) {
     return;
@@ -238,7 +390,6 @@ function onKeyDown(e: KeyboardEvent) {
     else editor.undo();
     requestRender();
   } else if (meta && e.key.toLowerCase() === "y") {
-    // Windows-style redo.
     e.preventDefault();
     editor.redo();
     requestRender();
@@ -275,19 +426,32 @@ function enterFullscreen() {
       @drop="onDrop"
     />
     <div class="toolbar">
-      <button class="btn" @click="onLoadButton">Load .glif</button>
+      <button class="btn" @click="onLoadButton">Open UFO…</button>
+      <select
+        v-if="glyphNames.length > 0"
+        class="btn glyph-select"
+        :value="currentGlyph"
+        @change="onGlyphSelect"
+      >
+        <option v-for="name in glyphNames" :key="name" :value="name">
+          {{ name }}
+        </option>
+      </select>
       <button class="btn" @click="enterFullscreen">Full screen</button>
     </div>
     <input
       ref="fileInput"
       type="file"
-      accept=".glif"
       class="file-input"
+      webkitdirectory
+      multiple
       @change="onFileChange"
     />
     <div v-if="status !== 'ready'" class="status">{{ status }}</div>
-    <div v-else-if="glyphName" class="status">
-      {{ glyphName }}{{ selectionCount > 0 ? ` — ${selectionCount} selected` : "" }}
+    <div v-else-if="currentGlyph || fontLabel" class="status">
+      <span v-if="fontLabel">{{ fontLabel }} · </span>
+      <span v-if="currentGlyph">{{ currentGlyph }}</span>
+      <span v-if="selectionCount > 0"> · {{ selectionCount }} selected</span>
     </div>
     <div v-else-if="selectionCount > 0" class="status">
       {{ selectionCount }} selected
@@ -315,6 +479,7 @@ function enterFullscreen() {
   right: 8px;
   display: flex;
   gap: 6px;
+  align-items: center;
 }
 .btn {
   padding: 4px 8px;
@@ -327,6 +492,10 @@ function enterFullscreen() {
 }
 .btn:hover {
   background: #4a3d2e;
+}
+.glyph-select {
+  min-width: 90px;
+  max-width: 200px;
 }
 .file-input {
   display: none;
