@@ -43,11 +43,6 @@ let resizeObserver: ResizeObserver | null = null;
 // when the dropdown changes.
 const glyphBytes = new Map<string, Uint8Array>();
 
-// Placeholder glyph — capital "I" in design space (Y-up). Shown on
-// first mount until the user loads a real UFO.
-const PLACEHOLDER_SVG =
-  "M -50 0 L 50 0 L 50 50 L 25 50 L 25 650 L 50 650 L 50 700 L -50 700 L -50 650 L -25 650 L -25 50 L -50 50 Z";
-
 onMounted(async () => {
   if (!canvas.value) return;
 
@@ -68,10 +63,6 @@ onMounted(async () => {
     canvas.value.height = height;
 
     editor = (await GlyphEditor.new(canvas.value, width, height)) as unknown as Editor;
-
-    editor.setGlyphSvg(PLACEHOLDER_SVG);
-    editor.setZoom(0.5 * dpr);
-    editor.setOffset(width / 2, height / 2 + 175 * dpr);
 
     status.value = "ready";
     requestRender();
@@ -184,6 +175,13 @@ function pickInitialGlyph(names: string[]): string | null {
 async function loadGlifFiles(files: File[]) {
   if (!editor || !canvas.value) return;
 
+  // Surface a friendlier message for designspace until Wave 3f.
+  if (files.some((f) => /\.designspace$/i.test(f.name))) {
+    status.value =
+      "designspace files aren't supported yet — open one of the referenced .ufo folders for now";
+    // Continue: if there are also .glif files in the drop, those still load.
+  }
+
   // From a UFO directory, prefer the main `glyphs/` layer. Falls
   // back to "any .glif" so a single-file drop still works.
   let glifs = files.filter(
@@ -194,7 +192,10 @@ async function loadGlifFiles(files: File[]) {
   }
 
   if (glifs.length === 0) {
-    status.value = "no .glif files found in selection";
+    status.value =
+      files.length === 0
+        ? "nothing dropped"
+        : `no .glif files found in ${files.length} file(s) — make sure you're picking a .ufo folder, not the .designspace`;
     return;
   }
 
@@ -216,9 +217,10 @@ async function loadGlifFiles(files: File[]) {
   const names = Array.from(glyphBytes.keys()).sort();
   glyphNames.value = names;
 
-  // Label the UFO by the folder name (best-effort).
+  // Label the UFO by the folder name (best-effort) — match any
+  // ".ufo" segment in the path, regardless of how deeply nested.
   const sample = relPath(glifs[0]);
-  const ufoMatch = sample.match(/^([^/]+\.ufo)\//i);
+  const ufoMatch = sample.match(/([^/]+\.ufo)\//i);
   fontLabel.value = ufoMatch ? ufoMatch[1] : "";
 
   const initial = pickInitialGlyph(names);
@@ -246,8 +248,67 @@ function onGlyphSelect(e: Event) {
   if (name) selectGlyph(name);
 }
 
-function onLoadButton() {
+// macOS treats `.ufo` as a package bundle when any font tool is
+// installed (FontLab, Glyphs, …), and the standard file-picker panel
+// then refuses to let you enter it. The File System Access API uses
+// a different panel that handles bundles correctly. We try it first
+// and fall back to the <input webkitdirectory> route only if it isn't
+// available or the user denies access.
+async function onLoadButton() {
+  type WithPicker = Window & {
+    showDirectoryPicker?: (opts: {
+      mode?: "read" | "readwrite";
+    }) => Promise<FileSystemDirectoryHandle>;
+  };
+  const win = window as WithPicker;
+  if (typeof win.showDirectoryPicker === "function") {
+    try {
+      const handle = await win.showDirectoryPicker({ mode: "read" });
+      const files = await filesFromDirectoryHandle(handle, handle.name);
+      await loadGlifFiles(files);
+      return;
+    } catch (e) {
+      const err = e as Error;
+      if (err.name === "AbortError") return; // user cancelled
+      // Fall through to the legacy picker on any other error.
+      console.warn("showDirectoryPicker failed, falling back:", err);
+    }
+  }
   fileInput.value?.click();
+}
+
+/// Recursively flatten a FileSystemDirectoryHandle into File objects
+/// with synthetic webkitRelativePath set, so the existing UFO filter
+/// logic sees a uniform shape across all entry points.
+async function filesFromDirectoryHandle(
+  handle: FileSystemDirectoryHandle,
+  prefix: string,
+): Promise<File[]> {
+  const out: File[] = [];
+  const dirHandle = handle as FileSystemDirectoryHandle & {
+    entries: () => AsyncIterable<[string, FileSystemHandle]>;
+  };
+  for await (const [name, entry] of dirHandle.entries()) {
+    const path = `${prefix}/${name}`;
+    if (entry.kind === "file") {
+      const file = await (entry as FileSystemFileHandle).getFile();
+      try {
+        Object.defineProperty(file, "webkitRelativePath", {
+          value: path,
+          configurable: true,
+        });
+      } catch {
+        // Some browsers disallow this; the "any .glif" fallback still
+        // catches the file, just without the `/glyphs/` filter.
+      }
+      out.push(file);
+    } else {
+      out.push(
+        ...(await filesFromDirectoryHandle(entry as FileSystemDirectoryHandle, path)),
+      );
+    }
+  }
+  return out;
 }
 
 function onFileChange(e: Event) {
@@ -456,6 +517,19 @@ function enterFullscreen() {
     <div v-else-if="selectionCount > 0" class="status">
       {{ selectionCount }} selected
     </div>
+    <div
+      v-if="status === 'ready' && glyphNames.length === 0"
+      class="drop-hint"
+    >
+      <div class="drop-hint-title">Drop a .ufo folder here</div>
+      <div class="drop-hint-sub">
+        or click <strong>Open UFO…</strong> in the toolbar
+      </div>
+      <div class="drop-hint-note">
+        On macOS, if the picker shows .ufo as a file you can't enter,
+        drag-drop the folder directly onto this canvas — it'll work.
+      </div>
+    </div>
   </div>
 </template>
 
@@ -514,5 +588,34 @@ function enterFullscreen() {
   background: rgba(58, 47, 36, 0.85);
   border-radius: 4px;
   pointer-events: none;
+}
+.drop-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  pointer-events: none;
+  text-align: center;
+  padding: 24px;
+  font: 13px ui-sans-serif, system-ui, sans-serif;
+  color: #c8ae88;
+}
+.drop-hint-title {
+  font-size: 18px;
+  color: #f0e6d2;
+  letter-spacing: 0.02em;
+}
+.drop-hint-sub {
+  color: #a89476;
+}
+.drop-hint-note {
+  margin-top: 16px;
+  max-width: 480px;
+  color: #8a6f52;
+  line-height: 1.5;
+  font-size: 12px;
 }
 </style>
