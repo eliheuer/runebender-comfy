@@ -993,6 +993,7 @@ dependencies = [
  "kurbo 0.9.5",
  "norad",
  "peniko 0.5.0",
+ "runebender-core",
  "serde",
  "serde_json",
  "spline",
@@ -1004,6 +1005,10 @@ dependencies = [
  "web-sys",
  "wgpu",
 ]
+
+[[package]]
+name = "runebender-core"
+version = "0.1.0"
 
 [[package]]
 name = "rustc-hash"

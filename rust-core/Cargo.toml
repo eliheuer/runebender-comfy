@@ -11,6 +11,9 @@ repository = "https://github.com/eliheuer/runebender-comfy"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+# Shared kurbo-free types with runebender-xilem.
+runebender-core = { path = "../../runebender-core" }
+
 # Geometry (Linebender). Matches runebender-xilem's kurbo version so
 # types graft without translation.
 kurbo = "0.13"
