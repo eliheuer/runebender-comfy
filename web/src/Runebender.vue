@@ -15,6 +15,7 @@ import CategorySidebar, {
 } from "./components/CategorySidebar.vue";
 import EditModeToolbar from "./components/EditModeToolbar.vue";
 import { type ToolId } from "./components/toolIds";
+import GlyphAnatomyPanel from "./components/GlyphAnatomyPanel.vue";
 import GlyphCell from "./components/GlyphCell.vue";
 import GlyphInfoSidebar from "./components/GlyphInfoSidebar.vue";
 import MarkColorPanel from "./components/MarkColorPanel.vue";
@@ -838,14 +839,19 @@ onBeforeUnmount(() => {
         <WelcomePanel v-if="glyphNames.length === 0" />
       </div>
 
-      <GlyphInfoSidebar
-        v-if="glyphNames.length > 0"
-        :master="activeMasterName"
-        :name="selectedGlyph"
-        :unicode="selectedGlyph ? glyphUnicodes.get(selectedGlyph) : undefined"
-        :width="selectedGlyph === currentGlyph ? currentWidth : undefined"
-        :contours="selectedGlyph === currentGlyph ? currentContours : undefined"
-      />
+      <div v-if="glyphNames.length > 0" class="right-col">
+        <GlyphInfoSidebar
+          :master="activeMasterName"
+          :name="selectedGlyph"
+          :unicode="selectedGlyph ? glyphUnicodes.get(selectedGlyph) : undefined"
+          :width="selectedGlyph === currentGlyph ? currentWidth : undefined"
+          :contours="selectedGlyph === currentGlyph ? currentContours : undefined"
+        />
+        <GlyphAnatomyPanel
+          :name="selectedGlyph"
+          :svg="selectedGlyph ? glyphSvgs.get(selectedGlyph) : undefined"
+        />
+      </div>
     </div>
   </div>
 </template>
@@ -889,6 +895,19 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Right column: info on top, anatomy fills remaining height. */
+.right-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+  width: 240px;
+}
+.right-col > :deep(.info-sidebar) {
+  width: auto;
   flex-shrink: 0;
 }
 
