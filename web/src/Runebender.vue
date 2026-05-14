@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 // wasm-pack output lives in ../wasm/ (a normal source directory, not
 // /public/). Vite resolves this as a regular ES module; the shim's
 // internal `new URL('..._bg.wasm', import.meta.url)` then resolves
@@ -8,10 +8,17 @@ import { onBeforeUnmount, onMounted, ref } from "vue";
 import init, {
   GlyphEditor,
   glifToSvg,
+  glyphCategoryForCodepoint,
 } from "../wasm/runebender_comfy_core.js";
+import CategorySidebar, {
+  type Category,
+} from "./components/CategorySidebar.vue";
+import GlyphCell from "./components/GlyphCell.vue";
+import GlyphInfoSidebar from "./components/GlyphInfoSidebar.vue";
+import MarkColorPanel from "./components/MarkColorPanel.vue";
+import TopBar from "./components/TopBar.vue";
 
 const canvas = ref<HTMLCanvasElement | null>(null);
-const fileInput = ref<HTMLInputElement | null>(null);
 const status = ref<string>("initializing");
 const selectionCount = ref<number>(0);
 const dragHover = ref<boolean>(false);
@@ -22,6 +29,60 @@ const viewMode = ref<"grid" | "editor">("grid");
 // Pre-computed SVG strings for the grid cells, keyed by glyph name.
 // Set once per UFO load; consulted only by the template.
 const glyphSvgs = ref<Map<string, string>>(new Map());
+// Unicode codepoint per glyph (uppercase hex, no "U+" prefix). Same
+// lifecycle as glyphSvgs.
+const glyphUnicodes = ref<Map<string, string>>(new Map());
+// Master switcher labels for the TopBar. Stub for now — when
+// designspace lands (Phase 7) this becomes the list of master
+// names parsed from the .designspace file.
+const masters = ref<string[]>(["Regular"]);
+// Category filter for the sidebar. "All" until the user picks.
+const selectedCategory = ref<Category>("All");
+// Live metadata for the info sidebar — read from the wasm editor
+// after each setGlyphGlif call. -1 / 0 means "no glyph loaded yet".
+const currentWidth = ref<number>(-1);
+const currentContours = ref<number>(0);
+// Glyph that's selected (highlighted in the grid, shown in the info
+// sidebar, mark-color target). Distinct from `currentGlyph` which
+// is the glyph currently loaded into the editor.
+const selectedGlyph = ref<string>("");
+// `public.markColor` value per glyph as RGBA string "r,g,b,a"
+// with 0–1 floats. Populated on UFO load from each .glif's <lib>.
+// Mutated when the user clicks a swatch.
+const glyphMarkColors = ref<Map<string, string>>(new Map());
+// Category per glyph name, computed in loadGlifFiles via the wasm
+// `glyphCategoryForCodepoint`. Glyphs without a codepoint default
+// to "Other".
+const glyphCategories = ref<Map<string, Category>>(new Map());
+
+// Names filtered by the active category. The grid renders this list
+// instead of glyphNames directly.
+const filteredGlyphNames = computed(() => {
+  if (selectedCategory.value === "All") return glyphNames.value;
+  return glyphNames.value.filter(
+    (n) => (glyphCategories.value.get(n) ?? "Other") === selectedCategory.value,
+  );
+});
+
+// Counts of glyphs per category for the sidebar's right-aligned
+// indicator. "All" is the total.
+const categoryCounts = computed<Record<string, number>>(() => {
+  const counts: Record<string, number> = {
+    All: glyphNames.value.length,
+    Letter: 0,
+    Number: 0,
+    Punctuation: 0,
+    Symbol: 0,
+    Mark: 0,
+    Separator: 0,
+    Other: 0,
+  };
+  for (const n of glyphNames.value) {
+    const c = glyphCategories.value.get(n) ?? "Other";
+    counts[c] = (counts[c] ?? 0) + 1;
+  }
+  return counts;
+});
 
 type Editor = {
   pointerDown(x: number, y: number, button: number, mods: number): void;
@@ -35,10 +96,13 @@ type Editor = {
   resize(w: number, h: number): void;
   setGlyphSvg(svg: string): void;
   setGlyphGlif(bytes: Uint8Array): void;
+  setFontInfo(bytes: Uint8Array): void;
   fitToCanvas(w: number, h: number): void;
   setZoom(z: number): void;
   setOffset(x: number, y: number): void;
   selectionCount(): number;
+  advanceWidth(): number;
+  contourCount(): number;
   free(): void;
 };
 
@@ -76,6 +140,23 @@ onMounted(async () => {
     resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(canvas.value);
     window.addEventListener("keydown", onKeyDown);
+    // Window-level drag listeners stop the browser from "opening" a
+    // dropped .ufo as a file:// URL when the drop lands outside the
+    // canvas's drop zone (e.g. on the drop-hint overlay, the
+    // toolbar, or empty space in grid mode).
+    window.addEventListener("dragover", onWindowDragOver);
+    window.addEventListener("drop", onWindowDrop);
+
+    // Dev convenience: auto-load any UFO sitting at
+    // web/assets/test-fonts/ so we don't drag-drop on every reload.
+    // Tree-shaken out of prod builds because of the env check.
+    if (import.meta.env.DEV) {
+      const { readDevTestFontFiles } = await import("./devTestFont");
+      const files = await readDevTestFontFiles();
+      if (files.length > 0) {
+        await loadGlifFiles(files);
+      }
+    }
   } catch (e) {
     console.error(e);
     status.value = `failed: ${e}`;
@@ -158,13 +239,27 @@ function onPointerCancel() {
 // UFO loading
 // ---------------------------------------------------------------------
 
-/// Extract `<glyph name="...">` from a .glif XML buffer without
-/// pulling in DOMParser overhead. The attribute is always near the
-/// top of the file.
-function parseGlyphName(bytes: Uint8Array): string | null {
-  const head = new TextDecoder().decode(bytes.slice(0, 512));
-  const match = /<glyph\s+name="([^"]+)"/.exec(head);
-  return match?.[1] ?? null;
+/// Extract glyph metadata (name, first unicode, mark color) from a
+/// .glif XML buffer. Name and unicode are near the top; the mark
+/// color lives in `<lib>` at the bottom, so we have to decode the
+/// whole file. Still well under a millisecond per glyph.
+function parseGlyphInfo(bytes: Uint8Array): {
+  name: string | null;
+  unicode: string | null;
+  markColor: string | null;
+} {
+  const xml = new TextDecoder().decode(bytes);
+  const nameMatch = /<glyph\s+name="([^"]+)"/.exec(xml);
+  const uniMatch = /<unicode\s+hex="([0-9a-fA-F]+)"/.exec(xml);
+  const markMatch =
+    /<key>\s*public\.markColor\s*<\/key>\s*<string>\s*([0-9.,\s]+)\s*<\/string>/.exec(
+      xml,
+    );
+  return {
+    name: nameMatch?.[1] ?? null,
+    unicode: uniMatch?.[1]?.toUpperCase() ?? null,
+    markColor: markMatch?.[1]?.replace(/\s+/g, "") ?? null,
+  };
 }
 
 async function loadGlifFiles(files: File[]) {
@@ -193,21 +288,53 @@ async function loadGlifFiles(files: File[]) {
     return;
   }
 
+  // Look for fontinfo.plist alongside the glyphs/ dir. The path
+  // looks like "MyFont.ufo/fontinfo.plist" — match the segment
+  // sitting directly inside any *.ufo dir so we don't accidentally
+  // pick up a nested copy.
+  const fontInfoFile = files.find((f) =>
+    /(^|\/)[^/]+\.ufo\/fontinfo\.plist$/i.test(relPath(f)),
+  ) ?? files.find((f) => /\/fontinfo\.plist$/i.test(relPath(f)));
+  if (fontInfoFile) {
+    try {
+      const bytes = new Uint8Array(await fontInfoFile.arrayBuffer());
+      editor.setFontInfo(bytes);
+    } catch (e) {
+      console.warn("fontinfo.plist parse failed:", e);
+    }
+  }
+
   glyphBytes.clear();
+  glyphUnicodes.value = new Map();
+  glyphCategories.value = new Map();
+  glyphMarkColors.value = new Map();
   glyphNames.value = [];
   glyphSvgs.value = new Map();
   currentGlyph.value = "";
+  selectedGlyph.value = "";
+  selectedCategory.value = "All";
   status.value = `reading ${glifs.length} glyph${glifs.length === 1 ? "" : "s"}…`;
 
   // Read all glyphs in parallel; bound by file-read throughput.
   const loaded = await Promise.all(
     glifs.map(async (f) => {
       const bytes = new Uint8Array(await f.arrayBuffer());
-      return { name: parseGlyphName(bytes), bytes };
+      const { name, unicode } = parseGlyphInfo(bytes);
+      return { name, unicode, bytes };
     }),
   );
-  for (const { name, bytes } of loaded) {
-    if (name) glyphBytes.set(name, bytes);
+  for (const { name, unicode, markColor, bytes } of loaded) {
+    if (!name) continue;
+    glyphBytes.set(name, bytes);
+    if (unicode) glyphUnicodes.value.set(name, unicode);
+    if (markColor) glyphMarkColors.value.set(name, markColor);
+    // Glyphs without a unicode default to "Other" — same convention
+    // runebender-xilem uses for design-only glyphs (.notdef, etc.).
+    const cp = unicode ? parseInt(unicode, 16) : NaN;
+    const cat = Number.isFinite(cp)
+      ? (glyphCategoryForCodepoint(cp) as Category)
+      : "Other";
+    glyphCategories.value.set(name, cat);
   }
   const names = Array.from(glyphBytes.keys()).sort();
   glyphNames.value = names;
@@ -249,6 +376,15 @@ async function buildGridSvgs(names: string[]) {
   glyphSvgs.value = svgs;
 }
 
+function selectGlyph(name: string) {
+  selectedGlyph.value = name;
+  // Fill width/contours for the info sidebar by parsing on-the-fly
+  // without loading into the editor (so single-clicks stay light).
+  // For now we leave currentWidth / currentContours alone unless
+  // the user actually opens the glyph; the info sidebar will show
+  // em-dash until they double-click.
+}
+
 function openGlyph(name: string) {
   if (!editor || !canvas.value) return;
   const bytes = glyphBytes.get(name);
@@ -257,6 +393,9 @@ function openGlyph(name: string) {
     editor.setGlyphGlif(bytes);
     viewMode.value = "editor";
     currentGlyph.value = name;
+    selectedGlyph.value = name;
+    currentWidth.value = editor.advanceWidth();
+    currentContours.value = editor.contourCount();
     // Canvas was visually hidden; let layout settle before sizing.
     requestAnimationFrame(() => {
       if (!editor || !canvas.value) return;
@@ -270,36 +409,25 @@ function openGlyph(name: string) {
   }
 }
 
-function backToGrid() {
-  viewMode.value = "grid";
+/// Apply (or clear) a mark color on the selected glyph. RGBA is
+/// the UFO `public.markColor` string "r,g,b,a"; empty string clears.
+function setMarkOnSelected(rgba: string) {
+  const name = selectedGlyph.value;
+  if (!name) return;
+  if (rgba) {
+    glyphMarkColors.value.set(name, rgba);
+  } else {
+    glyphMarkColors.value.delete(name);
+  }
+  // Force the cell to re-render with the new tint. The Map mutation
+  // alone doesn't trigger Vue reactivity, so we replace it.
+  glyphMarkColors.value = new Map(glyphMarkColors.value);
+  // TODO: when save lands, also patch the .glif bytes in glyphBytes
+  // so the change persists to disk.
 }
 
-// macOS treats `.ufo` as a package bundle when any font tool is
-// installed (FontLab, Glyphs, …), and the standard file-picker panel
-// then refuses to let you enter it. The File System Access API uses
-// a different panel that handles bundles correctly. We try it first
-// and fall back to the <input webkitdirectory> route only if it isn't
-// available or the user denies access.
-async function onLoadButton() {
-  type WithPicker = Window & {
-    showDirectoryPicker?: (opts: {
-      mode?: "read" | "readwrite";
-    }) => Promise<FileSystemDirectoryHandle>;
-  };
-  const win = window as WithPicker;
-  if (typeof win.showDirectoryPicker === "function") {
-    try {
-      const handle = await win.showDirectoryPicker({ mode: "read" });
-      const files = await filesFromDirectoryHandle(handle, handle.name);
-      await loadGlifFiles(files);
-      return;
-    } catch (e) {
-      const err = e as Error;
-      if (err.name === "AbortError") return;
-      console.warn("showDirectoryPicker failed, falling back:", err);
-    }
-  }
-  fileInput.value?.click();
+function backToGrid() {
+  viewMode.value = "grid";
 }
 
 async function filesFromDirectoryHandle(
@@ -328,13 +456,6 @@ async function filesFromDirectoryHandle(
     }
   }
   return out;
-}
-
-function onFileChange(e: Event) {
-  const input = e.target as HTMLInputElement;
-  const files = Array.from(input.files ?? []);
-  loadGlifFiles(files);
-  input.value = "";
 }
 
 // ---------------------------------------------------------------------
@@ -423,6 +544,25 @@ async function onDrop(e: DragEvent) {
   if (collected.length > 0) loadGlifFiles(collected);
 }
 
+// Window-level fallback handlers. Without these, dropping a .ufo
+// onto any part of the page that isn't the canvas (e.g. the
+// drop-hint overlay in grid mode, the toolbar) makes the browser
+// navigate to the file:// URL of the folder, leaving the dev page
+// entirely. preventDefault on dragover signals to the browser
+// "I want to handle this drop myself, don't go to file://".
+function onWindowDragOver(e: DragEvent) {
+  if (e.dataTransfer?.types?.includes("Files")) {
+    e.preventDefault();
+    dragHover.value = true;
+  }
+}
+
+function onWindowDrop(e: DragEvent) {
+  if (e.dataTransfer?.types?.includes("Files")) {
+    onDrop(e);
+  }
+}
+
 // ---------------------------------------------------------------------
 // Wheel + keyboard
 // ---------------------------------------------------------------------
@@ -483,121 +623,144 @@ onBeforeUnmount(() => {
   cancelAnimationFrame(raf);
   resizeObserver?.disconnect();
   window.removeEventListener("keydown", onKeyDown);
+  window.removeEventListener("dragover", onWindowDragOver);
+  window.removeEventListener("drop", onWindowDrop);
   editor?.free();
   editor = null;
 });
-
-function enterFullscreen() {
-  canvas.value?.requestFullscreen?.();
-}
 </script>
 
 <template>
   <div class="runebender-host">
-    <!-- Canvas is always in the DOM so the WebGPU surface stays
-         bound to it; hidden via CSS in grid mode rather than v-if. -->
-    <canvas
-      ref="canvas"
-      class="runebender-canvas"
-      :class="{
-        'drag-hover': dragHover,
-        'is-hidden': viewMode !== 'editor',
-      }"
-      @pointerdown="onPointerDown"
-      @pointermove="onPointerMove"
-      @pointerup="onPointerUp"
-      @pointercancel="onPointerCancel"
-      @wheel.prevent="onWheel"
-      @contextmenu.prevent
-      @dragover="onDragOver"
-      @dragleave="onDragLeave"
-      @drop="onDrop"
+    <TopBar
+      :font-label="fontLabel"
+      :unsaved="glyphNames.length > 0"
+      :masters="masters"
+      :active-master="0"
     />
 
-    <!-- Grid of glyph cells -->
-    <div
-      v-if="viewMode === 'grid' && glyphNames.length > 0"
-      class="grid-view"
-      @dragover="onDragOver"
-      @dragleave="onDragLeave"
-      @drop="onDrop"
-    >
+    <!-- Content row: left column (categories + mark colors) +
+         stage (canvas/grid) + info sidebar (right). -->
+    <div class="content">
       <div
-        v-for="name in glyphNames"
-        :key="name"
-        class="cell"
-        :class="{ current: name === currentGlyph }"
-        :title="name"
-        @click="openGlyph(name)"
+        v-if="viewMode === 'grid' && glyphNames.length > 0"
+        class="left-col"
       >
-        <div class="cell-glyph" v-html="glyphSvgs.get(name) ?? ''"></div>
-        <div class="cell-name">{{ name }}</div>
+        <CategorySidebar
+          :selected="selectedCategory"
+          :counts="categoryCounts"
+          @select="selectedCategory = $event"
+        />
+        <MarkColorPanel
+          :active="selectedGlyph ? glyphMarkColors.get(selectedGlyph) : ''"
+          :enabled="!!selectedGlyph"
+          @set="setMarkOnSelected"
+        />
       </div>
-    </div>
 
-    <!-- Toolbar -->
-    <div class="toolbar">
-      <button
-        v-if="viewMode === 'editor'"
-        class="btn"
-        @click="backToGrid"
-        title="Back to glyph grid (Esc)"
-      >
-        ← Grid
-      </button>
-      <button class="btn" @click="onLoadButton">Open UFO…</button>
-      <button class="btn" @click="enterFullscreen">Full screen</button>
-    </div>
+      <!-- Stage = canvas + grid stacked on the same area. Canvas
+           stays in the DOM (visibility-hidden in grid mode) so the
+           WebGPU surface stays bound. -->
+      <div class="stage">
+        <canvas
+          ref="canvas"
+          class="runebender-canvas"
+          :class="{
+            'drag-hover': dragHover,
+            'is-hidden': viewMode !== 'editor',
+          }"
+          @pointerdown="onPointerDown"
+          @pointermove="onPointerMove"
+          @pointerup="onPointerUp"
+          @pointercancel="onPointerCancel"
+          @wheel.prevent="onWheel"
+          @contextmenu.prevent
+          @dragover="onDragOver"
+          @dragleave="onDragLeave"
+          @drop="onDrop"
+        />
 
-    <input
-      ref="fileInput"
-      type="file"
-      class="file-input"
-      webkitdirectory
-      multiple
-      @change="onFileChange"
-    />
-
-    <!-- Status pill -->
-    <div v-if="status !== 'ready'" class="status">{{ status }}</div>
-    <div
-      v-else-if="viewMode === 'editor' && (currentGlyph || fontLabel)"
-      class="status"
-    >
-      <span v-if="fontLabel">{{ fontLabel }} · </span>
-      <span v-if="currentGlyph">{{ currentGlyph }}</span>
-      <span v-if="selectionCount > 0"> · {{ selectionCount }} selected</span>
-    </div>
-    <div
-      v-else-if="viewMode === 'grid' && fontLabel"
-      class="status"
-    >
-      {{ fontLabel }} · {{ glyphNames.length }} glyph{{ glyphNames.length === 1 ? "" : "s" }}
-    </div>
-
-    <!-- Drop hint shown only when no UFO is loaded -->
-    <div
-      v-if="status === 'ready' && glyphNames.length === 0"
-      class="drop-hint"
-    >
-      <div class="drop-hint-title">Drop a .ufo folder here</div>
-      <div class="drop-hint-sub">
-        or click <strong>Open UFO…</strong> in the toolbar
+        <div
+          v-if="viewMode === 'grid' && glyphNames.length > 0"
+          class="grid-view"
+          @dragover="onDragOver"
+          @dragleave="onDragLeave"
+          @drop="onDrop"
+        >
+          <GlyphCell
+            v-for="name in filteredGlyphNames"
+            :key="name"
+            :name="name"
+            :unicode="glyphUnicodes.get(name)"
+            :svg="glyphSvgs.get(name)"
+            :selected="name === selectedGlyph"
+            :mark-color="glyphMarkColors.get(name)"
+            @click="selectGlyph(name)"
+            @dblclick="openGlyph(name)"
+          />
+        </div>
       </div>
-      <div class="drop-hint-note">
-        On macOS, if the picker shows .ufo as a file you can't enter,
-        drag-drop the folder directly onto this canvas — it'll work.
-      </div>
+
+      <GlyphInfoSidebar
+        v-if="glyphNames.length > 0"
+        :master="masters[0]"
+        :name="selectedGlyph"
+        :unicode="selectedGlyph ? glyphUnicodes.get(selectedGlyph) : undefined"
+        :width="selectedGlyph === currentGlyph ? currentWidth : undefined"
+        :contours="selectedGlyph === currentGlyph ? currentContours : undefined"
+      />
     </div>
   </div>
 </template>
 
 <style scoped>
+/*
+ * Colors mirror runebender-xilem/src/theme.rs verbatim:
+ *   APP_BACKGROUND       #101010 (BASE_A)
+ *   PANEL_BACKGROUND     #1C1C1C
+ *   PANEL_OUTLINE / BASE_F  #606060
+ *   PRIMARY_UI_TEXT / BASE_I  #909090
+ *   SECONDARY_UI_TEXT / BASE_G  #707070
+ *   GRID_CELL_TEXT / BASE_H  #808080
+ *   GRID_GLYPH_COLOR / BASE_J  #a0a0a0
+ *   GRID_CELL_SELECTED_OUTLINE / METRICS_GUIDE  #66EE88
+ *   SELECTION_RECT_STROKE / TOOL_PREVIEW  #ffaa33
+ */
+
 .runebender-host {
-  position: relative;
   width: 100%;
   height: 100%;
-  background: #1f1a14;
+  background: #101010;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-sizing: border-box;
+}
+
+/* Content row: left column + stage + right sidebar, separated by
+   BENTO_GAP. */
+.content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 6px;
+}
+
+/* Left column: categories stretch, mark colors fixed at the bottom. */
+.left-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Stage = the area inside .content where canvas + grid live,
+   stacked on the same coordinates. */
+.stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
 }
 
 .runebender-canvas {
@@ -614,131 +777,19 @@ function enterFullscreen() {
   pointer-events: none;
 }
 .runebender-canvas.drag-hover {
-  outline: 2px dashed #ffa640;
+  outline: 2px dashed #66ee88;
   outline-offset: -2px;
 }
 
 /* ----- Grid ----- */
+/* BENTO_GAP = 6px from xilem's views/glyph_grid/mod.rs */
 .grid-view {
   position: absolute;
   inset: 0;
   overflow-y: auto;
-  padding: 12px;
-  padding-top: 48px; /* room for toolbar */
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(144px, 1fr));
   gap: 6px;
-  background: #1f1a14;
-}
-.cell {
-  display: flex;
-  flex-direction: column;
-  height: 110px;
-  background: #2a221a;
-  border: 1px solid #3a2f24;
-  border-radius: 4px;
-  cursor: pointer;
-  overflow: hidden;
-  transition: background-color 0.08s, border-color 0.08s;
-}
-.cell:hover {
-  background: #3a2f24;
-  border-color: #5a4a38;
-}
-.cell.current {
-  border-color: #ffa640;
-}
-.cell-glyph {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #f0e6d2;
-  padding: 6px;
-  min-height: 0;
-}
-.cell-glyph :deep(svg) {
-  max-width: 100%;
-  max-height: 100%;
-  display: block;
-}
-.cell-name {
-  font: 10px ui-monospace, monospace;
-  text-align: center;
-  color: #c8ae88;
-  padding: 2px 4px;
-  background: rgba(0, 0, 0, 0.25);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* ----- Toolbar ----- */
-.toolbar {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  z-index: 10;
-}
-.btn {
-  padding: 4px 8px;
-  background: #3a2f24;
-  color: #f0e6d2;
-  border: 1px solid #5a4a38;
-  border-radius: 4px;
-  cursor: pointer;
-  font: 11px ui-sans-serif, system-ui, sans-serif;
-}
-.btn:hover {
-  background: #4a3d2e;
-}
-.file-input {
-  display: none;
-}
-
-/* ----- Status + drop hint ----- */
-.status {
-  position: absolute;
-  bottom: 8px;
-  left: 8px;
-  padding: 4px 8px;
-  font: 11px ui-monospace, monospace;
-  color: #f0e6d2;
-  background: rgba(58, 47, 36, 0.85);
-  border-radius: 4px;
-  pointer-events: none;
-  z-index: 10;
-}
-.drop-hint {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  pointer-events: none;
-  text-align: center;
-  padding: 24px;
-  font: 13px ui-sans-serif, system-ui, sans-serif;
-  color: #c8ae88;
-}
-.drop-hint-title {
-  font-size: 18px;
-  color: #f0e6d2;
-  letter-spacing: 0.02em;
-}
-.drop-hint-sub {
-  color: #a89476;
-}
-.drop-hint-note {
-  margin-top: 16px;
-  max-width: 480px;
-  color: #8a6f52;
-  line-height: 1.5;
-  font-size: 12px;
+  background: #101010;
 }
 </style>

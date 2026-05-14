@@ -20,33 +20,52 @@ use crate::editor::EditorState;
 use crate::path::{Path, PathPoint, PointType};
 
 // ============================================================================
-// PALETTE — warm campfire
+// PALETTE — mirrors runebender-xilem/src/theme.rs verbatim.
+// Phase 1 of theming: hardcoded match. Phase 2 will move these into
+// a JSON file in runebender-core that both editors load at startup.
 // ============================================================================
 
-const BG: AlphaColor<vello::peniko::color::Srgb> =
-    AlphaColor::from_rgba8(0x1f, 0x1a, 0x14, 0xff);
-const GLYPH_FILL: AlphaColor<vello::peniko::color::Srgb> =
-    AlphaColor::from_rgba8(0xf0, 0xe6, 0xd2, 0xee);
-const HANDLE_LINE: AlphaColor<vello::peniko::color::Srgb> =
-    AlphaColor::from_rgba8(0x8a, 0x6f, 0x52, 0xff);
-const POINT_ON_CURVE: AlphaColor<vello::peniko::color::Srgb> =
-    AlphaColor::from_rgba8(0xf0, 0xe6, 0xd2, 0xff);
-const POINT_OFF_CURVE: AlphaColor<vello::peniko::color::Srgb> =
-    AlphaColor::from_rgba8(0xc8, 0xae, 0x88, 0xff);
-const POINT_SELECTED: AlphaColor<vello::peniko::color::Srgb> =
-    AlphaColor::from_rgba8(0xff, 0xa6, 0x40, 0xff);
-const POINT_OUTLINE: AlphaColor<vello::peniko::color::Srgb> =
-    AlphaColor::from_rgba8(0x1f, 0x1a, 0x14, 0xff);
-const MARQUEE_FILL: AlphaColor<vello::peniko::color::Srgb> =
-    AlphaColor::from_rgba8(0xff, 0xa6, 0x40, 0x22);
-const MARQUEE_STROKE: AlphaColor<vello::peniko::color::Srgb> =
-    AlphaColor::from_rgba8(0xff, 0xa6, 0x40, 0xcc);
+type Srgb = AlphaColor<vello::peniko::color::Srgb>;
 
-const ON_CURVE_RADIUS_PX: f64 = 4.5;
-const OFF_CURVE_HALF_PX: f64 = 3.0;
-const POINT_OUTLINE_PX: f64 = 1.0;
-const HANDLE_LINE_PX: f64 = 1.0;
-const MARQUEE_STROKE_PX: f64 = 1.0;
+// --- App background (xilem APP_BACKGROUND = BASE_A) ---
+const BG: Srgb = AlphaColor::from_rgba8(0x10, 0x10, 0x10, 0xff);
+
+// --- Glyph fill (xilem PATH_FILL = BASE_F) ---
+const GLYPH_FILL: Srgb = AlphaColor::from_rgba8(0x60, 0x60, 0x60, 0xff);
+
+// --- Handle line (xilem HANDLE_LINE = BASE_I) ---
+const HANDLE_LINE: Srgb = AlphaColor::from_rgba8(0x90, 0x90, 0x90, 0xff);
+
+// --- Point colors, color-coded by point type ---
+// Smooth on-curve (circle): blue
+const POINT_SMOOTH_INNER: Srgb = AlphaColor::from_rgba8(0x57, 0x9a, 0xff, 0xff);
+const POINT_SMOOTH_OUTER: Srgb = AlphaColor::from_rgba8(0x44, 0x28, 0xec, 0xff);
+// Corner on-curve (square): green
+const POINT_CORNER_INNER: Srgb = AlphaColor::from_rgba8(0x6a, 0xe7, 0x56, 0xff);
+const POINT_CORNER_OUTER: Srgb = AlphaColor::from_rgba8(0x20, 0x8e, 0x56, 0xff);
+// Off-curve (circle): purple
+const POINT_OFFCURVE_INNER: Srgb = AlphaColor::from_rgba8(0xcc, 0x99, 0xff, 0xff);
+const POINT_OFFCURVE_OUTER: Srgb = AlphaColor::from_rgba8(0x99, 0x00, 0xff, 0xff);
+// Selected: yellow inner / orange outer outline
+const POINT_SELECTED_INNER: Srgb = AlphaColor::from_rgba8(0xff, 0xee, 0x55, 0xff);
+const POINT_SELECTED_OUTER: Srgb = AlphaColor::from_rgba8(0xff, 0xaa, 0x33, 0xff);
+
+// --- Marquee (xilem SELECTION_RECT_*) ---
+const MARQUEE_FILL: Srgb = AlphaColor::from_rgba8(0xff, 0xaa, 0x33, 0x20);
+const MARQUEE_STROKE: Srgb = AlphaColor::from_rgba8(0xff, 0xaa, 0x33, 0xff);
+
+// --- Metric guides (xilem METRICS_GUIDE) ---
+const METRIC_GUIDE: Srgb = AlphaColor::from_rgba8(0x66, 0xEE, 0x88, 0xff);
+
+// --- Sizes (xilem size::*; STROKE_SCALE = 1.5) ---
+const STROKE_SCALE: f64 = 1.5;
+const SMOOTH_POINT_RADIUS_PX: f64 = 4.5;
+const CORNER_POINT_HALF_PX: f64 = 3.5;
+const OFFCURVE_POINT_RADIUS_PX: f64 = 3.0;
+const POINT_OUTLINE_PX: f64 = 1.0 * STROKE_SCALE;
+const HANDLE_LINE_PX: f64 = 1.0 * STROKE_SCALE;
+const MARQUEE_STROKE_PX: f64 = 1.0 * STROKE_SCALE;
+const METRIC_LINE_PX: f64 = 1.0 * STROKE_SCALE;
 
 // ============================================================================
 // RENDERER
@@ -120,6 +139,9 @@ impl Renderer {
 
     fn draw_state(&mut self, state: &EditorState) {
         let view = state.viewport.affine();
+
+        // Metric guides go in first so the glyph fill paints on top.
+        self.draw_metric_guides(state, view);
 
         // Glyph fill (in design space — viewport applies the Y-flip).
         // Combine every contour into ONE BezPath before filling so the
@@ -215,7 +237,12 @@ impl Renderer {
         }
     }
 
-    /// Draw an outlined node at every PathPoint.
+    /// Draw an outlined node at every PathPoint. Shape + color
+    /// depend on the point type, matching runebender-xilem:
+    ///   - smooth on-curve  → blue circle
+    ///   - corner on-curve  → green square
+    ///   - off-curve        → purple circle
+    ///   - any selected     → yellow inner + orange outline
     fn draw_points(
         &mut self,
         path: &Path,
@@ -226,44 +253,90 @@ impl Renderer {
         for pt in path.points().iter() {
             let center = view * pt.point;
             let selected = selection.contains(&pt.id);
-            let fill_color = if selected {
-                POINT_SELECTED
-            } else if pt.is_on_curve() {
-                POINT_ON_CURVE
+
+            let (inner, outer) = if selected {
+                (POINT_SELECTED_INNER, POINT_SELECTED_OUTER)
             } else {
-                POINT_OFF_CURVE
+                match pt.typ {
+                    PointType::OnCurve { smooth: true } => {
+                        (POINT_SMOOTH_INNER, POINT_SMOOTH_OUTER)
+                    }
+                    PointType::OnCurve { smooth: false } => {
+                        (POINT_CORNER_INNER, POINT_CORNER_OUTER)
+                    }
+                    PointType::OffCurve { .. } => {
+                        (POINT_OFFCURVE_INNER, POINT_OFFCURVE_OUTER)
+                    }
+                }
             };
+
             match pt.typ {
-                PointType::OnCurve { .. } => {
-                    let circle = Circle::new(center, ON_CURVE_RADIUS_PX);
-                    self.scene
-                        .fill(Fill::NonZero, Affine::IDENTITY, fill_color, None, &circle);
-                    self.scene.stroke(
-                        &outline_stroke,
-                        Affine::IDENTITY,
-                        POINT_OUTLINE,
-                        None,
-                        &circle,
+                PointType::OnCurve { smooth: true } => {
+                    let circle = Circle::new(center, SMOOTH_POINT_RADIUS_PX);
+                    self.scene.fill(Fill::NonZero, Affine::IDENTITY, inner, None, &circle);
+                    self.scene.stroke(&outline_stroke, Affine::IDENTITY, outer, None, &circle);
+                }
+                PointType::OnCurve { smooth: false } => {
+                    let square = Rect::new(
+                        center.x - CORNER_POINT_HALF_PX,
+                        center.y - CORNER_POINT_HALF_PX,
+                        center.x + CORNER_POINT_HALF_PX,
+                        center.y + CORNER_POINT_HALF_PX,
                     );
+                    self.scene.fill(Fill::NonZero, Affine::IDENTITY, inner, None, &square);
+                    self.scene.stroke(&outline_stroke, Affine::IDENTITY, outer, None, &square);
                 }
                 PointType::OffCurve { .. } => {
-                    let square = Rect::new(
-                        center.x - OFF_CURVE_HALF_PX,
-                        center.y - OFF_CURVE_HALF_PX,
-                        center.x + OFF_CURVE_HALF_PX,
-                        center.y + OFF_CURVE_HALF_PX,
-                    );
-                    self.scene
-                        .fill(Fill::NonZero, Affine::IDENTITY, fill_color, None, &square);
-                    self.scene.stroke(
-                        &outline_stroke,
-                        Affine::IDENTITY,
-                        POINT_OUTLINE,
-                        None,
-                        &square,
-                    );
+                    let circle = Circle::new(center, OFFCURVE_POINT_RADIUS_PX);
+                    self.scene.fill(Fill::NonZero, Affine::IDENTITY, inner, None, &circle);
+                    self.scene.stroke(&outline_stroke, Affine::IDENTITY, outer, None, &circle);
                 }
             }
+        }
+    }
+
+    /// Draw the font's metric box: vertical lines at x=0 and
+    /// x=advance_width, horizontal lines at each defined metric Y.
+    /// Bounded to the glyph's advance-width rectangle so it reads as
+    /// "the glyph's space," matching runebender-xilem's
+    /// `draw_metrics_guides`.
+    fn draw_metric_guides(&mut self, state: &EditorState, view: Affine) {
+        let Some(metrics) = state.metrics.as_ref() else {
+            return;
+        };
+        if state.advance_width <= 0.0 {
+            return;
+        }
+
+        let stroke = Stroke::new(METRIC_LINE_PX);
+        let width = state.advance_width;
+        let ascender = metrics.ascender.unwrap_or(0.0);
+        let descender = metrics.descender.unwrap_or(0.0);
+
+        // Vertical edges of the metric box.
+        let stamp_line = |scene: &mut Scene, p0: (f64, f64), p1: (f64, f64)| {
+            scene.stroke(&stroke, view, METRIC_GUIDE, None, &Line::new(p0, p1));
+        };
+        if ascender > descender {
+            stamp_line(&mut self.scene, (0.0, descender), (0.0, ascender));
+            stamp_line(&mut self.scene, (width, descender), (width, ascender));
+        }
+
+        // Horizontal metric lines. Baseline is always drawn (y=0);
+        // others appear only when defined in fontinfo.
+        let mut ys: Vec<f64> = vec![0.0];
+        for opt in [
+            metrics.ascender,
+            metrics.descender,
+            metrics.x_height,
+            metrics.cap_height,
+        ] {
+            if let Some(y) = opt {
+                ys.push(y);
+            }
+        }
+        for y in ys {
+            stamp_line(&mut self.scene, (0.0, y), (width, y));
         }
     }
 

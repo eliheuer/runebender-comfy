@@ -24,6 +24,12 @@ Cargo.lock.user
 /web/.vite/
 *.log
 
+# Dev-only test fonts. Convenience for the build phase; we'll
+# remove the auto-loader and this directory once the UI is done.
+# Drop UFO folders into web/assets/test-fonts/ and the dev server
+# will auto-load the first one on mount.
+/web/assets/test-fonts/
+
 # OS / editors
 .DS_Store
 .idea/

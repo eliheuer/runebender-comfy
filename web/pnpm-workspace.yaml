@@ -1,0 +1,9 @@
+# pnpm 10.10 build-script approvals. `pnpm approve-builds` writes
+# this stub with the value as a literal "set this to true or false"
+# string — we have to replace it with an actual boolean for pnpm to
+# read the entry as an approval.
+#
+# esbuild's postinstall downloads its native binary; without it,
+# vite refuses to start.
+allowBuilds:
+  esbuild: true

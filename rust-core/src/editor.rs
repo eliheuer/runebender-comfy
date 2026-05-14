@@ -4,6 +4,7 @@
 // outside the wasm-bindgen surface so it's testable on native too.
 
 use kurbo::{BezPath, PathEl, Point, Rect, Shape, Vec2};
+use serde::Deserialize;
 
 use crate::editing::{Selection, ViewPort};
 use crate::model::EntityId;
@@ -11,17 +12,83 @@ use crate::model::workspace::{self, Contour as WsContour, ContourPoint as WsCont
     PointType as WsPointType};
 use crate::path::{CubicPath, Path, PathPoint, PathPoints, PointType};
 
-/// In-memory state for one open glyph.
+// ============================================================================
+// FontMetrics
+// ============================================================================
+
+/// Vertical metrics from fontinfo.plist. Every field is optional —
+/// UFO doesn't require any of them. Coordinates are in design space
+/// (y-up, units defined by `units_per_em`).
 #[derive(Debug, Clone, Default)]
+pub struct FontMetrics {
+    pub units_per_em: Option<f64>,
+    pub ascender: Option<f64>,
+    pub descender: Option<f64>,
+    pub x_height: Option<f64>,
+    pub cap_height: Option<f64>,
+}
+
+/// Minimal subset of fontinfo.plist — only the fields we care about
+/// for rendering vertical metric guidelines. Decoupled from norad's
+/// (much larger) `FontInfo` struct so we aren't tied to its
+/// every-spec-field surface.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawFontInfo {
+    units_per_em: Option<f64>,
+    ascender: Option<f64>,
+    descender: Option<f64>,
+    x_height: Option<f64>,
+    cap_height: Option<f64>,
+}
+
+impl FontMetrics {
+    pub fn parse_plist(bytes: &[u8]) -> Result<Self, plist::Error> {
+        let raw: RawFontInfo = plist::from_bytes(bytes)?;
+        Ok(FontMetrics {
+            units_per_em: raw.units_per_em,
+            ascender: raw.ascender,
+            descender: raw.descender,
+            x_height: raw.x_height,
+            cap_height: raw.cap_height,
+        })
+    }
+}
+
+/// In-memory state for one open glyph.
+#[derive(Debug, Clone)]
 pub struct EditorState {
     pub paths: Vec<Path>,
     pub selection: Selection,
     pub viewport: ViewPort,
 
+    /// Advance width of the open glyph (in design units). Drives the
+    /// horizontal extent of the metric box. 0 means "no glyph loaded
+    /// yet"; renderer skips drawing metric guides in that case.
+    pub advance_width: f64,
+
+    /// Font-wide vertical metrics (baseline, x-height, cap-height,
+    /// ascender, descender). Drawn as horizontal guideline lines in
+    /// the renderer. `None` until the host loads fontinfo.plist.
+    pub metrics: Option<FontMetrics>,
+
     /// Transient screen-space rectangle for an in-progress
     /// box-selection drag. Renderer draws it as a marquee; cleared
     /// when the drag ends.
     pub marquee: Option<Rect>,
+}
+
+impl Default for EditorState {
+    fn default() -> Self {
+        Self {
+            paths: Vec::new(),
+            selection: Selection::default(),
+            viewport: ViewPort::default(),
+            advance_width: 0.0,
+            metrics: None,
+            marquee: None,
+        }
+    }
 }
 
 impl EditorState {
@@ -83,6 +150,7 @@ impl EditorState {
         self.paths.clear();
         self.selection = Selection::new();
         self.marquee = None;
+        self.advance_width = glyph.width;
 
         for norad_contour in &glyph.contours {
             let ws_contour = convert_norad_contour(norad_contour);

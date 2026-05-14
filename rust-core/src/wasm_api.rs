@@ -8,10 +8,28 @@ use kurbo::{BezPath, Point, Shape, Vec2};
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
 
+use runebender_core::GlyphCategory;
+
 use crate::editing::{Modifiers, Mouse, MouseButton, MouseEvent, UndoState};
 use crate::editor::{EditorState, norad_glyph_to_bezpath};
 use crate::renderer::Renderer;
 use crate::tool::SelectTool;
+
+/// Map a Unicode codepoint to the matching `GlyphCategory`, returned
+/// as its `display_name` ("Letter", "Number", …). Uses the same
+/// mapping as runebender-xilem (both go through
+/// `runebender_core::GlyphCategory`).
+///
+/// Returns `"Other"` for codepoints outside the BMP-safe `char`
+/// range — the JS side defaults to that anyway for glyphs without
+/// a `<unicode>` element.
+#[wasm_bindgen(js_name = glyphCategoryForCodepoint)]
+pub fn glyph_category_for_codepoint(cp: u32) -> String {
+    let cat = char::from_u32(cp)
+        .map(GlyphCategory::from_codepoint)
+        .unwrap_or(GlyphCategory::Other);
+    cat.display_name().to_string()
+}
 
 /// Parse a .glif file's bytes and return an SVG string fit for an
 /// `<img>` or inline render in the glyph grid. Uses the same
@@ -93,6 +111,17 @@ impl GlyphEditor {
         self.state.set_glyph_from_norad(&glyph);
         self.undo.clear();
         self.pending_snapshot = None;
+        Ok(())
+    }
+
+    /// Parse a UFO `fontinfo.plist` and store the vertical metrics
+    /// (UPM, ascender, descender, x-height, cap-height). The
+    /// renderer uses these to draw the metric box guidelines.
+    #[wasm_bindgen(js_name = setFontInfo)]
+    pub fn set_font_info(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
+        let metrics = crate::editor::FontMetrics::parse_plist(bytes)
+            .map_err(|e| JsValue::from_str(&format!("parse fontinfo.plist: {e}")))?;
+        self.state.metrics = Some(metrics);
         Ok(())
     }
 
@@ -202,6 +231,20 @@ impl GlyphEditor {
     #[wasm_bindgen(js_name = selectionCount)]
     pub fn selection_count(&self) -> usize {
         self.state.selection.len()
+    }
+
+    /// Advance width of the currently-open glyph (design units).
+    /// Zero when no glyph is loaded.
+    #[wasm_bindgen(js_name = advanceWidth)]
+    pub fn advance_width(&self) -> f64 {
+        self.state.advance_width
+    }
+
+    /// Number of contours (path elements) in the currently-open
+    /// glyph. Updates live as the user adds/removes paths.
+    #[wasm_bindgen(js_name = contourCount)]
+    pub fn contour_count(&self) -> usize {
+        self.state.paths.len()
     }
 }
 
