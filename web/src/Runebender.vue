@@ -13,10 +13,13 @@ import init, {
 import CategorySidebar, {
   type Category,
 } from "./components/CategorySidebar.vue";
+import EditModeToolbar from "./components/EditModeToolbar.vue";
+import { type ToolId } from "./components/toolIds";
 import GlyphCell from "./components/GlyphCell.vue";
 import GlyphInfoSidebar from "./components/GlyphInfoSidebar.vue";
 import MarkColorPanel from "./components/MarkColorPanel.vue";
 import TopBar from "./components/TopBar.vue";
+import WelcomePanel from "./components/WelcomePanel.vue";
 
 const canvas = ref<HTMLCanvasElement | null>(null);
 const status = ref<string>("initializing");
@@ -34,6 +37,9 @@ const currentContours = ref<number>(0);
 // sidebar, mark-color target). Distinct from `currentGlyph` which
 // is the glyph currently loaded into the editor.
 const selectedGlyph = ref<string>("");
+// Active tool in the editor view. Only "Select" is functional; the
+// other ToolIds are stubs that the editor currently ignores.
+const activeTool = ref<ToolId>("Select");
 
 // ---------------------------------------------------------------------
 // Master state — single source of truth
@@ -761,23 +767,30 @@ onBeforeUnmount(() => {
       @select-master="onSelectMaster"
     />
 
-    <!-- Content row: left column (categories + mark colors) +
-         stage (canvas/grid) + info sidebar (right). -->
+    <!-- Content row: left rail switches based on view mode
+         (categories+marks in grid, tool palette in editor). The
+         stage holds the canvas + grid. Right sidebar shows glyph
+         info whenever a font is loaded. -->
     <div class="content">
-      <div
-        v-if="viewMode === 'grid' && glyphNames.length > 0"
-        class="left-col"
-      >
-        <CategorySidebar
-          :selected="selectedCategory"
-          :counts="categoryCounts"
-          @select="selectedCategory = $event"
-        />
-        <MarkColorPanel
-          :active="selectedGlyph ? glyphMarkColors.get(selectedGlyph) : ''"
-          :enabled="!!selectedGlyph"
-          @set="setMarkOnSelected"
-        />
+      <div v-if="glyphNames.length > 0" class="left-col">
+        <template v-if="viewMode === 'grid'">
+          <CategorySidebar
+            :selected="selectedCategory"
+            :counts="categoryCounts"
+            @select="selectedCategory = $event"
+          />
+          <MarkColorPanel
+            :active="selectedGlyph ? glyphMarkColors.get(selectedGlyph) : ''"
+            :enabled="!!selectedGlyph"
+            @set="setMarkOnSelected"
+          />
+        </template>
+        <template v-else>
+          <EditModeToolbar
+            :active="activeTool"
+            @select="activeTool = $event"
+          />
+        </template>
       </div>
 
       <!-- Stage = canvas + grid stacked on the same area. Canvas
@@ -821,6 +834,8 @@ onBeforeUnmount(() => {
             @dblclick="openGlyph(name)"
           />
         </div>
+
+        <WelcomePanel v-if="glyphNames.length === 0" />
       </div>
 
       <GlyphInfoSidebar
