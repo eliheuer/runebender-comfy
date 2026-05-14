@@ -22,21 +22,9 @@ const canvas = ref<HTMLCanvasElement | null>(null);
 const status = ref<string>("initializing");
 const selectionCount = ref<number>(0);
 const dragHover = ref<boolean>(false);
-const glyphNames = ref<string[]>([]);
 const currentGlyph = ref<string>("");
 const fontLabel = ref<string>("");
 const viewMode = ref<"grid" | "editor">("grid");
-// Pre-computed SVG strings for the grid cells, keyed by glyph name.
-// Set once per UFO load; consulted only by the template.
-const glyphSvgs = ref<Map<string, string>>(new Map());
-// Unicode codepoint per glyph (uppercase hex, no "U+" prefix). Same
-// lifecycle as glyphSvgs.
-const glyphUnicodes = ref<Map<string, string>>(new Map());
-// Master switcher labels for the TopBar. Stub for now — when
-// designspace lands (Phase 7) this becomes the list of master
-// names parsed from the .designspace file.
-const masters = ref<string[]>(["Regular"]);
-// Category filter for the sidebar. "All" until the user picks.
 const selectedCategory = ref<Category>("All");
 // Live metadata for the info sidebar — read from the wasm editor
 // after each setGlyphGlif call. -1 / 0 means "no glyph loaded yet".
@@ -46,14 +34,46 @@ const currentContours = ref<number>(0);
 // sidebar, mark-color target). Distinct from `currentGlyph` which
 // is the glyph currently loaded into the editor.
 const selectedGlyph = ref<string>("");
-// `public.markColor` value per glyph as RGBA string "r,g,b,a"
-// with 0–1 floats. Populated on UFO load from each .glif's <lib>.
-// Mutated when the user clicks a swatch.
-const glyphMarkColors = ref<Map<string, string>>(new Map());
-// Category per glyph name, computed in loadGlifFiles via the wasm
-// `glyphCategoryForCodepoint`. Glyphs without a codepoint default
-// to "Other".
-const glyphCategories = ref<Map<string, Category>>(new Map());
+
+// ---------------------------------------------------------------------
+// Master state — single source of truth
+// ---------------------------------------------------------------------
+//
+// All per-glyph data lives inside MasterData; the active master's
+// view is exposed as a set of computeds below. Switching masters
+// (Regular ↔ Bold) means flipping `activeMasterName` — no need to
+// imperatively swap top-level state.
+
+type MasterData = {
+  glyphBytes: Map<string, Uint8Array>;
+  glyphUnicodes: Map<string, string>;
+  glyphSvgs: Map<string, string>;
+  glyphCategories: Map<string, Category>;
+  glyphMarkColors: Map<string, string>;
+  fontInfoBytes: Uint8Array | null;
+};
+
+const masterDataMap = ref<Map<string, MasterData>>(new Map());
+const activeMasterName = ref<string>("");
+
+const activeMasterData = computed(() => masterDataMap.value.get(activeMasterName.value));
+const glyphUnicodes = computed(
+  () => activeMasterData.value?.glyphUnicodes ?? (new Map<string, string>()),
+);
+const glyphSvgs = computed(
+  () => activeMasterData.value?.glyphSvgs ?? (new Map<string, string>()),
+);
+const glyphCategories = computed(
+  () => activeMasterData.value?.glyphCategories ?? (new Map<string, Category>()),
+);
+const glyphMarkColors = computed(
+  () => activeMasterData.value?.glyphMarkColors ?? (new Map<string, string>()),
+);
+const glyphNames = computed(() =>
+  activeMasterData.value ? Array.from(activeMasterData.value.glyphBytes.keys()).sort() : [],
+);
+const masters = computed(() => Array.from(masterDataMap.value.keys()));
+const activeMasterIndex = computed(() => masters.value.indexOf(activeMasterName.value));
 
 // Names filtered by the active category. The grid renders this list
 // instead of glyphNames directly.
@@ -109,10 +129,6 @@ type Editor = {
 let editor: Editor | null = null;
 let raf = 0;
 let resizeObserver: ResizeObserver | null = null;
-// Holds raw bytes for every loaded glyph, keyed by the glyph's UFO
-// name (NOT the mangled filename). Set when a UFO is loaded; consulted
-// when the user clicks a grid cell.
-const glyphBytes = new Map<string, Uint8Array>();
 
 onMounted(async () => {
   if (!canvas.value) return;
@@ -265,96 +281,143 @@ function parseGlyphInfo(bytes: Uint8Array): {
 async function loadGlifFiles(files: File[]) {
   if (!editor || !canvas.value) return;
 
-  // Surface a friendlier message for designspace until Wave 3f.
-  if (files.some((f) => /\.designspace$/i.test(f.name))) {
-    status.value =
-      "designspace files aren't supported yet — open one of the referenced .ufo folders for now";
+  // Reset all selection state regardless of which load path runs.
+  currentGlyph.value = "";
+  selectedGlyph.value = "";
+  selectedCategory.value = "All";
+
+  const dsFile = files.find((f) => /\.designspace$/i.test(f.name));
+  if (dsFile) {
+    await loadDesignspace(dsFile, files);
+  } else {
+    await loadSingleUfo(files);
+  }
+  viewMode.value = "grid";
+}
+
+async function loadDesignspace(dsFile: File, allFiles: File[]) {
+  status.value = "parsing designspace…";
+  const xml = await dsFile.text();
+  const sources = parseDesignspace(xml);
+  if (sources.length === 0) {
+    status.value = "designspace has no <source> entries";
+    return;
   }
 
-  // From a UFO directory, prefer the main `glyphs/` layer. Falls
-  // back to "any .glif" so a single-file drop still works.
-  let glifs = files.filter(
+  // Designspace dir = everything before the .designspace filename.
+  // UFO references in the designspace are relative to this dir.
+  const dsPath = relPath(dsFile);
+  const dsDir = dsPath.includes("/") ? dsPath.slice(0, dsPath.lastIndexOf("/")) : "";
+
+  const map = new Map<string, MasterData>();
+  for (const src of sources) {
+    const ufoRel = dsDir ? `${dsDir}/${src.filename}` : src.filename;
+    const ufoFiles = allFiles.filter((f) =>
+      relPath(f).startsWith(`${ufoRel}/`),
+    );
+    if (ufoFiles.length === 0) {
+      console.warn(`master "${src.styleName}" UFO not found at ${ufoRel}`);
+      continue;
+    }
+    status.value = `building master ${src.styleName}…`;
+    map.set(src.styleName, await buildMasterData(ufoFiles));
+  }
+
+  if (map.size === 0) {
+    status.value = "designspace had no resolvable masters";
+    return;
+  }
+
+  masterDataMap.value = map;
+  fontLabel.value = dsFile.name;
+  activateMaster(Array.from(map.keys())[0]);
+  status.value = "ready";
+}
+
+async function loadSingleUfo(files: File[]) {
+  const glifs = files.filter(
     (f) => /\.glif$/i.test(f.name) && /\/glyphs\//.test(relPath(f)),
   );
-  if (glifs.length === 0) {
-    glifs = files.filter((f) => /\.glif$/i.test(f.name));
-  }
-
   if (glifs.length === 0) {
     status.value =
       files.length === 0
         ? "nothing dropped"
-        : `no .glif files found in ${files.length} file(s) — make sure you're picking a .ufo folder, not the .designspace`;
+        : `no .glif files found in ${files.length} file(s)`;
     return;
   }
 
-  // Look for fontinfo.plist alongside the glyphs/ dir. The path
-  // looks like "MyFont.ufo/fontinfo.plist" — match the segment
-  // sitting directly inside any *.ufo dir so we don't accidentally
-  // pick up a nested copy.
-  const fontInfoFile = files.find((f) =>
-    /(^|\/)[^/]+\.ufo\/fontinfo\.plist$/i.test(relPath(f)),
-  ) ?? files.find((f) => /\/fontinfo\.plist$/i.test(relPath(f)));
-  if (fontInfoFile) {
-    try {
-      const bytes = new Uint8Array(await fontInfoFile.arrayBuffer());
-      editor.setFontInfo(bytes);
-    } catch (e) {
-      console.warn("fontinfo.plist parse failed:", e);
-    }
-  }
-
-  glyphBytes.clear();
-  glyphUnicodes.value = new Map();
-  glyphCategories.value = new Map();
-  glyphMarkColors.value = new Map();
-  glyphNames.value = [];
-  glyphSvgs.value = new Map();
-  currentGlyph.value = "";
-  selectedGlyph.value = "";
-  selectedCategory.value = "All";
   status.value = `reading ${glifs.length} glyph${glifs.length === 1 ? "" : "s"}…`;
+  const data = await buildMasterData(files);
 
-  // Read all glyphs in parallel; bound by file-read throughput.
-  const loaded = await Promise.all(
-    glifs.map(async (f) => {
-      const bytes = new Uint8Array(await f.arrayBuffer());
-      const { name, unicode } = parseGlyphInfo(bytes);
-      return { name, unicode, bytes };
-    }),
-  );
-  for (const { name, unicode, markColor, bytes } of loaded) {
-    if (!name) continue;
-    glyphBytes.set(name, bytes);
-    if (unicode) glyphUnicodes.value.set(name, unicode);
-    if (markColor) glyphMarkColors.value.set(name, markColor);
-    // Glyphs without a unicode default to "Other" — same convention
-    // runebender-xilem uses for design-only glyphs (.notdef, etc.).
-    const cp = unicode ? parseInt(unicode, 16) : NaN;
-    const cat = Number.isFinite(cp)
-      ? (glyphCategoryForCodepoint(cp) as Category)
-      : "Other";
-    glyphCategories.value.set(name, cat);
-  }
-  const names = Array.from(glyphBytes.keys()).sort();
-  glyphNames.value = names;
-
-  // Label the UFO by the folder name (best-effort) — match any
-  // ".ufo" segment in the path, regardless of nesting depth.
+  // Label by the UFO folder name (best-effort).
   const sample = relPath(glifs[0]);
   const ufoMatch = sample.match(/([^/]+\.ufo)\//i);
   fontLabel.value = ufoMatch ? ufoMatch[1] : "";
 
-  status.value = `rendering grid (${names.length})…`;
-  // Render grid SVGs in chunks so we yield to the event loop and
-  // the "loading…" status pill actually paints for big UFOs.
-  await buildGridSvgs(names);
+  // Master name from fontinfo.plist's styleName, or "Regular" fallback.
+  const styleName = data.fontInfoBytes
+    ? (extractStyleName(data.fontInfoBytes) ?? "Regular")
+    : "Regular";
 
+  masterDataMap.value = new Map([[styleName, data]]);
+  activateMaster(styleName);
   status.value = "ready";
-  viewMode.value = "grid";
 }
 
-async function buildGridSvgs(names: string[]) {
+/// Read every .glif in `ufoFiles` (filtered to the `glyphs/` layer),
+/// parse glyph metadata + render SVGs, and bundle everything along
+/// with the matching fontinfo.plist bytes into a MasterData.
+async function buildMasterData(ufoFiles: File[]): Promise<MasterData> {
+  const glifs = ufoFiles.filter(
+    (f) => /\.glif$/i.test(f.name) && /\/glyphs\//.test(relPath(f)),
+  );
+  const loaded = await Promise.all(
+    glifs.map(async (f) => {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      const info = parseGlyphInfo(bytes);
+      return { ...info, bytes };
+    }),
+  );
+
+  const glyphBytes = new Map<string, Uint8Array>();
+  const glyphUnicodes = new Map<string, string>();
+  const glyphCategories = new Map<string, Category>();
+  const glyphMarkColors = new Map<string, string>();
+  for (const { name, unicode, markColor, bytes } of loaded) {
+    if (!name) continue;
+    glyphBytes.set(name, bytes);
+    if (unicode) glyphUnicodes.set(name, unicode);
+    if (markColor) glyphMarkColors.set(name, markColor);
+    const cp = unicode ? parseInt(unicode, 16) : NaN;
+    const cat = Number.isFinite(cp)
+      ? (glyphCategoryForCodepoint(cp) as Category)
+      : "Other";
+    glyphCategories.set(name, cat);
+  }
+
+  const glyphSvgs = await buildGridSvgsForMap(glyphBytes);
+
+  const fontInfoFile = ufoFiles.find((f) =>
+    /\/fontinfo\.plist$/i.test(relPath(f)),
+  );
+  const fontInfoBytes = fontInfoFile
+    ? new Uint8Array(await fontInfoFile.arrayBuffer())
+    : null;
+
+  return {
+    glyphBytes,
+    glyphUnicodes,
+    glyphSvgs,
+    glyphCategories,
+    glyphMarkColors,
+    fontInfoBytes,
+  };
+}
+
+async function buildGridSvgsForMap(
+  glyphBytes: Map<string, Uint8Array>,
+): Promise<Map<string, string>> {
+  const names = Array.from(glyphBytes.keys()).sort();
   const chunkSize = 64;
   const svgs = new Map<string, string>();
   for (let i = 0; i < names.length; i += chunkSize) {
@@ -366,14 +429,69 @@ async function buildGridSvgs(names: string[]) {
         const svg = glifToSvg(bytes);
         if (svg) svgs.set(name, svg);
       } catch {
-        // Skip malformed glyphs silently — they'll appear as empty
-        // cells but won't break the rest of the UFO.
+        // Skip malformed glyphs silently.
       }
     }
-    // Let Vue/browser breathe between chunks.
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
   }
-  glyphSvgs.value = svgs;
+  return svgs;
+}
+
+function parseDesignspace(
+  xml: string,
+): Array<{ name: string; styleName: string; filename: string }> {
+  const doc = new DOMParser().parseFromString(xml, "application/xml");
+  return Array.from(doc.querySelectorAll("source"))
+    .map((el) => ({
+      name: el.getAttribute("name") ?? "",
+      styleName:
+        el.getAttribute("stylename") ?? el.getAttribute("name") ?? "Master",
+      filename: el.getAttribute("filename") ?? "",
+    }))
+    .filter((s) => s.filename);
+}
+
+function extractStyleName(fontInfoBytes: Uint8Array): string | null {
+  const xml = new TextDecoder().decode(fontInfoBytes);
+  const m = /<key>styleName<\/key>\s*<string>([^<]+)<\/string>/.exec(xml);
+  return m?.[1] ?? null;
+}
+
+/// Swap the active master. If a glyph is open in the editor, reload
+/// it from the new master's bytes so the canvas tracks the switch.
+function activateMaster(name: string) {
+  if (!masterDataMap.value.has(name)) return;
+  activeMasterName.value = name;
+  const data = masterDataMap.value.get(name);
+  if (!data || !editor) return;
+  // Push the master's fontinfo so the metric guides reflect it.
+  if (data.fontInfoBytes) {
+    try {
+      editor.setFontInfo(data.fontInfoBytes);
+    } catch (e) {
+      console.warn("setFontInfo failed:", e);
+    }
+  }
+  // If the editor is showing a glyph that exists in this master,
+  // reload it from the master's bytes.
+  if (currentGlyph.value && canvas.value) {
+    const bytes = data.glyphBytes.get(currentGlyph.value);
+    if (bytes) {
+      try {
+        editor.setGlyphGlif(bytes);
+        currentWidth.value = editor.advanceWidth();
+        currentContours.value = editor.contourCount();
+        requestRender();
+      } catch (e) {
+        console.warn("reloading glyph for master switch failed:", e);
+      }
+    }
+  }
+}
+
+function onSelectMaster(index: number) {
+  const name = masters.value[index];
+  if (name) activateMaster(name);
 }
 
 function selectGlyph(name: string) {
@@ -387,7 +505,7 @@ function selectGlyph(name: string) {
 
 function openGlyph(name: string) {
   if (!editor || !canvas.value) return;
-  const bytes = glyphBytes.get(name);
+  const bytes = activeMasterData.value?.glyphBytes.get(name);
   if (!bytes) return;
   try {
     editor.setGlyphGlif(bytes);
@@ -411,19 +529,22 @@ function openGlyph(name: string) {
 
 /// Apply (or clear) a mark color on the selected glyph. RGBA is
 /// the UFO `public.markColor` string "r,g,b,a"; empty string clears.
+/// Affects only the active master's MasterData.
 function setMarkOnSelected(rgba: string) {
   const name = selectedGlyph.value;
-  if (!name) return;
+  const data = activeMasterData.value;
+  if (!name || !data) return;
   if (rgba) {
-    glyphMarkColors.value.set(name, rgba);
+    data.glyphMarkColors.set(name, rgba);
   } else {
-    glyphMarkColors.value.delete(name);
+    data.glyphMarkColors.delete(name);
   }
-  // Force the cell to re-render with the new tint. The Map mutation
-  // alone doesn't trigger Vue reactivity, so we replace it.
-  glyphMarkColors.value = new Map(glyphMarkColors.value);
-  // TODO: when save lands, also patch the .glif bytes in glyphBytes
-  // so the change persists to disk.
+  // Trigger reactivity — the inner Map mutation isn't observable;
+  // replace the outer masterDataMap reference so dependent computeds
+  // (glyphMarkColors, the cells) re-run.
+  masterDataMap.value = new Map(masterDataMap.value);
+  // TODO: when save lands, also patch the .glif bytes so the change
+  // persists to disk.
 }
 
 function backToGrid() {
@@ -636,7 +757,8 @@ onBeforeUnmount(() => {
       :font-label="fontLabel"
       :unsaved="glyphNames.length > 0"
       :masters="masters"
-      :active-master="0"
+      :active-master="activeMasterIndex"
+      @select-master="onSelectMaster"
     />
 
     <!-- Content row: left column (categories + mark colors) +
@@ -703,7 +825,7 @@ onBeforeUnmount(() => {
 
       <GlyphInfoSidebar
         v-if="glyphNames.length > 0"
-        :master="masters[0]"
+        :master="activeMasterName"
         :name="selectedGlyph"
         :unicode="selectedGlyph ? glyphUnicodes.get(selectedGlyph) : undefined"
         :width="selectedGlyph === currentGlyph ? currentWidth : undefined"
