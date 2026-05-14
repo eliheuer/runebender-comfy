@@ -25,12 +25,15 @@ Kurbo MIT-or-Apache) are all GPL-3.0-compatible.
 
 ```
 .agents/              task-specific plans (UI_PARITY_PLAN.md etc.)
+  REPO_MAP.md         task routing: which files to read for each area
   active/             in-flight task claims — one md per running task
   active/_template.md template for new claims
+docs/architecture/    durable architecture decisions and boundaries
 nodes/                ComfyUI Python nodes (runebender.py, designbot.py)
 rust-core/            Rust core compiled to WASM; src/{editor,renderer,wasm_api}.rs
   deny.toml           cargo-deny config (supply-chain)
 scripts/audit.sh      runs cargo-deny + check-crate-age together
+scripts/agent-doctor.sh preflight checks for new agent sessions
 tools/check-crate-age/  Rust binary querying crates.io for npm-style age cooldown
 web/                  Vue 3 + Vite frontend
   src/Runebender.vue  layout root
@@ -69,6 +72,10 @@ underneath its event loop.
 
 WebGPU-only (Chrome 113+, Edge, Safari TP). No CPU fallback shipped.
 Vello supports `use_cpu: true` if reach is ever needed.
+
+Durable architecture decisions live in
+`docs/architecture/decisions.md`. Use `.agents/REPO_MAP.md` to find
+the files and sibling-repo references for a specific task area.
 
 ## Sister repos and cross-repo dependencies
 
@@ -195,20 +202,23 @@ agent that can read AGENTS.md can participate.
 
 **Before starting any non-trivial task:**
 
-1. **Pull `main` and skim `.agents/active/*.md`.** Each file is a
+1. **Run `scripts/agent-doctor.sh`.** It checks the expected sibling
+   repos, active claims, dirty state, and stale wasm output traps.
+2. **Pull `main` and skim `.agents/active/*.md`.** Each file is a
    claim by an agent currently working on something. If your task
    overlaps an existing claim's `touches:` list, pick a different
    slice or check with the human.
-2. **Write your own claim file** to `.agents/active/<slug>.md` using
+3. **Write your own claim file** to `.agents/active/<slug>.md` using
    `.agents/active/_template.md`. `<slug>` is short kebab-case
    (`wire-coordinate-panel`, `theme-json-skeleton`). One file per
    concurrent task.
-3. **Commit and push the claim immediately.** This is an explicit
+4. **Commit and push the claim immediately to `main`.** This is an explicit
    exception to the "push at milestones" rule above — the claim is
    coordination state, not feature work, and is useless if other
-   agents can't see it. Use a one-line commit like
-   `claim: <slug>`.
-4. **Work in a git worktree, not the main checkout:**
+   agents can't see it. Use a one-line commit like `claim: <slug>`.
+   Do this in the main checkout before creating the feature worktree;
+   feature branches are not a reliable coordination channel.
+5. **Work in a git worktree, not the main checkout:**
    ```sh
    git fetch origin
    git worktree add ~/Temp/worktrees/runebender-comfy-<slug> \
@@ -217,9 +227,9 @@ agent that can read AGENTS.md can participate.
    Worktrees isolate `web/wasm/` rebuilds, lockfile churn, dev-server
    ports, and `node_modules` state. `~/Temp/` is user-policy for
    scratch dirs.
-5. **Bump `last_touched:`** in the claim file when you resume after
+6. **Bump `last_touched:`** in the claim file when you resume after
    an idle stretch (hour+). Cheap signal that the claim is alive.
-6. **Delete the claim file** when you finish, hand off, or abandon.
+7. **Delete the claim file** when you finish, hand off, or abandon.
    Commit + push the deletion. A claim with `last_touched:` older
    than ~24h is considered stale — **don't silently reclaim**, ping
    the human first.

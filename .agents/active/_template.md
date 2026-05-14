@@ -5,10 +5,11 @@ How to use:
   1. Copy to `.agents/active/<slug>.md` (kebab-case, e.g.
      `wire-coordinate-panel`).
   2. Fill in the frontmatter and the three sections below.
-  3. Commit and push immediately so other agents see the claim.
-     Commit message: `claim: <slug>`.
-  4. Bump `last_touched:` if you resume after an idle stretch.
-  5. Delete the file when you finish, hand off, or abandon.
+  3. Commit and push immediately to main so other agents see the
+     claim. Commit message: `claim: <slug>`.
+  4. Create/use the feature worktree after the claim is visible.
+  5. Bump `last_touched:` if you resume after an idle stretch.
+  6. Delete the file when you finish, hand off, or abandon.
      Commit + push the deletion.
 
 See `AGENTS.md` → "Multi-agent coordination" for the full protocol.
