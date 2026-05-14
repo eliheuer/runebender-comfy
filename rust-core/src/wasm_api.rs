@@ -246,6 +246,29 @@ impl GlyphEditor {
     pub fn contour_count(&self) -> usize {
         self.state.paths.len()
     }
+
+    /// Design-space (x, y) of the *first* selected point in
+    /// iteration order. Returned as a flat 2-element array so we
+    /// don't have to define a wasm-bindgen struct. Length 0 when
+    /// the selection is empty.
+    ///
+    /// JS callers consult this after every render to refresh the
+    /// coordinate panel; the bigger "selection bbox + multi-point"
+    /// surface lands when the transform panel actually wires up.
+    #[wasm_bindgen(js_name = selectionFirstXy)]
+    pub fn selection_first_xy(&self) -> Vec<f64> {
+        if self.state.selection.is_empty() {
+            return Vec::new();
+        }
+        for path in &self.state.paths {
+            for pt in path.points().iter() {
+                if self.state.selection.contains(&pt.id) {
+                    return vec![pt.point.x, pt.point.y];
+                }
+            }
+        }
+        Vec::new()
+    }
 }
 
 fn build_event(x: f64, y: f64, button: u32, mods: u32) -> MouseEvent {
