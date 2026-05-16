@@ -8,7 +8,8 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use kurbo::{Affine, Circle, Line, Rect, Stroke};
+use kurbo::{Affine, BezPath, Circle, Ellipse, Line, Point, Rect, Stroke};
+use runebender_core::theme;
 use vello::peniko::{Fill, color::AlphaColor};
 use vello::util::{RenderContext, RenderSurface};
 use vello::wgpu;
@@ -16,7 +17,9 @@ use vello::{AaConfig, Renderer as VelloRenderer, RendererOptions, Scene};
 use wasm_bindgen::JsValue;
 use web_sys::HtmlCanvasElement;
 
-use crate::editor::EditorState;
+use crate::editor::{
+    EditorState, KnifePreview, MeasurePreview, PenPreview, SegmentHoverPreview, ShapePreview,
+};
 use crate::path::{Path, PathPoint, PointType};
 
 // ============================================================================
@@ -27,45 +30,75 @@ use crate::path::{Path, PathPoint, PointType};
 
 type Srgb = AlphaColor<vello::peniko::color::Srgb>;
 
-// --- App background (xilem APP_BACKGROUND = BASE_A) ---
-const BG: Srgb = AlphaColor::from_rgba8(0x10, 0x10, 0x10, 0xff);
+const fn srgb(color: theme::ColorRgba) -> Srgb {
+    AlphaColor::from_rgba8(color.r, color.g, color.b, color.a)
+}
 
-// --- Glyph fill (xilem PATH_FILL = BASE_F) ---
-const GLYPH_FILL: Srgb = AlphaColor::from_rgba8(0x60, 0x60, 0x60, 0xff);
+const fn with_alpha(color: theme::ColorRgba, alpha: u8) -> Srgb {
+    AlphaColor::from_rgba8(color.r, color.g, color.b, alpha)
+}
 
-// --- Handle line (xilem HANDLE_LINE = BASE_I) ---
-const HANDLE_LINE: Srgb = AlphaColor::from_rgba8(0x90, 0x90, 0x90, 0xff);
-
-// --- Point colors, color-coded by point type ---
-// Smooth on-curve (circle): blue
-const POINT_SMOOTH_INNER: Srgb = AlphaColor::from_rgba8(0x57, 0x9a, 0xff, 0xff);
-const POINT_SMOOTH_OUTER: Srgb = AlphaColor::from_rgba8(0x44, 0x28, 0xec, 0xff);
-// Corner on-curve (square): green
-const POINT_CORNER_INNER: Srgb = AlphaColor::from_rgba8(0x6a, 0xe7, 0x56, 0xff);
-const POINT_CORNER_OUTER: Srgb = AlphaColor::from_rgba8(0x20, 0x8e, 0x56, 0xff);
-// Off-curve (circle): purple
-const POINT_OFFCURVE_INNER: Srgb = AlphaColor::from_rgba8(0xcc, 0x99, 0xff, 0xff);
-const POINT_OFFCURVE_OUTER: Srgb = AlphaColor::from_rgba8(0x99, 0x00, 0xff, 0xff);
-// Selected: yellow inner / orange outer outline
-const POINT_SELECTED_INNER: Srgb = AlphaColor::from_rgba8(0xff, 0xee, 0x55, 0xff);
-const POINT_SELECTED_OUTER: Srgb = AlphaColor::from_rgba8(0xff, 0xaa, 0x33, 0xff);
-
-// --- Marquee (xilem SELECTION_RECT_*) ---
-const MARQUEE_FILL: Srgb = AlphaColor::from_rgba8(0xff, 0xaa, 0x33, 0x20);
-const MARQUEE_STROKE: Srgb = AlphaColor::from_rgba8(0xff, 0xaa, 0x33, 0xff);
-
-// --- Metric guides (xilem METRICS_GUIDE) ---
-const METRIC_GUIDE: Srgb = AlphaColor::from_rgba8(0x66, 0xEE, 0x88, 0xff);
+const BG: Srgb = srgb(theme::app::BACKGROUND);
+const GLYPH_FILL: Srgb = srgb(theme::path::FILL);
+const PREVIEW_FILL: Srgb = srgb(theme::path::PREVIEW_FILL);
+const COMPONENT_FILL: Srgb = srgb(theme::component::FILL);
+const COMPONENT_SELECTED_FILL: Srgb = srgb(theme::component::SELECTED_FILL);
+const HANDLE_LINE: Srgb = srgb(theme::handle::LINE);
+const POINT_SMOOTH_INNER: Srgb = srgb(theme::point::SMOOTH_INNER);
+const POINT_SMOOTH_OUTER: Srgb = srgb(theme::point::SMOOTH_OUTER);
+const POINT_CORNER_INNER: Srgb = srgb(theme::point::CORNER_INNER);
+const POINT_CORNER_OUTER: Srgb = srgb(theme::point::CORNER_OUTER);
+const POINT_OFFCURVE_INNER: Srgb = srgb(theme::point::OFFCURVE_INNER);
+const POINT_OFFCURVE_OUTER: Srgb = srgb(theme::point::OFFCURVE_OUTER);
+const POINT_HYPER_INNER: Srgb = srgb(theme::point::HYPER_INNER);
+const POINT_HYPER_OUTER: Srgb = srgb(theme::point::HYPER_OUTER);
+const POINT_SELECTED_INNER: Srgb = srgb(theme::point::SELECTED_INNER);
+const POINT_SELECTED_OUTER: Srgb = srgb(theme::point::SELECTED_OUTER);
+const START_NODE_OUTER: Srgb = srgb(theme::point::START_NODE_OUTER);
+const MARQUEE_FILL: Srgb = srgb(theme::selection::RECT_FILL);
+const MARQUEE_STROKE: Srgb = srgb(theme::selection::RECT_STROKE);
+const TOOL_PREVIEW: Srgb = srgb(theme::segment::HOVER);
+const METRIC_GUIDE: Srgb = srgb(theme::metrics::GUIDE);
+const DESIGN_GRID_FINE: Srgb = srgb(theme::design_grid::FINE);
+const DESIGN_GRID_COARSE: Srgb = srgb(theme::design_grid::COARSE);
+const TEXT_PREVIEW_FILL: Srgb = srgb(theme::grid::GLYPH);
+const TEXT_ACTIVE_FILL: Srgb = with_alpha(theme::grid::CELL_SELECTED_OUTLINE, 0x66);
+const TEXT_CURSOR: Srgb = srgb(theme::cursor::TEXT);
+const TEXT_KERN_ACTIVE: Srgb = srgb(theme::kerning::ACTIVE_GLYPH);
+const TEXT_KERN_PREVIOUS: Srgb = srgb(theme::kerning::PREVIOUS_GLYPH);
 
 // --- Sizes (xilem size::*; STROKE_SCALE = 1.5) ---
 const STROKE_SCALE: f64 = 1.5;
 const SMOOTH_POINT_RADIUS_PX: f64 = 4.5;
+const SMOOTH_POINT_SELECTED_RADIUS_PX: f64 = 5.5;
 const CORNER_POINT_HALF_PX: f64 = 3.5;
+const CORNER_POINT_SELECTED_HALF_PX: f64 = 4.5;
 const OFFCURVE_POINT_RADIUS_PX: f64 = 3.0;
+const OFFCURVE_POINT_SELECTED_RADIUS_PX: f64 = 4.0;
+const HYPER_POINT_RADIUS_PX: f64 = 4.0;
+const HYPER_POINT_SELECTED_RADIUS_PX: f64 = 5.0;
+const START_NODE_HALF_PX: f64 = 5.5;
+const START_NODE_SELECTED_HALF_PX: f64 = 6.5;
+const START_NODE_OFFSET_PX: f64 = 8.0;
 const POINT_OUTLINE_PX: f64 = 1.0 * STROKE_SCALE;
 const HANDLE_LINE_PX: f64 = 1.0 * STROKE_SCALE;
 const MARQUEE_STROKE_PX: f64 = 1.0 * STROKE_SCALE;
 const METRIC_LINE_PX: f64 = 1.0 * STROKE_SCALE;
+const TOOL_PREVIEW_LINE_PX: f64 = 1.0 * STROKE_SCALE;
+const SEGMENT_HOVER_LINE_PX: f64 = 3.0;
+const TOOL_PREVIEW_DOT_RADIUS_PX: f64 = 3.0;
+const TEXT_CURSOR_LINE_PX: f64 = 1.0 * STROKE_SCALE;
+const TEXT_CURSOR_TRIANGLE_WIDTH_PX: f64 = 24.0;
+const TEXT_CURSOR_TRIANGLE_HEIGHT_PX: f64 = 16.0;
+const TEXT_METRIC_CROSS_SIZE: f64 = 24.0;
+const DESIGN_GRID_MID_MIN_ZOOM: f64 = 0.8;
+const DESIGN_GRID_MID_FINE: f64 = 8.0;
+const DESIGN_GRID_MID_COARSE_N: u32 = 4;
+const DESIGN_GRID_CLOSE_MIN_ZOOM: f64 = 4.0;
+const DESIGN_GRID_CLOSE_FINE: f64 = 2.0;
+const DESIGN_GRID_CLOSE_COARSE_N: u32 = 4;
+const DESIGN_GRID_FINE_LINE_PX: f64 = 0.5;
+const DESIGN_GRID_COARSE_LINE_PX: f64 = 1.0;
 
 // ============================================================================
 // RENDERER
@@ -81,21 +114,12 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub async fn new(
-        canvas: HtmlCanvasElement,
-        width: u32,
-        height: u32,
-    ) -> Result<Self, JsValue> {
+    pub async fn new(canvas: HtmlCanvasElement, width: u32, height: u32) -> Result<Self, JsValue> {
         let mut render_cx = RenderContext::new();
 
         let surface_target = wgpu::SurfaceTarget::Canvas(canvas);
         let surface = render_cx
-            .create_surface(
-                surface_target,
-                width,
-                height,
-                wgpu::PresentMode::AutoVsync,
-            )
+            .create_surface(surface_target, width, height, wgpu::PresentMode::AutoVsync)
             .await
             .map_err(|e| JsValue::from_str(&format!("create_surface: {e:?}")))?;
 
@@ -125,51 +149,371 @@ impl Renderer {
         if width == 0 || height == 0 {
             return;
         }
-        self.render_cx.resize_surface(&mut self.surface, width, height);
+        self.render_cx
+            .resize_surface(&mut self.surface, width, height);
         self.width = width;
         self.height = height;
     }
 
     /// Paint one frame against the given editor state.
-    pub fn render(&mut self, state: &EditorState) -> Result<(), JsValue> {
+    pub fn render(
+        &mut self,
+        state: &EditorState,
+        preview_mode: bool,
+        text_mode_active: bool,
+    ) -> Result<(), JsValue> {
         self.scene.reset();
-        self.draw_state(state);
+        self.draw_state(state, preview_mode, text_mode_active);
         self.present()
     }
 
-    fn draw_state(&mut self, state: &EditorState) {
+    fn draw_state(&mut self, state: &EditorState, preview_mode: bool, text_mode_active: bool) {
         let view = state.viewport.affine();
+        let active_sort_origin = state.active_text_sort_origin();
+        let glyph_view = view * Affine::translate(active_sort_origin);
+        let has_text_session = !state.text_buffer.is_empty();
 
-        // Metric guides go in first so the glyph fill paints on top.
-        self.draw_metric_guides(state, view);
+        if !preview_mode {
+            self.draw_design_grid(state, view, active_sort_origin.x);
+
+            // Metric guides go in first so the glyph fill paints on top.
+            if !has_text_session {
+                self.draw_metric_guides(state, glyph_view);
+            }
+        }
 
         // Glyph fill (in design space — viewport applies the Y-flip).
         // Combine every contour into ONE BezPath before filling so the
         // NonZero winding rule treats opposite-wound inner contours as
         // holes (UFO/PostScript convention). Filling each contour
         // separately would paint counters solid.
-        let mut combined = kurbo::BezPath::new();
-        for path in &state.paths {
-            for el in path.to_bezpath().elements() {
-                combined.push(*el);
+        let mut combined = editable_outline_path(state);
+        if has_text_session {
+            self.draw_text_buffer(state, view, preview_mode, text_mode_active);
+            if !preview_mode && !text_mode_active {
+                self.draw_edit_controls(state, glyph_view);
             }
+            return;
+        }
+
+        if preview_mode {
+            for component in &state.component_previews {
+                let transformed = component.transform * &component.path;
+                for el in transformed.elements() {
+                    combined.push(*el);
+                }
+            }
+            if !combined.elements().is_empty() {
+                self.scene
+                    .fill(Fill::NonZero, glyph_view, PREVIEW_FILL, None, &combined);
+            }
+            self.draw_text_buffer(state, view, true, text_mode_active);
+            return;
         }
         if !combined.elements().is_empty() {
             self.scene
-                .fill(Fill::NonZero, view, GLYPH_FILL, None, &combined);
+                .fill(Fill::NonZero, glyph_view, GLYPH_FILL, None, &combined);
         }
+        for component in &state.component_previews {
+            let transformed = component.transform * &component.path;
+            if transformed.elements().is_empty() {
+                continue;
+            }
+            let fill = if state.selected_component == Some(component.id) {
+                COMPONENT_SELECTED_FILL
+            } else {
+                COMPONENT_FILL
+            };
+            self.scene
+                .fill(Fill::NonZero, glyph_view, fill, None, &transformed);
+        }
+        self.draw_edit_controls(state, glyph_view);
+    }
 
+    fn draw_edit_controls(&mut self, state: &EditorState, glyph_view: Affine) {
         // Handle lines and points are drawn in screen space so they
         // stay at constant pixel size regardless of zoom.
         for path in &state.paths {
-            self.draw_handle_lines(path, view);
+            self.draw_handle_lines(path, glyph_view);
         }
         for path in &state.paths {
-            self.draw_points(path, view, &state.selection);
+            self.draw_points(path, glyph_view, &state.selection);
         }
 
+        if let Some(preview) = state.segment_hover {
+            self.draw_segment_hover(preview);
+        }
         if let Some(rect) = state.marquee {
             self.draw_marquee(rect);
+        }
+        if let Some(preview) = state.shape_preview {
+            self.draw_shape_preview(preview);
+        }
+        if let Some(preview) = state.pen_preview {
+            self.draw_pen_preview(preview);
+        }
+        if let Some(preview) = state.measure_preview.as_ref() {
+            self.draw_measure_preview(preview);
+        }
+        if let Some(preview) = state.knife_preview.as_ref() {
+            self.draw_knife_preview(preview);
+        }
+    }
+
+    fn draw_text_buffer(
+        &mut self,
+        state: &EditorState,
+        view: Affine,
+        preview_mode: bool,
+        text_mode_active: bool,
+    ) {
+        if state.text_buffer.is_empty() {
+            return;
+        }
+        let ascender = state
+            .metrics
+            .as_ref()
+            .and_then(|m| m.ascender)
+            .unwrap_or(800.0);
+        let descender = state
+            .metrics
+            .as_ref()
+            .and_then(|m| m.descender)
+            .unwrap_or(-200.0);
+        let line_height = state.text_line_height();
+        let layout = state.text_buffer.layout(line_height);
+        let kern_sort_index = state.text_buffer.manual_kerning_sort();
+
+        if !preview_mode {
+            for item in &layout.items {
+                let sort_active = state
+                    .text_buffer
+                    .sort(item.index)
+                    .map(|sort| sort.active)
+                    .unwrap_or(false);
+                if !text_mode_active && sort_active {
+                    self.draw_text_sort_metrics(state, item.x, item.y, item.advance_width, view);
+                    continue;
+                }
+                let metric_color = if text_mode_active && sort_active {
+                    TEXT_CURSOR
+                } else {
+                    match kern_sort_index {
+                        Some(index) if index == item.index => TEXT_KERN_ACTIVE,
+                        Some(index) if index == item.index + 1 => TEXT_KERN_PREVIOUS,
+                        _ => METRIC_GUIDE,
+                    }
+                };
+                self.draw_text_sort_minimal_metrics(
+                    item.x,
+                    item.y,
+                    item.advance_width,
+                    ascender,
+                    descender,
+                    view,
+                    metric_color,
+                );
+            }
+        }
+
+        for item in &layout.items {
+            let Some(sort) = state.text_buffer.sort(item.index) else {
+                continue;
+            };
+            let fill = if !preview_mode && sort.active {
+                TEXT_ACTIVE_FILL
+            } else {
+                TEXT_PREVIEW_FILL
+            };
+            if !preview_mode && sort.active {
+                let path = editable_outline_path(state);
+                if !path.elements().is_empty() {
+                    self.scene.fill(
+                        Fill::NonZero,
+                        view * Affine::translate((item.x, item.y)),
+                        fill,
+                        None,
+                        &path,
+                    );
+                }
+                for component in &state.component_previews {
+                    let transformed = component.transform * &component.path;
+                    if transformed.elements().is_empty() {
+                        continue;
+                    }
+                    let component_fill = if state.selected_component == Some(component.id) {
+                        COMPONENT_SELECTED_FILL
+                    } else {
+                        COMPONENT_FILL
+                    };
+                    self.scene.fill(
+                        Fill::NonZero,
+                        view * Affine::translate((item.x, item.y)),
+                        component_fill,
+                        None,
+                        &transformed,
+                    );
+                }
+            } else {
+                let Some(glyph_name) = sort.glyph_name() else {
+                    continue;
+                };
+                let Some(outline) = state.text_buffer.glyph_outline_svg(glyph_name) else {
+                    continue;
+                };
+                let Ok(path) = BezPath::from_svg(outline) else {
+                    continue;
+                };
+                if path.elements().is_empty() {
+                    continue;
+                }
+                self.scene.fill(
+                    Fill::NonZero,
+                    view * Affine::translate((item.x, item.y)),
+                    fill,
+                    None,
+                    &path,
+                );
+            }
+        }
+
+        if !preview_mode && text_mode_active {
+            self.draw_text_cursor(layout.cursor_x, layout.cursor_y, ascender, descender, view);
+        }
+    }
+
+    fn draw_text_cursor(
+        &mut self,
+        cursor_x: f64,
+        baseline_y: f64,
+        ascender: f64,
+        descender: f64,
+        view: Affine,
+    ) {
+        let top = view * Point::new(cursor_x, baseline_y + ascender);
+        let bottom = view * Point::new(cursor_x, baseline_y + descender);
+        self.scene.stroke(
+            &Stroke::new(TEXT_CURSOR_LINE_PX),
+            Affine::IDENTITY,
+            TEXT_CURSOR,
+            None,
+            &Line::new(top, bottom),
+        );
+
+        let mut top_triangle = BezPath::new();
+        top_triangle.move_to((top.x - TEXT_CURSOR_TRIANGLE_WIDTH_PX / 2.0, top.y));
+        top_triangle.line_to((top.x + TEXT_CURSOR_TRIANGLE_WIDTH_PX / 2.0, top.y));
+        top_triangle.line_to((top.x, top.y + TEXT_CURSOR_TRIANGLE_HEIGHT_PX));
+        top_triangle.close_path();
+        self.scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            TEXT_CURSOR,
+            None,
+            &top_triangle,
+        );
+
+        let mut bottom_triangle = BezPath::new();
+        bottom_triangle.move_to((bottom.x - TEXT_CURSOR_TRIANGLE_WIDTH_PX / 2.0, bottom.y));
+        bottom_triangle.line_to((bottom.x + TEXT_CURSOR_TRIANGLE_WIDTH_PX / 2.0, bottom.y));
+        bottom_triangle.line_to((bottom.x, bottom.y - TEXT_CURSOR_TRIANGLE_HEIGHT_PX));
+        bottom_triangle.close_path();
+        self.scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            TEXT_CURSOR,
+            None,
+            &bottom_triangle,
+        );
+    }
+
+    fn draw_text_sort_minimal_metrics(
+        &mut self,
+        x: f64,
+        baseline_y: f64,
+        advance_width: f64,
+        ascender: f64,
+        descender: f64,
+        view: Affine,
+        color: Srgb,
+    ) {
+        let stroke = Stroke::new(METRIC_LINE_PX);
+        for edge_x in [x, x + advance_width] {
+            for y in [baseline_y + descender, baseline_y, baseline_y + ascender] {
+                let h = Line::new(
+                    Point::new(edge_x - TEXT_METRIC_CROSS_SIZE, y),
+                    Point::new(edge_x + TEXT_METRIC_CROSS_SIZE, y),
+                );
+                let v = Line::new(
+                    Point::new(edge_x, y - TEXT_METRIC_CROSS_SIZE),
+                    Point::new(edge_x, y + TEXT_METRIC_CROSS_SIZE),
+                );
+                self.scene.stroke(&stroke, view, color, None, &h);
+                self.scene.stroke(&stroke, view, color, None, &v);
+            }
+        }
+    }
+
+    fn draw_text_sort_metrics(
+        &mut self,
+        state: &EditorState,
+        x: f64,
+        baseline_y: f64,
+        advance_width: f64,
+        view: Affine,
+    ) {
+        let Some(metrics) = state.metrics.as_ref() else {
+            return;
+        };
+        let stroke = Stroke::new(METRIC_LINE_PX);
+        let ascender = metrics.ascender.unwrap_or(0.0);
+        let descender = metrics.descender.unwrap_or(0.0);
+        if ascender > descender {
+            self.scene.stroke(
+                &stroke,
+                view,
+                METRIC_GUIDE,
+                None,
+                &Line::new(
+                    Point::new(x, baseline_y + descender),
+                    Point::new(x, baseline_y + ascender),
+                ),
+            );
+            self.scene.stroke(
+                &stroke,
+                view,
+                METRIC_GUIDE,
+                None,
+                &Line::new(
+                    Point::new(x + advance_width, baseline_y + descender),
+                    Point::new(x + advance_width, baseline_y + ascender),
+                ),
+            );
+        }
+
+        let mut ys = vec![0.0];
+        for y in [
+            metrics.ascender,
+            metrics.descender,
+            metrics.x_height,
+            metrics.cap_height,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            ys.push(y);
+        }
+        for y in ys {
+            self.scene.stroke(
+                &stroke,
+                view,
+                METRIC_GUIDE,
+                None,
+                &Line::new(
+                    Point::new(x, baseline_y + y),
+                    Point::new(x + advance_width, baseline_y + y),
+                ),
+            );
         }
     }
 
@@ -243,56 +587,129 @@ impl Renderer {
     ///   - corner on-curve  → green square
     ///   - off-curve        → purple circle
     ///   - any selected     → yellow inner + orange outline
-    fn draw_points(
-        &mut self,
-        path: &Path,
-        view: Affine,
-        selection: &crate::editing::Selection,
-    ) {
+    fn draw_points(&mut self, path: &Path, view: Affine, selection: &crate::editing::Selection) {
         let outline_stroke = Stroke::new(POINT_OUTLINE_PX);
-        for pt in path.points().iter() {
+        let points = path.points().to_vec();
+        let closed = path_is_closed(path);
+        let start_index = closed
+            .then(|| points.iter().position(PathPoint::is_on_curve))
+            .flatten();
+        for (index, pt) in points.iter().enumerate() {
             let center = view * pt.point;
             let selected = selection.contains(&pt.id);
 
-            let (inner, outer) = if selected {
-                (POINT_SELECTED_INNER, POINT_SELECTED_OUTER)
+            if matches!(path, Path::Hyper(_)) && pt.is_on_curve() {
+                let radius = if selected {
+                    HYPER_POINT_SELECTED_RADIUS_PX
+                } else {
+                    HYPER_POINT_RADIUS_PX
+                };
+                let (inner, outer) = if selected {
+                    (POINT_SELECTED_INNER, POINT_SELECTED_OUTER)
+                } else {
+                    (POINT_HYPER_INNER, POINT_HYPER_OUTER)
+                };
+                let circle = Circle::new(center, radius);
+                self.scene
+                    .fill(Fill::NonZero, Affine::IDENTITY, inner, None, &circle);
+                self.scene
+                    .stroke(&outline_stroke, Affine::IDENTITY, outer, None, &circle);
             } else {
+                let (inner, outer) = if selected {
+                    (POINT_SELECTED_INNER, POINT_SELECTED_OUTER)
+                } else {
+                    match pt.typ {
+                        PointType::OnCurve { smooth: true } => {
+                            (POINT_SMOOTH_INNER, POINT_SMOOTH_OUTER)
+                        }
+                        PointType::OnCurve { smooth: false } => {
+                            (POINT_CORNER_INNER, POINT_CORNER_OUTER)
+                        }
+                        PointType::OffCurve { .. } => (POINT_OFFCURVE_INNER, POINT_OFFCURVE_OUTER),
+                    }
+                };
+
                 match pt.typ {
                     PointType::OnCurve { smooth: true } => {
-                        (POINT_SMOOTH_INNER, POINT_SMOOTH_OUTER)
+                        let radius = if selected {
+                            SMOOTH_POINT_SELECTED_RADIUS_PX
+                        } else {
+                            SMOOTH_POINT_RADIUS_PX
+                        };
+                        let circle = Circle::new(center, radius);
+                        self.scene
+                            .fill(Fill::NonZero, Affine::IDENTITY, inner, None, &circle);
+                        self.scene
+                            .stroke(&outline_stroke, Affine::IDENTITY, outer, None, &circle);
                     }
                     PointType::OnCurve { smooth: false } => {
-                        (POINT_CORNER_INNER, POINT_CORNER_OUTER)
+                        let half = if selected {
+                            CORNER_POINT_SELECTED_HALF_PX
+                        } else {
+                            CORNER_POINT_HALF_PX
+                        };
+                        let square = Rect::new(
+                            center.x - half,
+                            center.y - half,
+                            center.x + half,
+                            center.y + half,
+                        );
+                        self.scene
+                            .fill(Fill::NonZero, Affine::IDENTITY, inner, None, &square);
+                        self.scene
+                            .stroke(&outline_stroke, Affine::IDENTITY, outer, None, &square);
                     }
                     PointType::OffCurve { .. } => {
-                        (POINT_OFFCURVE_INNER, POINT_OFFCURVE_OUTER)
+                        let radius = if selected {
+                            OFFCURVE_POINT_SELECTED_RADIUS_PX
+                        } else {
+                            OFFCURVE_POINT_RADIUS_PX
+                        };
+                        let circle = Circle::new(center, radius);
+                        self.scene
+                            .fill(Fill::NonZero, Affine::IDENTITY, inner, None, &circle);
+                        self.scene
+                            .stroke(&outline_stroke, Affine::IDENTITY, outer, None, &circle);
                     }
                 }
-            };
-
-            match pt.typ {
-                PointType::OnCurve { smooth: true } => {
-                    let circle = Circle::new(center, SMOOTH_POINT_RADIUS_PX);
-                    self.scene.fill(Fill::NonZero, Affine::IDENTITY, inner, None, &circle);
-                    self.scene.stroke(&outline_stroke, Affine::IDENTITY, outer, None, &circle);
-                }
-                PointType::OnCurve { smooth: false } => {
-                    let square = Rect::new(
-                        center.x - CORNER_POINT_HALF_PX,
-                        center.y - CORNER_POINT_HALF_PX,
-                        center.x + CORNER_POINT_HALF_PX,
-                        center.y + CORNER_POINT_HALF_PX,
-                    );
-                    self.scene.fill(Fill::NonZero, Affine::IDENTITY, inner, None, &square);
-                    self.scene.stroke(&outline_stroke, Affine::IDENTITY, outer, None, &square);
-                }
-                PointType::OffCurve { .. } => {
-                    let circle = Circle::new(center, OFFCURVE_POINT_RADIUS_PX);
-                    self.scene.fill(Fill::NonZero, Affine::IDENTITY, inner, None, &circle);
-                    self.scene.stroke(&outline_stroke, Affine::IDENTITY, outer, None, &circle);
-                }
+            }
+            if start_index == Some(index) {
+                let next = next_point_pos(&points, index, closed);
+                self.draw_start_arrow(center, view * next, selected);
             }
         }
+    }
+
+    fn draw_start_arrow(&mut self, screen_pos: Point, next_screen: Point, selected: bool) {
+        let arrow_size = if selected {
+            START_NODE_SELECTED_HALF_PX
+        } else {
+            START_NODE_HALF_PX
+        };
+        let direction = next_screen - screen_pos;
+        let len = direction.hypot();
+        if len < 0.001 {
+            return;
+        }
+        let forward = direction / len;
+        let perpendicular = kurbo::Vec2::new(-forward.y, forward.x);
+        let center = screen_pos + perpendicular * START_NODE_OFFSET_PX;
+        let tip = center + forward * arrow_size;
+        let base_center = center - forward * (arrow_size * 0.5);
+        let base_left = base_center + perpendicular * (arrow_size * 0.5);
+        let base_right = base_center - perpendicular * (arrow_size * 0.5);
+        let mut arrow = BezPath::new();
+        arrow.move_to(tip);
+        arrow.line_to(base_left);
+        arrow.line_to(base_right);
+        arrow.close_path();
+        let fill = if selected {
+            POINT_SELECTED_OUTER
+        } else {
+            START_NODE_OUTER
+        };
+        self.scene
+            .fill(Fill::NonZero, Affine::IDENTITY, fill, None, &arrow);
     }
 
     /// Draw the font's metric box: vertical lines at x=0 and
@@ -340,6 +757,97 @@ impl Renderer {
         }
     }
 
+    /// Draw xilem's zoom-dependent design-space grid behind the glyph.
+    ///
+    /// The mid level shows 8-unit spacing with 32-unit coarse lines;
+    /// the close level adds a 2-unit grid with 8-unit coarse lines.
+    fn draw_design_grid(&mut self, state: &EditorState, view: Affine, origin_x: f64) {
+        let zoom = state.viewport.zoom;
+        if zoom < DESIGN_GRID_MID_MIN_ZOOM {
+            return;
+        }
+
+        let top_left = state.viewport.screen_to_design(Point::ZERO);
+        let bottom_right = state
+            .viewport
+            .screen_to_design(Point::new(self.width as f64, self.height as f64));
+        let min_x = top_left.x.min(bottom_right.x);
+        let max_x = top_left.x.max(bottom_right.x);
+        let min_y = top_left.y.min(bottom_right.y);
+        let max_y = top_left.y.max(bottom_right.y);
+
+        self.draw_grid_level(
+            view,
+            DESIGN_GRID_MID_FINE,
+            DESIGN_GRID_MID_COARSE_N,
+            min_x,
+            max_x,
+            min_y,
+            max_y,
+            origin_x,
+        );
+
+        if zoom >= DESIGN_GRID_CLOSE_MIN_ZOOM {
+            self.draw_grid_level(
+                view,
+                DESIGN_GRID_CLOSE_FINE,
+                DESIGN_GRID_CLOSE_COARSE_N,
+                min_x,
+                max_x,
+                min_y,
+                max_y,
+                origin_x,
+            );
+        }
+    }
+
+    fn draw_grid_level(
+        &mut self,
+        view: Affine,
+        spacing: f64,
+        coarse_n: u32,
+        min_x: f64,
+        max_x: f64,
+        min_y: f64,
+        max_y: f64,
+        origin_x: f64,
+    ) {
+        let fine_stroke = Stroke::new(DESIGN_GRID_FINE_LINE_PX);
+        let coarse_stroke = Stroke::new(DESIGN_GRID_COARSE_LINE_PX);
+        let start_x = ((min_x - origin_x) / spacing).floor() as i64;
+        let end_x = ((max_x - origin_x) / spacing).ceil() as i64;
+        let start_y = (min_y / spacing).floor() as i64;
+        let end_y = (max_y / spacing).ceil() as i64;
+
+        for ix in start_x..=end_x {
+            let x = origin_x + ix as f64 * spacing;
+            let is_coarse = coarse_n > 0 && (ix.unsigned_abs() % coarse_n as u64 == 0);
+            let (stroke, color) = if is_coarse {
+                (&coarse_stroke, DESIGN_GRID_COARSE)
+            } else {
+                (&fine_stroke, DESIGN_GRID_FINE)
+            };
+            let p0 = view * Point::new(x, min_y);
+            let p1 = view * Point::new(x, max_y);
+            self.scene
+                .stroke(stroke, Affine::IDENTITY, color, None, &Line::new(p0, p1));
+        }
+
+        for iy in start_y..=end_y {
+            let y = iy as f64 * spacing;
+            let is_coarse = coarse_n > 0 && (iy.unsigned_abs() % coarse_n as u64 == 0);
+            let (stroke, color) = if is_coarse {
+                (&coarse_stroke, DESIGN_GRID_COARSE)
+            } else {
+                (&fine_stroke, DESIGN_GRID_FINE)
+            };
+            let p0 = view * Point::new(min_x, y);
+            let p1 = view * Point::new(max_x, y);
+            self.scene
+                .stroke(stroke, Affine::IDENTITY, color, None, &Line::new(p0, p1));
+        }
+    }
+
     fn draw_marquee(&mut self, rect: kurbo::Rect) {
         // Marquee is already in screen space; draw with identity.
         self.scene
@@ -351,6 +859,128 @@ impl Renderer {
             None,
             &rect,
         );
+    }
+
+    fn draw_shape_preview(&mut self, preview: ShapePreview) {
+        let stroke = Stroke::new(TOOL_PREVIEW_LINE_PX);
+        let rect = match preview {
+            ShapePreview::Rectangle(rect) => {
+                self.scene
+                    .stroke(&stroke, Affine::IDENTITY, TOOL_PREVIEW, None, &rect);
+                rect
+            }
+            ShapePreview::Ellipse(rect) => {
+                let ellipse = Ellipse::from_rect(rect);
+                self.scene
+                    .stroke(&stroke, Affine::IDENTITY, TOOL_PREVIEW, None, &ellipse);
+                rect
+            }
+        };
+
+        for point in [rect.origin(), rect.origin() + rect.size().to_vec2()] {
+            let dot = Circle::new(point, TOOL_PREVIEW_DOT_RADIUS_PX);
+            self.scene
+                .fill(Fill::NonZero, Affine::IDENTITY, TOOL_PREVIEW, None, &dot);
+        }
+    }
+
+    fn draw_segment_hover(&mut self, preview: SegmentHoverPreview) {
+        let stroke = Stroke::new(SEGMENT_HOVER_LINE_PX);
+        let mut path = BezPath::new();
+        match preview {
+            SegmentHoverPreview::Line(line) => {
+                path.move_to(line.p0);
+                path.line_to(line.p1);
+            }
+            SegmentHoverPreview::Cubic(cubic) => {
+                path.move_to(cubic.p0);
+                path.curve_to(cubic.p1, cubic.p2, cubic.p3);
+            }
+            SegmentHoverPreview::Quadratic(quad) => {
+                path.move_to(quad.p0);
+                path.quad_to(quad.p1, quad.p2);
+            }
+        }
+        self.scene
+            .stroke(&stroke, Affine::IDENTITY, TOOL_PREVIEW, None, &path);
+    }
+
+    fn draw_pen_preview(&mut self, preview: PenPreview) {
+        let stroke = Stroke::new(TOOL_PREVIEW_LINE_PX);
+        if let Some(start) = preview.line_start {
+            let target = preview
+                .close_target
+                .or(preview.snap_target)
+                .unwrap_or(preview.cursor);
+            self.scene.stroke(
+                &stroke,
+                Affine::IDENTITY,
+                TOOL_PREVIEW,
+                None,
+                &Line::new(start, target),
+            );
+        }
+
+        let dot = Circle::new(preview.cursor, TOOL_PREVIEW_DOT_RADIUS_PX);
+        self.scene
+            .fill(Fill::NonZero, Affine::IDENTITY, TOOL_PREVIEW, None, &dot);
+
+        if let Some(close_target) = preview.close_target {
+            let close_zone = Circle::new(close_target, TOOL_PREVIEW_DOT_RADIUS_PX * 2.0);
+            self.scene
+                .stroke(&stroke, Affine::IDENTITY, TOOL_PREVIEW, None, &close_zone);
+        }
+        if let Some(snap_target) = preview.snap_target {
+            let snap_zone = Circle::new(snap_target, TOOL_PREVIEW_DOT_RADIUS_PX * 2.5);
+            self.scene
+                .stroke(&stroke, Affine::IDENTITY, TOOL_PREVIEW, None, &snap_zone);
+        }
+    }
+
+    fn draw_measure_preview(&mut self, preview: &MeasurePreview) {
+        let stroke = Stroke::new(TOOL_PREVIEW_LINE_PX);
+        self.scene
+            .stroke(&stroke, Affine::IDENTITY, TOOL_PREVIEW, None, &preview.line);
+
+        for point in [preview.line.p0, preview.line.p1] {
+            let dot = Circle::new(point, TOOL_PREVIEW_DOT_RADIUS_PX);
+            self.scene
+                .fill(Fill::NonZero, Affine::IDENTITY, TOOL_PREVIEW, None, &dot);
+        }
+        for point in &preview.intersections {
+            let dot = Circle::new(*point, TOOL_PREVIEW_DOT_RADIUS_PX * 1.4);
+            self.scene
+                .fill(Fill::NonZero, Affine::IDENTITY, TOOL_PREVIEW, None, &dot);
+        }
+    }
+
+    fn draw_knife_preview(&mut self, preview: &KnifePreview) {
+        let stroke = Stroke::new(TOOL_PREVIEW_LINE_PX);
+        self.scene
+            .stroke(&stroke, Affine::IDENTITY, TOOL_PREVIEW, None, &preview.line);
+        for point in &preview.intersections {
+            let size = TOOL_PREVIEW_DOT_RADIUS_PX * 1.8;
+            self.scene.stroke(
+                &stroke,
+                Affine::IDENTITY,
+                TOOL_PREVIEW,
+                None,
+                &Line::new(
+                    (point.x - size, point.y - size),
+                    (point.x + size, point.y + size),
+                ),
+            );
+            self.scene.stroke(
+                &stroke,
+                Affine::IDENTITY,
+                TOOL_PREVIEW,
+                None,
+                &Line::new(
+                    (point.x - size, point.y + size),
+                    (point.x + size, point.y - size),
+                ),
+            );
+        }
     }
 
     fn present(&mut self) -> Result<(), JsValue> {
@@ -413,3 +1043,22 @@ fn path_is_closed(path: &Path) -> bool {
     }
 }
 
+fn next_point_pos(points: &[PathPoint], index: usize, closed: bool) -> Point {
+    if index + 1 < points.len() {
+        points[index + 1].point
+    } else if closed && !points.is_empty() {
+        points[0].point
+    } else {
+        points[index].point + kurbo::Vec2::new(1.0, 0.0)
+    }
+}
+
+fn editable_outline_path(state: &EditorState) -> BezPath {
+    let mut combined = BezPath::new();
+    for path in &state.paths {
+        for el in path.to_bezpath().elements() {
+            combined.push(*el);
+        }
+    }
+    combined
+}

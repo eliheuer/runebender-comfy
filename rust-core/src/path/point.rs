@@ -77,9 +77,7 @@ impl PathPoint {
     }
 
     /// Convert from a workspace contour point for quadratic paths.
-    pub fn from_contour_point_quadratic(
-        pt: &workspace::ContourPoint,
-    ) -> Self {
+    pub fn from_contour_point_quadratic(pt: &workspace::ContourPoint) -> Self {
         let point = Point::new(pt.x, pt.y);
         let typ = match pt.point_type {
             WsPointType::OffCurve => PointType::OffCurve { auto: false },

@@ -8,6 +8,7 @@ pub mod editing;
 pub mod editor;
 pub mod model;
 pub mod path;
+pub mod text;
 pub mod tool;
 
 #[cfg(target_arch = "wasm32")]

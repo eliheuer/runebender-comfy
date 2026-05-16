@@ -16,10 +16,7 @@ pub fn glyph_to_bezpath(glyph: &Glyph) -> BezPath {
 
 /// Convert a `Glyph` to a `BezPath` including components. Recursively
 /// resolves component references and applies their transforms.
-pub fn glyph_to_bezpath_with_components(
-    glyph: &Glyph,
-    workspace: &Workspace,
-) -> BezPath {
+pub fn glyph_to_bezpath_with_components(glyph: &Glyph, workspace: &Workspace) -> BezPath {
     let mut path = BezPath::new();
 
     for contour in &glyph.contours {
@@ -199,9 +196,7 @@ fn handle_trailing_off_curve_points(path: &mut BezPath, rotated: &[&ContourPoint
     add_closing_curve(path, &trailing_off_curve, first_pt);
 }
 
-fn collect_trailing_off_curve_points<'a>(
-    rotated: &'a [&'a ContourPoint],
-) -> Vec<&'a ContourPoint> {
+fn collect_trailing_off_curve_points<'a>(rotated: &'a [&'a ContourPoint]) -> Vec<&'a ContourPoint> {
     let mut trailing_off_curve = Vec::new();
     let mut j = rotated.len().saturating_sub(1);
 

@@ -46,11 +46,7 @@ impl MouseEvent {
         }
     }
 
-    pub fn with_modifiers(
-        pos: Point,
-        button: Option<MouseButton>,
-        mods: Modifiers,
-    ) -> Self {
+    pub fn with_modifiers(pos: Point, button: Option<MouseButton>, mods: Modifiers) -> Self {
         Self { pos, button, mods }
     }
 }

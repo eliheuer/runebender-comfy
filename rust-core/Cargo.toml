@@ -17,6 +17,8 @@ runebender-core = { path = "../../runebender-core" }
 # Geometry (Linebender). Matches runebender-xilem's kurbo version so
 # types graft without translation.
 kurbo = "0.13"
+# Boolean ops depend on linesweeper, which is pinned to kurbo 0.12.
+kurbo_012 = { package = "kurbo", version = "0.12" }
 # spline solves on kurbo 0.9; we keep both versions side by side and
 # convert points at the boundary, exactly as runebender-xilem does.
 kurbo_09 = { package = "kurbo", version = "0.9.5" }
@@ -46,6 +48,7 @@ console_error_panic_hook = "0.1"
 # those rather than picking versions ourselves.
 vello = "0.8"
 peniko = "0.5"
+linesweeper = "0.2"
 
 # Enable WebGPU canvas surface support for wasm32 targets. Vello pulls
 # in wgpu but with default-features off and no `webgpu`, so the

@@ -7,6 +7,7 @@
 // because comfy uses kurbo 0.13 and runebender-core stays on no
 // kurbo at all — see runebender-core's README.
 
+pub mod compat;
 pub mod hit_test;
 pub mod mouse;
 pub mod viewport;

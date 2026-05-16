@@ -79,8 +79,7 @@ impl QuadraticPath {
             return Self::empty();
         }
 
-        let closed =
-            !matches!(contour.points[0].point_type, workspace::PointType::Move);
+        let closed = !matches!(contour.points[0].point_type, workspace::PointType::Move);
 
         let mut path_points: Vec<PathPoint> = contour
             .points
@@ -126,8 +125,7 @@ impl QuadraticPath {
                     }
                 };
 
-                let smooth =
-                    matches!(pt.typ, PointType::OnCurve { smooth: true });
+                let smooth = matches!(pt.typ, PointType::OnCurve { smooth: true });
                 ContourPoint {
                     x: pt.point.x,
                     y: pt.point.y,
@@ -141,15 +139,11 @@ impl QuadraticPath {
     }
 
     /// Iterate over the segments in this path.
-    pub fn iter_segments(
-        &self,
-    ) -> impl Iterator<Item = super::segment::SegmentInfo> + '_ {
+    pub fn iter_segments(&self) -> impl Iterator<Item = super::segment::SegmentInfo> + '_ {
         SegmentIterator::new(&self.points, self.closed)
     }
 
-    fn rotate_to_on_curve_start<'a>(
-        points: &'a [&PathPoint],
-    ) -> Vec<&'a PathPoint> {
+    fn rotate_to_on_curve_start<'a>(points: &'a [&PathPoint]) -> Vec<&'a PathPoint> {
         let start_idx = points.iter().position(|p| p.is_on_curve()).unwrap_or(0);
 
         points[start_idx..]
@@ -166,8 +160,7 @@ impl QuadraticPath {
 
             match pt.typ {
                 PointType::OnCurve { .. } => {
-                    let off_curve_before =
-                        Self::collect_preceding_off_curve_points(rotated, i);
+                    let off_curve_before = Self::collect_preceding_off_curve_points(rotated, i);
                     Self::add_segment_to_path(path, &off_curve_before, pt.point);
                     i += 1;
                 }
@@ -213,10 +206,7 @@ impl QuadraticPath {
         }
     }
 
-    fn handle_closed_path_trailing_points(
-        rotated: &[&PathPoint],
-        path: &mut BezPath,
-    ) {
+    fn handle_closed_path_trailing_points(rotated: &[&PathPoint], path: &mut BezPath) {
         let trailing_off_curve = Self::collect_trailing_off_curve_points(rotated);
 
         if !trailing_off_curve.is_empty() {
@@ -226,9 +216,7 @@ impl QuadraticPath {
     }
 
     /// For quadratic paths, expect at most one trailing off-curve point.
-    fn collect_trailing_off_curve_points<'a>(
-        rotated: &'a [&PathPoint],
-    ) -> Vec<&'a PathPoint> {
+    fn collect_trailing_off_curve_points<'a>(rotated: &'a [&PathPoint]) -> Vec<&'a PathPoint> {
         let len = rotated.len();
 
         if len > 1 && rotated[len - 1].is_off_curve() {
@@ -281,10 +269,7 @@ impl SegmentIterator {
     ) -> Option<super::segment::SegmentInfo> {
         let start_idx = self.prev_on_curve_idx;
         let end_idx = point_idx;
-        let segment = super::segment::Segment::Line(kurbo::Line::new(
-            self.prev_on_curve,
-            point,
-        ));
+        let segment = super::segment::Segment::Line(kurbo::Line::new(self.prev_on_curve, point));
 
         self.prev_on_curve = point;
         self.prev_on_curve_idx = point_idx;
@@ -312,11 +297,8 @@ impl SegmentIterator {
 
         let start_idx = self.prev_on_curve_idx;
         let end_idx = point_idx + 1;
-        let segment = super::segment::Segment::Quadratic(kurbo::QuadBez::new(
-            self.prev_on_curve,
-            cp,
-            end,
-        ));
+        let segment =
+            super::segment::Segment::Quadratic(kurbo::QuadBez::new(self.prev_on_curve, cp, end));
 
         self.prev_on_curve = end;
         self.prev_on_curve_idx = point_idx + 1;
@@ -342,24 +324,18 @@ impl Iterator for SegmentIterator {
 
             if is_on_curve {
                 return self.next_line_segment_at(point_idx, point);
-            } else if let Some(seg) =
-                self.next_quadratic_segment_at(point_idx, point)
-            {
+            } else if let Some(seg) = self.next_quadratic_segment_at(point_idx, point) {
                 return Some(seg);
             } else {
                 self.index = self.points.len();
             }
         }
 
-        if self.closed
-            && !self.close_emitted
-            && self.prev_on_curve_idx != self.first_on_curve_idx
-        {
+        if self.closed && !self.close_emitted && self.prev_on_curve_idx != self.first_on_curve_idx {
             self.close_emitted = true;
             let first = &self.points[self.first_on_curve_idx];
 
-            let trailing_off = (self.prev_on_curve_idx + 1
-                ..self.points.len())
+            let trailing_off = (self.prev_on_curve_idx + 1..self.points.len())
                 .find(|&i| self.points[i].is_off_curve());
 
             if let Some(off_idx) = trailing_off {
@@ -377,10 +353,8 @@ impl Iterator for SegmentIterator {
                 });
             }
 
-            let segment = super::segment::Segment::Line(kurbo::Line::new(
-                self.prev_on_curve,
-                first.point,
-            ));
+            let segment =
+                super::segment::Segment::Line(kurbo::Line::new(self.prev_on_curve, first.point));
             return Some(super::segment::SegmentInfo {
                 segment,
                 start_index: self.prev_on_curve_idx,
