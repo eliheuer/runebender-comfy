@@ -2,21 +2,36 @@
 
 ComfyUI custom nodes that bring Rust-powered type-design tools into the
 graph: a full-screen glyph editor ported from
-[`runebender-xilem`](https://github.com/eliheuer/runebender-xilem), and a
-DrawBot-style scripting node backed by
-[`designbot`](https://github.com/eliheuer/designbot).
+[`runebender-xilem`](https://github.com/eliheuer/runebender-xilem), a
+workspace-backed `FONT` wire, and a specimen renderer that consumes that
+wire.
 
 ## Status
 
-Scaffolding — node skeletons in place, Rust/WASM core and Vue widget
-wired up but not yet implemented.
+Workspace-backed `FONT` wires and the editor widget are wired up. The
+full type-design toolchain is still in progress.
 
 ## Nodes
 
 - **Runebender** — full-screen glyph editor widget (Vello + Kurbo via
-  WASM, Vue host). Outputs UFO/SVG/contour data.
+  WASM, Vue host). Passes a `FONT` workspace reference through the
+  graph.
+- **Load Font** — creates a `FONT` workspace from a source font path.
+  UFO/designspace is auto-detected by default; Glyphs and glyphspackage
+  are supported as alternate import/source kinds. The node also has an
+  import button for selecting a local UFO/designspace bundle from disk.
+  When `glyphsLib` is installed, the import path normalizes Glyphs into
+  UFO/designspace inside the workspace.
+- **Compile Font** — materializes a compiled artifact for a workspace
+  when a backend exists. The workspace auto-materializes a
+  `glyphspackage` source package and then runs the Google Fonts
+  oriented `fontc` compiler against it. The compiled artifact is
+  recorded in the workspace manifest.
+- **Font Preview** — renders a simple specimen from a `FONT`
+  reference.
+- **Fork Font** — duplicates a `FONT` workspace for parallel work.
 - **DesignBot** — Rust DrawBot/Processing-style 2D graphics node.
-  Outputs `IMAGE`.
+  Invokes the optional `designbot` CLI and outputs `IMAGE`.
 
 ## Architecture
 
@@ -40,23 +55,83 @@ The Rust core deliberately skips Xilem — for an embedded canvas inside
 an existing JS host (ComfyUI's Vue frontend), Vello + Kurbo via
 `wasm-bindgen` is the right layer.
 
-## Install (dev)
+## Install And Use
 
-1. Clone into ComfyUI's `custom_nodes/`:
+### Comfy Cloud
+
+Comfy Cloud runs ComfyUI in the browser with no local install. The
+service ships with preinstalled nodes and models, and it follows the
+same workflow structure as local ComfyUI.
+
+1. Open Comfy Cloud from the official site and load a workflow.
+2. If your cloud workspace exposes custom-node installation, add this
+   repository there the same way you would install any other custom
+   node: clone it into `ComfyUI/custom_nodes/` inside the cloud
+   environment, then install the Python dependencies in that same
+   environment.
+3. Restart the cloud workspace after installation.
+4. Load the `Load Font` node, point it at a font source path available
+   to that workspace, then connect it to `Runebender`, `Compile Font`,
+   and `Font Preview`.
+5. Use `Fork Font` when you want to branch a workspace without
+   overwriting the original.
+
+If your Comfy Cloud workspace does not expose a way to add custom
+nodes, use the local install path below.
+
+### Local ComfyUI
+
+1. Clone or symlink this repository into ComfyUI's `custom_nodes/`
+   directory:
    ```bash
    ln -s ~/GH/repos/runebender-comfy \
          ~/Work/comfy/repos/ComfyUI/custom_nodes/runebender-comfy
    ```
-
-2. Install web deps and build the WASM core + the Vue widget:
+2. Install the web deps and build the WASM core plus the Vue widget:
    ```bash
    cd web
    pnpm install
    pnpm wasm          # cargo + wasm-pack build into ./wasm/
    pnpm build         # vite build into ./dist/ (consumed by ComfyUI)
    ```
+3. Run the setup smoke tests from the repo root:
+   ```bash
+   python3 -m unittest tests.test_workspace tests.test_web_bundle
+   ```
+4. Restart ComfyUI.
+5. Open the Runebender node in the ComfyUI graph and use the starter
+   workflow below as the simplest path into font work.
 
-3. Restart ComfyUI.
+For a first smoke test, use the checked-in demo source at
+`samples/demo-font/Demo.designspace`.
+
+The nodes are grouped under the `Runebender` section in the ComfyUI
+add-node menu:
+
+- `Runebender / Editor`
+- `Runebender / Font`
+- `Runebender / Graphics`
+
+For a concrete starter graph, see
+[docs/workflows/local-font-workflow.md](docs/workflows/local-font-workflow.md).
+
+To use the Google Fonts compile path, install `fontc` and put it on
+`PATH`. The workspace will materialize a `glyphspackage` source package
+automatically from the workspace's editable source when needed.
+
+To import Glyphs files into the default UFO/designspace workspace
+shape, install `glyphsLib` in the ComfyUI Python environment.
+
+The `Load Font` node includes an import button that copies a local
+UFO/designspace bundle into the workspace and binds the resulting
+workspace reference into the graph.
+
+To render DesignBot scripts, install the Rust CLI and keep it on
+`PATH`, or set `DESIGNBOT_BIN` to the executable path:
+
+```bash
+cargo install --git https://github.com/eliheuer/designbot designbot-cli
+```
 
 ## Dev preview (without ComfyUI)
 

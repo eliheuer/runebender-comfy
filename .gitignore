@@ -30,6 +30,9 @@ Cargo.lock.user
 # will auto-load the first one on mount.
 /web/assets/test-fonts/
 
+# Runtime font workspace slots.
+/workspace/
+
 # OS / editors
 .DS_Store
 .idea/

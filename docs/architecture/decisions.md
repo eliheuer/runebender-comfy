@@ -85,7 +85,10 @@ colors; do not tweak them casually.
 
 ## Save and Round Trip
 
-Current state is in-memory. Save is not wired.
+Current state is in-memory first. The Comfy host now supports saving
+or exporting the active glyph as a `.glif`, and when the browser
+exposes a writable file handle it writes back in place. Export fallback
+still covers hosts without writable handles.
 
 The intended direction is that edits mutate an owned glyph/session
 model in Rust, then serialize back to UFO `.glif`/metadata formats
@@ -99,6 +102,77 @@ When implementing save, preserve UFO semantics explicitly:
 - mark colors use `public.markColor`
 - kerning groups come from `groups.plist`
 - designspace masters remain distinct workspaces
+
+## ComfyUI State Bridge
+
+The ComfyUI graph should carry a `FONT` wire, not raw glyph bytes or
+preview SVG. The `FONT` value is a workspace reference that downstream
+nodes can reuse for editing, rendering, forking, and AI transforms.
+
+The Runebender node still keeps a live preview snapshot in the Python
+host, keyed by node id, but that is side-channel state only. The
+workflow output is the `FONT` reference, not the preview.
+
+That bridge is intentionally narrow:
+
+- Vue remains responsible for editing UX and local glyph rendering.
+- Python remains responsible for Comfy graph inputs, outputs, and
+  queued execution.
+- the exchange format stays simple for now: workspace path + preview
+  state, with the preview kept separate from graph data.
+
+If the workflow contract grows beyond a workspace path, add a new
+serialized payload shape deliberately rather than letting ad hoc
+fields accrete in the bridge.
+
+## `FONT` Workspace References
+
+The graph-level `FONT` type is a workspace reference, not raw glyph
+data. A workspace owns the font source side and, when available, a
+compiled renderable side. Nodes should pass the reference around
+unchanged and resolve it only when they need a concrete file path.
+
+A minimal local workflow is `Load Font -> Runebender -> Compile Font
+-> Font Preview`, with `Fork Font` as the branching primitive. The
+checked-in starter notes live in
+`docs/workflows/local-font-workflow.md`.
+
+Source format policy:
+
+- UFO/designspace is the default editable source.
+- Glyphs is supported as an alternate source/import format.
+- Glyphs imports should normalize into UFO/designspace in the
+  workspace when the optional `glyphsLib` dependency is available.
+- glyphspackage is the compile-oriented Google Fonts interchange
+  format; the workspace can materialize one from the editable source
+  before invoking `fontc`.
+- the workspace exporter writes a package `sources/` tree plus
+  `sources/config.yaml` so the compile seam stays isolated from the
+  graph.
+- the `Load Font` node exposes this choice explicitly so the default
+  stays on the UFO/designspace path.
+- downstream nodes should not assume a specific source extension; they
+  should only rely on the `FONT` reference and ask the workspace for
+  concrete paths when needed.
+
+Current workspace shape:
+
+- `Load Font` node creates or imports a workspace from a source path.
+- `CompileFont` materializes a compiled artifact when the backend is
+  available, auto-building a `glyphspackage` source package in the
+  workspace first when needed.
+- `ForkFont` clones a workspace for parallel exploration.
+- `Runebender` edits the workspace's source state.
+- the Vue editor can hydrate a workspace by fetching its text files from
+  the ComfyUI server.
+- the Vue editor can write edited `.glif` text back into the workspace
+  through the ComfyUI server.
+- preview/render nodes resolve the workspace to a compiled font if one
+  exists.
+
+Keep this contract opaque to downstream nodes. The workspace reference
+is the stable wire value; the filesystem layout remains an
+implementation detail.
 
 ## Multi-Agent Context
 
