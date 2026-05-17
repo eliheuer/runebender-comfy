@@ -4,13 +4,12 @@
 //   Master           — current master name
 //   Glyph Name       — UFO glyph identifier
 //   Width            — advance width in design units
-//   Kerning Groups   — Left / Right (stubbed "(empty)" until
-//                      groups.plist plumbing lands)
+//   Kerning Groups   — Left / Right from groups.plist
 //   Unicode          — first codepoint as 4-digit hex
 //   Contours         — number of contours in the active glyph
 //
-// Label rows are green; values are gray. Empty / unset values are
-// shown as a dim "(empty)" or em-dash.
+// Label rows are green; values are gray. Empty kerning groups show
+// "(empty)" and empty glyph fields show "No Selection", matching xilem.
 
 defineProps<{
   master: string;
@@ -21,22 +20,26 @@ defineProps<{
   /** Design units. -1 means "no glyph open" (sidebar shows em-dash). */
   width?: number;
   contours?: number;
-  /** Kerning group names. Stubbed until groups.plist parsing arrives. */
+  /** Full UFO kerning group names, e.g. "public.kern1.O". */
   leftGroup?: string;
   rightGroup?: string;
 }>();
+
+function displayGroup(group: string | undefined, prefix: string): string {
+  return group ? group.replace(prefix, "") : "(empty)";
+}
 </script>
 
 <template>
   <aside class="info-sidebar">
     <div class="row">
       <div class="label">Master</div>
-      <div class="value">{{ master || "—" }}</div>
+      <div class="value">{{ master || "(single UFO)" }}</div>
     </div>
 
     <div class="row">
       <div class="label">Glyph Name</div>
-      <div class="value">{{ name || "—" }}</div>
+      <div class="value">{{ name || "No Selection" }}</div>
     </div>
 
     <div class="row">
@@ -51,18 +54,22 @@ defineProps<{
       <div class="kerning">
         <div class="kerning-row">
           <span class="kerning-side">Left</span>
-          <span class="kerning-val">{{ leftGroup || "(empty)" }}</span>
+          <span class="kerning-val">
+            {{ displayGroup(leftGroup, "public.kern1.") }}
+          </span>
         </div>
         <div class="kerning-row">
           <span class="kerning-side">Right</span>
-          <span class="kerning-val">{{ rightGroup || "(empty)" }}</span>
+          <span class="kerning-val">
+            {{ displayGroup(rightGroup, "public.kern2.") }}
+          </span>
         </div>
       </div>
     </div>
 
     <div class="row">
       <div class="label">Unicode</div>
-      <div class="value mono">{{ unicode || "—" }}</div>
+      <div class="value mono">{{ unicode || "No Selection" }}</div>
     </div>
 
     <div class="row">
@@ -83,14 +90,14 @@ defineProps<{
  *   SECONDARY_UI_TEXT / BASE_G     #707070
  *   GRID_CELL_SELECTED_OUTLINE     #66EE88 (used for labels)
  *
- * Width matches xilem's GLYPH_INFO_PANEL_WIDTH (240px).
+ * Width matches xilem's GLYPH_INFO_PANEL_WIDTH (220px).
  */
 
 .info-sidebar {
-  width: 240px;
+  width: 220px;
   flex-shrink: 0;
-  background: #1c1c1c;
-  border: 1.5px solid #606060;
+  background: var(--rb-panel-background, #1c1c1c);
+  border: 1.5px solid var(--rb-panel-outline, #606060);
   border-radius: 6px;
   padding: 12px;
   display: flex;
@@ -112,20 +119,18 @@ defineProps<{
 }
 
 .label {
-  color: #66ee88;
-  font: 12px ui-sans-serif, system-ui, sans-serif;
-  font-weight: 500;
+  color: var(--rb-accent, #66ee88);
+  font: 16px ui-sans-serif, system-ui, sans-serif;
 }
 .value {
-  color: #909090;
-  font: 13px ui-sans-serif, system-ui, sans-serif;
+  color: var(--rb-primary-text, #909090);
+  font: 16px ui-sans-serif, system-ui, sans-serif;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .value.mono {
-  font-family: ui-monospace, monospace;
-  font-size: 12px;
+  font: 16px ui-sans-serif, system-ui, sans-serif;
 }
 
 .kerning-row {
@@ -134,12 +139,11 @@ defineProps<{
   gap: 12px;
 }
 .kerning-side {
-  color: #707070;
-  font: 12px ui-sans-serif, system-ui, sans-serif;
+  color: var(--rb-secondary-text, #707070);
+  font: 16px ui-sans-serif, system-ui, sans-serif;
 }
 .kerning-val {
-  color: #909090;
-  font: 12px ui-sans-serif, system-ui, sans-serif;
-  font-style: italic;
+  color: var(--rb-primary-text, #909090);
+  font: 16px ui-sans-serif, system-ui, sans-serif;
 }
 </style>

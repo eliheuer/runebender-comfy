@@ -11,6 +11,7 @@
 //   GRID_CELL_TEXT / BASE_H       #808080
 
 import { computed } from "vue";
+import { rgbaToCss } from "./markColors";
 
 const props = defineProps<{
   name: string;
@@ -20,25 +21,26 @@ const props = defineProps<{
   svg?: string;
   /** Highlights this cell as the currently-selected glyph. */
   selected?: boolean;
-  /** UFO `public.markColor` "r,g,b,a" with 0–1 floats. When set,
-   *  the cell background tints to this color. Selection outline
-   *  overlays on top so the mark stays visible. */
+  /** Number of xilem grid columns this cell should span. */
+  columnSpan?: number;
+  /** UFO `public.markColor` "r,g,b,a" with 0–1 floats. */
   markColor?: string;
 }>();
 
 defineEmits<{
-  (e: "click"): void;
+  (e: "click", event: MouseEvent): void;
   (e: "dblclick"): void;
 }>();
 
 const cellStyle = computed(() => {
-  if (!props.markColor) return undefined;
+  const style: Record<string, string> = {
+    gridColumn: `span ${Math.max(1, props.columnSpan ?? 1)}`,
+  };
+  if (!props.markColor) return style;
   const parts = props.markColor.split(",").map(Number);
-  if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) return undefined;
-  const [r, g, b] = parts;
-  // Tint at ~35% — enough to see the color without drowning the glyph.
-  const rgba = `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, 0.35)`;
-  return { background: rgba };
+  if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) return style;
+  style["--mark-color"] = rgbaToCss(props.markColor);
+  return style;
 });
 </script>
 
@@ -46,10 +48,10 @@ const cellStyle = computed(() => {
   <button
     type="button"
     class="cell"
-    :class="{ selected }"
+    :class="{ selected, marked: !!markColor }"
     :style="cellStyle"
     :title="name"
-    @click="$emit('click')"
+    @click="$emit('click', $event)"
     @dblclick="$emit('dblclick')"
   >
     <div class="cell-glyph" v-html="svg ?? ''" />
@@ -69,10 +71,10 @@ const cellStyle = computed(() => {
 
   display: flex;
   flex-direction: column;
-  height: 170px;
-  background: #1c1c1c;
-  border: 1px solid #606060;
-  border-radius: 4px;
+  height: 100%;
+  background: var(--rb-panel-background, #1c1c1c);
+  border: 1.5px solid var(--rb-panel-outline, #606060);
+  border-radius: 6px;
   cursor: pointer;
   overflow: hidden;
   transition:
@@ -80,11 +82,13 @@ const cellStyle = computed(() => {
     border-color 0.08s;
 }
 .cell:hover {
-  border-color: #66ee88;
+  border-color: var(--rb-accent, #66ee88);
+}
+.cell.marked:not(.selected):not(:hover) {
+  border-color: var(--mark-color);
 }
 .cell.selected {
-  border-color: #66ee88;
-  /* Mark color (from inline style) stays visible underneath. */
+  border-color: var(--rb-accent, #66ee88);
 }
 
 .cell-glyph {
@@ -92,9 +96,12 @@ const cellStyle = computed(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #a0a0a0;
-  padding: 12px;
+  color: var(--rb-glyph-preview, #a0a0a0);
+  padding: 8px;
   min-height: 0;
+}
+.cell.marked:not(.selected):not(:hover) .cell-glyph {
+  color: var(--mark-color);
 }
 .cell-glyph :deep(svg) {
   max-width: 100%;
@@ -103,29 +110,38 @@ const cellStyle = computed(() => {
 }
 
 .cell-labels {
-  padding: 4px 6px 6px;
+  min-height: 56px;
+  box-sizing: border-box;
+  padding: 5px 8px 8px;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  justify-content: flex-end;
+  gap: 2px;
 }
 .cell-name {
-  font: 11px ui-sans-serif, system-ui, sans-serif;
-  color: #909090;
+  font: 16px ui-sans-serif, system-ui, sans-serif;
+  color: var(--rb-muted-text, #808080);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.cell.selected .cell-name {
-  color: #66ee88;
+.cell.selected .cell-name,
+.cell:hover .cell-name {
+  color: var(--rb-accent, #66ee88);
 }
 .cell-unicode {
-  font: 10px ui-monospace, monospace;
-  color: #707070;
+  font: 16px ui-sans-serif, system-ui, sans-serif;
+  color: var(--rb-muted-text, #808080);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.cell.selected .cell-unicode {
-  color: #66ee88;
+.cell.marked:not(.selected):not(:hover) .cell-name,
+.cell.marked:not(.selected):not(:hover) .cell-unicode {
+  color: var(--mark-color);
+}
+.cell.selected .cell-unicode,
+.cell:hover .cell-unicode {
+  color: var(--rb-accent, #66ee88);
 }
 </style>

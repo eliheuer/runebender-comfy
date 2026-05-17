@@ -9,6 +9,9 @@ import vue from "@vitejs/plugin-vue";
 // `/scripts/app.js` is provided by ComfyUI's host page; mark external.
 export default defineConfig({
   plugins: [vue()],
+  define: {
+    "process.env.NODE_ENV": JSON.stringify("production"),
+  },
   build: {
     outDir: "dist",
     emptyOutDir: true,

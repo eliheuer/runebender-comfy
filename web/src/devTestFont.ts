@@ -2,9 +2,10 @@
 // `web/assets/test-fonts/<MyFont>.ufo/` so reloading the page
 // doesn't mean re-dragging the font in every time.
 //
-// Imported only behind `if (import.meta.env.DEV)` in Runebender.vue
-// so prod builds tree-shake the whole module — neither the JS nor
-// the bundled .glif/.plist URLs end up in the production bundle.
+// Imported behind the dev-mode auto-load path, and by standalone
+// website builds that explicitly opt in with
+// VITE_RUNEBENDER_LOAD_TEST_FONT=1. ComfyUI extension builds keep the
+// module out of the production bundle.
 
 const FILES = import.meta.glob(
   "../assets/test-fonts/**/*.{glif,plist,designspace}",

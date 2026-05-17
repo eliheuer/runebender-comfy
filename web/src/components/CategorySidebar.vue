@@ -4,8 +4,7 @@
 // labels, same default selection ("All").
 //
 // The list is presented as plain left-aligned rows; the active row
-// gets a tinted highlight (#146414 fill, #66EE88 outline), matching
-// xilem's selected-row rect.
+// gets a green outline highlight, matching xilem's selected-row rect.
 
 export type Category =
   | "All"
@@ -52,9 +51,6 @@ defineEmits<{
           @click="$emit('select', cat)"
         >
           <span class="row-name">{{ cat }}</span>
-          <span v-if="counts" class="row-count">
-            {{ counts[cat] ?? 0 }}
-          </span>
         </button>
       </li>
     </ul>
@@ -68,7 +64,6 @@ defineEmits<{
  *   PANEL_OUTLINE / BASE_F         #606060
  *   PRIMARY_UI_TEXT / BASE_I       #909090
  *   SECONDARY_UI_TEXT / BASE_G     #707070
- *   GRID_CELL_SELECTED_BACKGROUND  #146414
  *   GRID_CELL_SELECTED_OUTLINE     #66EE88
  *   CATEGORY_PANEL_WIDTH           220 px
  *   ROW_HEIGHT                     24 px
@@ -78,20 +73,20 @@ defineEmits<{
 .category-sidebar {
   width: 220px;
   flex-shrink: 0;
-  background: #1c1c1c;
-  border: 1.5px solid #606060;
+  background: var(--rb-panel-background, #1c1c1c);
+  border: 1.5px solid var(--rb-panel-outline, #606060);
   border-radius: 6px;
-  padding: 6px 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
 .header {
-  padding: 4px 12px 6px;
-  color: #66ee88; /* matches xilem's green section heading */
-  font: 12px ui-sans-serif, system-ui, sans-serif;
-  font-weight: 500;
+  padding: 10px 12px 6px;
+  color: var(--rb-muted-text, #808080);
+  font: 16px ui-sans-serif, system-ui, sans-serif;
+  font-weight: 400;
 }
 
 .list {
@@ -108,32 +103,22 @@ defineEmits<{
   font: inherit;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  width: 100%;
+  justify-content: flex-start;
+  width: calc(100% - 8px);
   height: 24px;
   padding: 0 12px;
-  margin: 0;
+  margin: 0 4px;
   background: transparent;
-  border: 1px solid transparent;
+  border: 1.5px solid transparent;
   border-radius: 4px;
-  color: #909090;
+  color: var(--rb-primary-text, #909090);
   cursor: pointer;
-  font: 13px ui-sans-serif, system-ui, sans-serif;
+  font: 16px ui-sans-serif, system-ui, sans-serif;
   text-align: left;
 }
-.row:hover {
-  color: #66ee88;
-}
 .row.active {
-  background: #146414;
-  border-color: #66ee88;
-  color: #66ee88;
-}
-.row-count {
-  color: #707070;
-  font: 11px ui-monospace, monospace;
-}
-.row.active .row-count {
-  color: #66ee88;
+  background: transparent;
+  border-color: var(--rb-accent, #66ee88);
+  color: var(--rb-accent, #66ee88);
 }
 </style>

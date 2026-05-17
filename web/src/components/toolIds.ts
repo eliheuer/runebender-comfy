@@ -16,20 +16,20 @@ export const TOOL_IDS: ToolId[] = [
   "Select",
   "Pen",
   "HyperPen",
-  "Preview",
   "Knife",
   "Measure",
   "Shapes",
+  "Preview",
   "Text",
 ];
 
 export const TOOL_LABELS: Record<ToolId, string> = {
   Select: "Select (V)",
   Pen: "Pen (P)",
-  HyperPen: "Hyper Pen",
-  Preview: "Preview",
-  Knife: "Knife",
+  HyperPen: "Hyper Pen (H)",
+  Preview: "Preview (Space)",
+  Knife: "Knife (K)",
   Measure: "Measure",
   Shapes: "Shapes",
-  Text: "Text",
+  Text: "Text (T)",
 };

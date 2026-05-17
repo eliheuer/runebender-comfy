@@ -1,9 +1,11 @@
 <script setup lang="ts">
 // Empty-state panel shown when no font is loaded. Mirrors
-// runebender-xilem's `views/welcome.rs` — a centered prompt with the
-// drop affordance. In dev the auto-loader usually means you never
-// see this, but it's the first impression for new users and for any
-// future production deploy.
+// runebender-xilem's `views/welcome.rs`: compact upper-left welcome
+// UI layered over an interactive demo glyph canvas.
+
+defineEmits<{
+  (e: "openUfo"): void;
+}>();
 </script>
 
 <template>
@@ -11,59 +13,64 @@
     <div class="title">Runebender</div>
     <div class="subtitle">A font editor</div>
     <div class="prompt">
-      Drop a <code>.ufo</code> folder or <code>.designspace</code> file
-      anywhere in this window to begin.
+      Drop a <code>.ufo</code> folder or <code>.designspace</code> file.
     </div>
-    <div class="note">
-      On macOS, if a font tool is installed the picker may treat
-      <code>.ufo</code> as a single file you can't enter — drag-and-drop
-      from Finder bypasses that.
-    </div>
+    <button type="button" @click="$emit('openUfo')">Open UFO...</button>
   </div>
 </template>
 
 <style scoped>
 .welcome {
   position: absolute;
-  inset: 0;
+  left: 16px;
+  top: 16px;
+  width: 220px;
+  height: 200px;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  pointer-events: none;
-  text-align: center;
-  padding: 32px;
-  color: #707070;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 8px;
+  text-align: left;
+  color: var(--rb-secondary-text, #707070);
 }
 
 .title {
-  font: 28px ui-sans-serif, system-ui, sans-serif;
-  color: #909090;
-  letter-spacing: 0.02em;
+  font: 48px ui-sans-serif, system-ui, sans-serif;
+  color: var(--rb-primary-text, #909090);
+  line-height: 1;
 }
 .subtitle {
   font: 13px ui-sans-serif, system-ui, sans-serif;
-  color: #606060;
-  margin-bottom: 14px;
+  color: var(--rb-panel-outline, #606060);
 }
 .prompt {
   font: 14px ui-sans-serif, system-ui, sans-serif;
-  color: #909090;
-  max-width: 520px;
-  line-height: 1.55;
+  color: var(--rb-primary-text, #909090);
+  line-height: 1.4;
 }
-.note {
-  margin-top: 14px;
-  font: 12px ui-sans-serif, system-ui, sans-serif;
-  color: #606060;
-  max-width: 520px;
-  line-height: 1.55;
+
+button {
+  width: 200px;
+  height: 32px;
+  margin-top: 8px;
+  color: var(--rb-primary-text, #909090);
+  background: var(--rb-panel-background, #1c1c1c);
+  border: 1.5px solid var(--rb-panel-outline, #606060);
+  border-radius: 6px;
+  font: 14px ui-sans-serif, system-ui, sans-serif;
+  text-align: center;
+  cursor: pointer;
+}
+button:hover {
+  color: var(--rb-accent, #66ee88);
+  border-color: var(--rb-accent, #66ee88);
 }
 code {
   font: 12px ui-monospace, monospace;
-  color: #66ee88;
-  background: rgba(28, 28, 28, 0.7);
+  color: var(--rb-accent, #66ee88);
+  background: color-mix(in srgb, var(--rb-panel-background, #1c1c1c) 70%, transparent);
   padding: 1px 5px;
   border-radius: 3px;
 }

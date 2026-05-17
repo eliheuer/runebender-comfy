@@ -2,26 +2,37 @@
 // Top file-info bar. Mirrors runebender-xilem's
 //   views/glyph_grid/mod.rs `file_info_panel`
 // + components/master_toolbar.rs
-// + components/system_toolbar.rs (Save button)
+// + components/system_toolbar.rs
 //
-// Layout: font label + "Not saved" stretches left; master switcher
-// in the middle-right; system buttons (currently just Save) on the
-// far right. All three are individual panel tiles, separated by
+// Layout: font label + save status stretches left; master switcher
+// in the middle-right; system buttons on the far right. All three
+// are individual panel tiles, separated by
 // BENTO_GAP (6px), matching xilem's bento layout.
+
+import SystemToolbar from "./SystemToolbar.vue";
 
 defineProps<{
   /** Display label for the open font (UFO folder name, designspace
    *  path, or empty string when nothing's loaded). */
   fontLabel: string;
-  /** Set to true once we wire dirty-tracking; for now always true
-   *  if a font is loaded so the indicator is visible. */
+  /** True when an in-memory edit has not been serialized back. */
   unsaved?: boolean;
+  /** Last successful save time, e.g. "03:42 PM". */
+  lastSaved?: string | null;
   /** Names of available masters. Stubbed to a single entry until
    *  designspace loading lands (Phase 7). */
   masters?: string[];
   /** Index of the active master. */
   activeMaster?: number;
+  /** Rendered preview glyphs for each master, usually lowercase n. */
+  masterPreviews?: Array<string | undefined>;
+  /** False when there is no loaded font/workspace to persist. */
+  saveEnabled?: boolean;
 }>();
+
+function masterLabel(name: string): string {
+  return name.trim().slice(0, 1).toLowerCase() || "?";
+}
 
 defineEmits<{
   (e: "selectMaster", index: number): void;
@@ -36,11 +47,17 @@ defineEmits<{
       <div class="file-path">
         {{ fontLabel || "No font loaded" }}
       </div>
-      <div v-if="unsaved && fontLabel" class="not-saved">Not saved</div>
+      <div
+        v-if="fontLabel"
+        class="save-status"
+        :class="{ saved: !unsaved && lastSaved }"
+      >
+        {{ !unsaved && lastSaved ? `Saved ${lastSaved}` : "Not saved" }}
+      </div>
     </div>
 
     <!-- Master switcher -->
-    <div v-if="masters && masters.length" class="panel masters">
+    <div v-if="masters && masters.length > 1" class="panel masters">
       <button
         v-for="(name, i) in masters"
         :key="name"
@@ -50,21 +67,20 @@ defineEmits<{
         :title="name"
         @click="$emit('selectMaster', i)"
       >
-        {{ name.slice(0, 1).toLowerCase() }}
+        <span
+          v-if="masterPreviews?.[i]"
+          class="master-preview"
+          aria-hidden="true"
+          v-html="masterPreviews[i]"
+        />
+        <span v-else>{{ masterLabel(name) }}</span>
       </button>
     </div>
 
-    <!-- System toolbar: Save (stub) -->
-    <div class="panel system">
-      <button
-        type="button"
-        class="sys-btn"
-        title="Save (not yet wired)"
-        @click="$emit('save')"
-      >
-        Save
-      </button>
-    </div>
+    <SystemToolbar
+      :save-enabled="saveEnabled"
+      @save="$emit('save')"
+    />
   </div>
 </template>
 
@@ -87,13 +103,13 @@ defineEmits<{
 .top-bar {
   display: flex;
   gap: 6px;
-  height: 48px; /* matches TOOLBAR_ITEM_SIZE */
+  height: 64px; /* 48px toolbar item + 8px panel padding on each side */
   flex-shrink: 0;
 }
 
 .panel {
-  background: #1c1c1c;
-  border: 1.5px solid #606060;
+  background: var(--rb-panel-background, #1c1c1c);
+  border: 1.5px solid var(--rb-panel-outline, #606060);
   border-radius: 6px;
   display: flex;
   align-items: center;
@@ -101,23 +117,29 @@ defineEmits<{
 
 .file-info {
   flex: 1;
-  padding: 0 12px;
-  gap: 12px;
+  padding: 6px 12px;
+  gap: 2px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
   min-width: 0;
 }
 .file-path {
-  color: #909090;
-  font: 12px ui-monospace, monospace;
+  color: var(--rb-muted-text, #808080);
+  font: 16px ui-sans-serif, system-ui, sans-serif;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex: 1;
+  width: 100%;
   min-width: 0;
 }
-.not-saved {
-  color: #ffdd33; /* MARK_YELLOW */
-  font: 11px ui-sans-serif, system-ui, sans-serif;
+.save-status {
+  color: var(--rb-warning, #ffdd33);
+  font: 16px ui-sans-serif, system-ui, sans-serif;
   flex-shrink: 0;
+}
+.save-status.saved {
+  color: var(--rb-accent, #66ee88);
 }
 
 .masters {
@@ -127,12 +149,12 @@ defineEmits<{
 .master-btn {
   appearance: none;
   font: inherit;
-  background: #1c1c1c;
-  color: #606060;
-  border: 1.5px solid #606060;
+  background: var(--rb-panel-background, #1c1c1c);
+  color: var(--rb-panel-outline, #606060);
+  border: 1.5px solid var(--rb-panel-outline, #606060);
   border-radius: 6px;
-  width: 32px;
-  height: 32px;
+  width: 48px;
+  height: 48px;
   cursor: pointer;
   font: 14px ui-sans-serif, system-ui, sans-serif;
   display: flex;
@@ -140,30 +162,25 @@ defineEmits<{
   justify-content: center;
 }
 .master-btn:hover {
-  color: #66ee88;
+  color: var(--rb-accent, #66ee88);
 }
 .master-btn.active {
-  color: #66ee88;
-  border-color: #66ee88;
+  color: var(--rb-accent, #66ee88);
+  border-color: var(--rb-accent, #66ee88);
 }
 
-.system {
-  padding: 6px;
-  gap: 6px;
-}
-.sys-btn {
-  appearance: none;
-  font: inherit;
-  background: #1c1c1c;
-  color: #606060;
-  border: 1.5px solid #606060;
-  border-radius: 6px;
-  padding: 0 12px;
+.master-preview {
+  width: 32px;
   height: 32px;
-  cursor: pointer;
-  font: 11px ui-sans-serif, system-ui, sans-serif;
+  color: currentColor;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-.sys-btn:hover {
-  color: #66ee88;
+.master-preview :deep(svg) {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
+
 </style>

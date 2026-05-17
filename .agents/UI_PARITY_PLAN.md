@@ -1692,8 +1692,12 @@ First useful slice:
   `WEB_DIRECTORY` points to `web/dist` and the built
   `runebender-comfy.js` preserves the ComfyUI extension markers:
   `/scripts/app.js`, `registerExtension`, the Runebender extension
-  name, `addDOMWidget`, `runebender-canvas`, and the hidden
-  `glyph_data` widget.
+  name, `addDOMWidget`, the preview launcher, the edit overlay, and
+  the hidden `glyph_data` widget.
+- Done 2026-05-16: replace the inline Runebender widget with a
+  compact preview card and Edit button that opens the editor as an
+  full-screen `document.body` overlay, matching comfyfont's launch
+  behavior instead of embedding the editor inside the node.
 
 ### C. Theme JSON shared through `runebender-core`
 

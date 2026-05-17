@@ -11,14 +11,13 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
-from io import BytesIO
 
 from aiohttp import web
 
 from server import PromptServer
 
 from .font_preview import render_preview_png
-from .workspace import compile_slot, create_slot_from_path, list_slots, locate_source_root, make_slot_name, slot_from_name
+from .workspace import compile_slot, create_slot_from_path, list_slots, locate_source_root, slot_from_name
 
 SOURCE_KIND_OPTIONS = ("auto", "ufo/designspace", "glyphs", "glyphspackage")
 DEMO_SOURCE_PATH = Path(__file__).resolve().parent.parent / "samples" / "demo-font" / "Demo.designspace"
@@ -65,7 +64,7 @@ async def import_font(request):
             {
                 "success": True,
                 "slot": slot,
-                "source_root": str(source_root.relative_to(staging_root)),
+                "source_root": str(source_root.relative_to(staging_root.resolve())),
             }
         )
 
@@ -84,11 +83,17 @@ async def preview_workspace_slot(request):
     width = int(request.query.get("width", "320"))
     height = int(request.query.get("height", "180"))
     if slot == "demo" or slot == "ufo/designspace":
-        slot = str(DEMO_SOURCE_PATH)
+        slot = create_slot_from_path(str(DEMO_SOURCE_PATH), "demo", source_kind=None)
     if Path(slot).exists():
         try:
             maybe_slot = create_slot_from_path(slot, None, source_kind=None)
             slot = maybe_slot
+        except Exception:
+            pass
+    slot_info = slot_from_name(slot)
+    if slot_info is not None and slot_info.compiled_path is None:
+        try:
+            compile_slot(slot)
         except Exception:
             pass
     try:

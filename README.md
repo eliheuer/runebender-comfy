@@ -22,6 +22,8 @@ full type-design toolchain is still in progress.
   import button for selecting a local UFO/designspace bundle from disk.
   When `glyphsLib` is installed, the import path normalizes Glyphs into
   UFO/designspace inside the workspace.
+- **Specimen** — DrawBot-style specimen renderer with `IMAGE` + `MASK`
+  outputs for scripted type specimens and previews.
 - **Compile Font** — materializes a compiled artifact for a workspace
   when a backend exists. The workspace auto-materializes a
   `glyphspackage` source package and then runs the Google Fonts
@@ -125,6 +127,8 @@ shape, install `glyphsLib` in the ComfyUI Python environment.
 The `Load Font` node includes an import button that copies a local
 UFO/designspace bundle into the workspace and binds the resulting
 workspace reference into the graph.
+The same node also shows a small inline specimen preview and a dropdown
+of existing workspace slots.
 
 To render DesignBot scripts, install the Rust CLI and keep it on
 `PATH`, or set `DESIGNBOT_BIN` to the executable path:

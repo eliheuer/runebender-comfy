@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>familyName</key>
+  <string>Demo Runebender</string>
+  <key>styleName</key>
+  <string>Regular</string>
+  <key>unitsPerEm</key>
+  <integer>1000</integer>
+</dict>
+</plist>

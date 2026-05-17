@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 import sys
@@ -39,6 +40,7 @@ from nodes.runebender import RUNEBENDER_STATE, Runebender
 from nodes.font import Font
 from nodes.compile_font import CompileFont
 from nodes.font_preview import FontPreview
+from nodes.font_specimen import FontSpecimen
 from nodes.fork_font import ForkFont
 from nodes.designbot import DesignBot, _script_for_render
 
@@ -439,12 +441,160 @@ class FontNodeTests(unittest.TestCase):
         self.assertEqual(slot, "imported-demo")
 
 
+class FontImportRouteTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._old_workspace_dir = workspace.WORKSPACE_DIR
+        self._old_fonts_dir = workspace.FONTS_DIR
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        workspace.WORKSPACE_DIR = root / "workspace"
+        workspace.FONTS_DIR = workspace.WORKSPACE_DIR / "fonts"
+
+    def tearDown(self) -> None:
+        workspace.WORKSPACE_DIR = self._old_workspace_dir
+        workspace.FONTS_DIR = self._old_fonts_dir
+        self.tmp.cleanup()
+
+    @staticmethod
+    def _request_with_files(files, data=None):
+        payload = dict(data or {})
+
+        class _PostData(dict):
+            def getall(self, key):
+                value = self.get(key, [])
+                return value if isinstance(value, list) else [value]
+
+        class _Request:
+            async def post(self):
+                form = _PostData(payload)
+                form["file"] = files
+                return form
+
+        return _Request()
+
+    def test_import_font_route_accepts_nested_folder_upload(self) -> None:
+        from nodes.font import import_font
+
+        class _UploadedFile:
+            def __init__(self, filename: str, content: bytes):
+                self.filename = filename
+                self.file = types.SimpleNamespace(read=lambda: content)
+
+        files = [
+            _UploadedFile(
+                "project/Demo.designspace",
+                b'<?xml version="1.0" encoding="UTF-8"?><designspace format="5"><sources/></designspace>',
+            ),
+            _UploadedFile(
+                "project/Demo.ufo/glyphs/A_.glif",
+                b'<?xml version="1.0" encoding="UTF-8"?><glyph name="A" format="2"><advance width="600"/></glyph>',
+            ),
+        ]
+        request = self._request_with_files(files, {"workspace_name": "demo-import", "source_kind": "auto"})
+
+        payload = asyncio.run(import_font(request))
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["slot"], "demo-import")
+        self.assertEqual(payload["source_root"], "project/Demo.designspace")
+        self.assertTrue((workspace.FONTS_DIR / "demo-import" / "Demo.designspace").exists())
+        self.assertTrue((workspace.FONTS_DIR / "demo-import" / "Demo.ufo" / "glyphs" / "A_.glif").exists())
+
+    def test_import_font_route_accepts_single_file_upload(self) -> None:
+        from nodes.font import import_font
+
+        class _UploadedFile:
+            def __init__(self, filename: str, content: bytes):
+                self.filename = filename
+                self.file = types.SimpleNamespace(read=lambda: content)
+
+        files = [
+            _UploadedFile(
+                "Demo.designspace",
+                b'<?xml version="1.0" encoding="UTF-8"?><designspace format="5"><sources/></designspace>',
+            ),
+        ]
+        request = self._request_with_files(files, {"workspace_name": "", "source_kind": "auto"})
+        payload = asyncio.run(import_font(request))
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["source_root"], "Demo.designspace")
+        self.assertTrue((workspace.FONTS_DIR / "Demo" / "Demo.designspace").exists())
+
+
 class FontPreviewNodeTests(unittest.TestCase):
     def test_font_preview_module_imports_without_image_stack(self) -> None:
         input_types = FontPreview.INPUT_TYPES()
 
         self.assertEqual(input_types["required"]["font"], ("FONT",))
         self.assertEqual(FontPreview.RETURN_TYPES, ("IMAGE",))
+
+
+class FontSpecimenNodeTests(unittest.TestCase):
+    def test_font_specimen_exposes_scriptable_image_and_mask_outputs(self) -> None:
+        input_types = FontSpecimen.INPUT_TYPES()
+
+        self.assertEqual(input_types["required"]["font"], ("FONT",))
+        self.assertEqual(FontSpecimen.RETURN_TYPES, ("IMAGE", "MASK"))
+        self.assertIn("custom_script", input_types["optional"])
+
+    def test_font_specimen_renders_image_and_mask_tensors(self) -> None:
+        class _FakeImg:
+            def convert(self, _mode):
+                return self
+
+            def getchannel(self, _name):
+                return self
+
+        class _FakeDraw:
+            def textbbox(self, _xy, _text, font=None):
+                return (0, 0, 64, 32)
+
+            def text(self, *_args, **_kwargs):
+                return None
+
+            def multiline_text(self, *_args, **_kwargs):
+                return None
+
+            def rectangle(self, *_args, **_kwargs):
+                return None
+
+        class _FakeImageModule:
+            @staticmethod
+            def new(_mode, _size, _color):
+                return _FakeImg()
+
+            @staticmethod
+            def alpha_composite(_base, _overlay):
+                return _FakeImg()
+
+        class _FakeImageDrawModule:
+            @staticmethod
+            def Draw(_img):
+                return _FakeDraw()
+
+        class _FakeImageFontModule:
+            @staticmethod
+            def truetype(_path, size=None):
+                return object()
+
+            @staticmethod
+            def load_default():
+                return object()
+
+        class _FakeTorch:
+            @staticmethod
+            def from_numpy(_arr):
+                return "tensor"
+
+        with mock.patch("nodes.font_specimen.compiled_path", return_value=Path("/tmp/font.ttf")), \
+             mock.patch("nodes.font_specimen._image_stack", return_value=(object(), _FakeImageModule, _FakeImageDrawModule, _FakeImageFontModule, _FakeTorch)), \
+             mock.patch("nodes.font_specimen._image_to_tensor", return_value="tensor"), \
+             mock.patch("nodes.font_specimen._mask_to_tensor", return_value="tensor"):
+            image, mask = FontSpecimen().run("demo", "glyph", "A", 256, 128)
+
+        self.assertEqual(image, "tensor")
+        self.assertEqual(mask, "tensor")
 
 
 class LocalWorkflowSmokeTests(unittest.TestCase):

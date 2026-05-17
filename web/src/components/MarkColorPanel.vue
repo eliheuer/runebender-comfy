@@ -46,7 +46,6 @@ defineEmits<{
       <button
         type="button"
         class="swatch clear"
-        :class="{ active: !active && enabled }"
         title="Clear mark color"
         aria-label="Clear mark color"
         :disabled="!enabled"
@@ -66,18 +65,20 @@ defineEmits<{
  * Colors from xilem theme.rs:
  *   PANEL_BACKGROUND               #1C1C1C
  *   PANEL_OUTLINE / BASE_F         #606060
- *   GRID_CELL_SELECTED_OUTLINE     #66EE88 (active swatch ring)
+ *   MARK_SELECTED_RING            #FFFFFF (active swatch ring)
  *   SECONDARY_UI_TEXT / BASE_G     #707070
  */
 
 .mark-color-panel {
-  background: #1c1c1c;
-  border: 1.5px solid #606060;
+  width: 220px;
+  height: 66px;
+  box-sizing: border-box;
+  background: var(--rb-panel-background, #1c1c1c);
+  border: 1.5px solid var(--rb-panel-outline, #606060);
   border-radius: 6px;
-  padding: 8px 10px;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
   flex-shrink: 0;
 }
 .mark-color-panel.disabled {
@@ -85,21 +86,24 @@ defineEmits<{
 }
 
 .header {
-  color: #66ee88;
-  font: 12px ui-sans-serif, system-ui, sans-serif;
-  font-weight: 500;
+  padding: 10px 12px 8px;
+  color: var(--rb-muted-text, #808080);
+  font: 16px ui-sans-serif, system-ui, sans-serif;
+  font-weight: 400;
+  line-height: 16px;
 }
 
 .swatches {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
+  padding-left: 8px;
 }
 
 .swatch {
   appearance: none;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   border: 1.5px solid transparent;
   cursor: pointer;
@@ -109,29 +113,28 @@ defineEmits<{
   justify-content: center;
 }
 .swatch:hover:not(:disabled) {
-  /* Subtle ring on hover. Active swatch already has a ring. */
-  outline: 2px solid #606060;
-  outline-offset: 1px;
+  outline: 1.5px solid var(--rb-mark-hover-ring, #bbbbbb);
+  outline-offset: 0;
 }
 .swatch.active {
-  outline: 2px solid #66ee88;
-  outline-offset: 1px;
+  outline: 2px solid var(--rb-mark-selected-ring, #ffffff);
+  outline-offset: 1.5px;
 }
 .swatch:disabled {
   cursor: default;
 }
 
 .swatch.clear {
-  background: #1c1c1c;
-  border-color: #606060;
+  background: var(--rb-panel-background, #1c1c1c);
+  border-color: var(--rb-panel-outline, #606060);
 }
 .swatch.clear svg {
   width: 12px;
   height: 12px;
-  stroke: #707070;
+  stroke: var(--rb-secondary-text, #707070);
   stroke-width: 1.5;
 }
 .swatch.clear:hover:not(:disabled) svg {
-  stroke: #66ee88;
+  stroke: var(--rb-accent, #66ee88);
 }
 </style>
