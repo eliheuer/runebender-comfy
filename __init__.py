@@ -1,7 +1,7 @@
 """runebender-comfy-nodes — Rust-powered type-design nodes for ComfyUI.
 
 Nodes:
-  Font         — workspace creator / importer for FONT wires
+  LoadFont     — workspace creator / importer for FONT wires
                  (UFO/designspace default, Glyphs alternate)
   CompileFont  — compile a workspace when a backend exists
   FontPreview  — simple specimen renderer for a FONT reference
@@ -21,7 +21,7 @@ from .nodes.runebender import Runebender
 from .nodes.designbot import DesignBot
 
 NODE_CLASS_MAPPINGS = {
-    "Font": Font,
+    "LoadFont": Font,
     "CompileFont": CompileFont,
     "FontPreview": FontPreview,
     "FontSpecimen": FontSpecimen,
@@ -31,7 +31,7 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "Font": "Load Font",
+    "LoadFont": "Load Font",
     "CompileFont": "Compile Font",
     "FontPreview": "Font Preview",
     "FontSpecimen": "Specimen",

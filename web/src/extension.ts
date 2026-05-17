@@ -9,8 +9,27 @@ import { createApp, ref } from "vue";
 
 import Runebender from "./Runebender.vue";
 
-const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-16";
+const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-17-wiretrace";
 console.info(`[runebender-comfy] loaded ${RUNEBENDER_BUNDLE_FINGERPRINT}`);
+
+function logNodeSockets(node: any, label: string) {
+  const payload = {
+    id: node.id,
+    title: node.title,
+    inputs: (node.inputs ?? []).map((slot: any) => ({
+      name: slot.name,
+      type: slot.type,
+      link: slot.link ?? null,
+      hasWidget: !!slot.widget,
+    })),
+    outputs: (node.outputs ?? []).map((slot: any) => ({
+      name: slot.name,
+      type: slot.type,
+      links: slot.links ?? [],
+    })),
+  };
+  console.info(`[runebender-comfy] ${label} ${JSON.stringify(payload)}`);
+}
 
 function createHiddenFileInput(
   onChange: () => Promise<void>,
@@ -40,27 +59,62 @@ function createHiddenFileInput(
 }
 
 function resolveNodeFontValue(node: any): string {
-  const directWidget = node.widgets?.find((w: any) => w.name === "font");
-  const directValue = String(directWidget?.value ?? "").trim();
-  if (directValue) return directValue;
-
-  const input = node.inputs?.find((slot: any) => slot.name === "font");
-  const linkId = input?.link;
-  const graph = node.graph;
-  if (linkId == null || !graph) return directValue;
-
-  const link = graph.getLink(linkId);
-  const origin = link ? graph.getNodeById(link.origin_id) : null;
-  if (!origin) return directValue;
-
-  const originWidgets = origin.widgets ?? [];
-  for (const candidate of ["workspace", "font", "source_path"]) {
-    const widget = originWidgets.find((w: any) => w.name === candidate);
-    const value = String(widget?.value ?? "").trim();
-    if (value) return value;
+  const inputIndex = node.inputs?.findIndex((slot: any) => slot.name === "font") ?? -1;
+  if (inputIndex >= 0) {
+    const upstream = node.getInputNode?.(inputIndex);
+    if (upstream) {
+      for (const candidate of ["workspace", "font", "source_path"]) {
+        const widget = upstream.widgets?.find((w: any) => w.name === candidate);
+        const value = String(widget?.value ?? "").trim();
+        if (value) return value;
+      }
+    }
   }
 
-  return directValue;
+  const directWidget = node.widgets?.find((w: any) => w.name === "font");
+  return String(directWidget?.value ?? "").trim();
+}
+
+function traceFontInputDisconnects(node: any, label: string) {
+  if (node.__runebenderFontInputTraceInstalled) return;
+  if (typeof node.disconnectInput !== "function") return;
+  node.__runebenderFontInputTraceInstalled = true;
+  const originalDisconnectInput = node.disconnectInput;
+  node.disconnectInput = function (slot: any, ...args: any[]) {
+    const slotIndex = typeof slot === "string" ? this.findInputSlot?.(slot) : slot;
+    const input = this.inputs?.[slotIndex];
+    if (slot === "font" || input?.name === "font") {
+      console.warn(`[runebender-comfy] ${label} font input disconnect requested`, {
+        slot,
+        slotIndex,
+        link: input?.link ?? null,
+        stack: new Error().stack,
+      });
+      logNodeSockets(this, `${label} before font input disconnect`);
+    }
+    return originalDisconnectInput.call(this, slot, ...args);
+  };
+}
+
+function traceFontOutputDisconnects(node: any, label: string) {
+  if (node.__runebenderFontOutputTraceInstalled) return;
+  if (typeof node.disconnectOutput !== "function") return;
+  node.__runebenderFontOutputTraceInstalled = true;
+  const originalDisconnectOutput = node.disconnectOutput;
+  node.disconnectOutput = function (slot: any, ...args: any[]) {
+    const slotIndex = typeof slot === "string" ? this.findOutputSlot?.(slot) : slot;
+    const output = this.outputs?.[slotIndex];
+    if (slot === "font" || output?.name === "font") {
+      console.warn(`[runebender-comfy] ${label} font output disconnect requested`, {
+        slot,
+        slotIndex,
+        links: output?.links ?? [],
+        stack: new Error().stack,
+      });
+      logNodeSockets(this, `${label} before font output disconnect`);
+    }
+    return originalDisconnectOutput.call(this, slot, ...args);
+  };
 }
 
 type OverlaySession = {
@@ -88,31 +142,23 @@ function openRunebenderOverlay(options: {
     "position:fixed",
     "inset:0",
     "z-index:9999",
-    "display:flex",
-    "flex-direction:column",
-    "gap:8px",
-    "padding:8px",
+    "display:block",
+    "padding:0",
+    "margin:0",
     "box-sizing:border-box",
     "min-width:0",
     "min-height:0",
-    "background:#0f0f0f",
-    "color:#dcdcdc",
-  ].join(";");
-
-  const chrome = document.createElement("div");
-  chrome.style.cssText = [
-    "display:flex",
-    "justify-content:flex-end",
-    "height:44px",
-    "min-height:44px",
-    "pointer-events:none",
+    "background:transparent",
   ].join(";");
 
   const closeButton = document.createElement("button");
   closeButton.type = "button";
   closeButton.textContent = "Close Editor";
   closeButton.style.cssText = [
-    "pointer-events:auto",
+    "position:absolute",
+    "right:8px",
+    "top:8px",
+    "z-index:1",
     "height:32px",
     "padding:0 12px",
     "border-radius:6px",
@@ -126,16 +172,14 @@ function openRunebenderOverlay(options: {
   const mount = document.createElement("div");
   mount.style.cssText = [
     "position:relative",
-    "flex:1",
-    "min-width:0",
-    "min-height:0",
     "width:100%",
     "height:100%",
+    "min-width:0",
+    "min-height:0",
     "overflow:hidden",
   ].join(";");
 
-  chrome.appendChild(closeButton);
-  root.append(chrome, mount);
+  root.append(closeButton, mount);
   document.body.appendChild(root);
 
   const app = createApp(Runebender, {
@@ -170,11 +214,13 @@ function openRunebenderOverlay(options: {
 app.registerExtension({
   name: "runebender-comfy.Runebender",
   async beforeRegisterNodeDef(nodeType: any, nodeData: any) {
-    if (nodeData.name === "Font") {
+    if (nodeData.name === "LoadFont" || nodeData.name === "Font") {
       const onCreated = nodeType.prototype.onNodeCreated;
       nodeType.prototype.onNodeCreated = function () {
         onCreated?.apply(this, arguments);
         console.log(`[runebender-comfy] ${RUNEBENDER_BUNDLE_FINGERPRINT} Font node active`);
+        logNodeSockets(this, "Font node sockets");
+        traceFontOutputDisconnects(this, "Font node");
 
         const sourceWidget = this.widgets?.find((w: any) => w.name === "source_path");
         const sourceKindWidget = this.widgets?.find((w: any) => w.name === "source_kind");
@@ -285,19 +331,19 @@ app.registerExtension({
           this.setDirtyCanvas(true, true);
         });
 
-        const importFolderButton = this.addWidget("button", "Import Folder...", "runebender-import", () => {
+        const importFolderButton = this.addWidget("button", "Import Folder...", null, () => {
           folderInput.click();
         }, {});
         importFolderButton.serialize = false;
         importFolderButton.label = `Import Folder... (${RUNEBENDER_BUNDLE_FINGERPRINT})`;
 
-        const importFileButton = this.addWidget("button", "Import File...", "runebender-import-file", () => {
+        const importFileButton = this.addWidget("button", "Import File...", null, () => {
           fileInput.click();
         }, {});
         importFileButton.serialize = false;
         importFileButton.label = `Import File... (${RUNEBENDER_BUNDLE_FINGERPRINT})`;
 
-        const refreshButton = this.addWidget("button", "Refresh Workspaces", "runebender-refresh", () => {
+        const refreshButton = this.addWidget("button", "Refresh Workspaces", null, () => {
           void refreshChoices();
         }, {});
         refreshButton.serialize = false;
@@ -394,31 +440,24 @@ app.registerExtension({
     nodeType.prototype.onNodeCreated = function () {
       onCreated?.apply(this, arguments);
       console.log(`[runebender-comfy] ${RUNEBENDER_BUNDLE_FINGERPRINT} Runebender node active`);
-      const fontPath = ref("");
-      const fontWidget = this.widgets?.find((w: any) => w.name === "font");
-      if (fontWidget) {
-        fontWidget.hidden = true;
-        fontWidget.computeSize = () => [0, -4];
-      }
-      const glyphDataWidget = this.addWidget("STRING", "glyph_data", "", () => {}, {
-        multiline: true,
-      });
-      glyphDataWidget.hidden = true;
-      glyphDataWidget.computeSize = () => [0, -4];
+      logNodeSockets(this, "Runebender node sockets");
+      traceFontInputDisconnects(this, "Runebender node");
+      this.properties ??= {};
+      this.properties.glyph_data ??= "";
 
-      const editButton = this.addWidget("button", "Edit", "runebender-edit", () => {
+      const editButton = this.addWidget("button", "Edit", null, () => {
         const currentFont = resolveNodeFontValue(this);
         if (!currentFont) {
           console.warn("runebender editor requested without a loaded font");
           return;
         }
-        fontPath.value = currentFont;
+        const fontPath = ref(currentFont);
         openRunebenderOverlay({
           nodeId: String(this.id),
           fontPathRef: fontPath,
           onGlyphDataChange: (value: string) => {
             this.setDirtyCanvas(true, true);
-            glyphDataWidget.value = value;
+            this.properties.glyph_data = value;
           },
         });
       }, {});
@@ -426,48 +465,7 @@ app.registerExtension({
       editButton.label = `Edit (${RUNEBENDER_BUNDLE_FINGERPRINT})`;
 
       const [oldWidth, oldHeight] = this.size;
-      this.setSize([Math.max(oldWidth, 420), Math.max(oldHeight, 280)]);
-
-      const syncPreview = () => {
-        const value = resolveNodeFontValue(this);
-        fontPath.value = value;
-        if (!value) {
-          editButton.disabled = true;
-          return;
-        }
-        editButton.disabled = false;
-      };
-
-      const syncFontSelection = () => {
-        const value = resolveNodeFontValue(this);
-        fontPath.value = value;
-        if (fontWidget) {
-          fontWidget.value = value;
-        }
-        syncPreview();
-      };
-
-      if (fontWidget) {
-        const origCallback = fontWidget.callback;
-        fontWidget.callback = (...args: any[]) => {
-          origCallback?.(...args);
-          syncFontSelection();
-        };
-      }
-
-      const origConfigure = this.onConfigure;
-      this.onConfigure = function (info: any) {
-        origConfigure?.call(this, info);
-        syncFontSelection();
-      };
-
-      const origConnectionsChange = this.onConnectionsChange;
-      this.onConnectionsChange = function (...args: any[]) {
-        origConnectionsChange?.apply(this, args);
-        syncFontSelection();
-      };
-
-      requestAnimationFrame(syncFontSelection);
+      this.setSize([Math.max(oldWidth, 260), Math.max(oldHeight, 110)]);
     };
   },
 });

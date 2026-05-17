@@ -362,6 +362,26 @@ def write_workspace_text_file(rel_path: str, text: str) -> Path:
     return target
 
 
+def invalidate_workspace_path(rel_path: str) -> None:
+    ensure_workspace()
+    cleaned = Path(rel_path)
+    if cleaned.is_absolute():
+        raise ValueError("workspace path must be relative")
+    if ".." in cleaned.parts:
+        raise ValueError("workspace path cannot contain parent traversal")
+    target = _workspace_write_target(cleaned)
+    root = WORKSPACE_DIR.resolve()
+    fonts_root = FONTS_DIR.resolve()
+    if (
+        root not in target.parents
+        and target != root
+        and fonts_root not in target.parents
+        and target != fonts_root
+    ):
+        raise ValueError("workspace path escapes workspace root")
+    _invalidate_compiled_slot_for_path(target)
+
+
 def _workspace_write_target(rel_path: Path) -> Path:
     parts = rel_path.parts
     if not parts:

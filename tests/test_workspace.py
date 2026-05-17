@@ -522,6 +522,56 @@ class FontImportRouteTests(unittest.TestCase):
         self.assertTrue((workspace.FONTS_DIR / "Demo" / "Demo.designspace").exists())
 
 
+class WorkspaceInvalidateRouteTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._old_workspace_dir = workspace.WORKSPACE_DIR
+        self._old_fonts_dir = workspace.FONTS_DIR
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        workspace.WORKSPACE_DIR = root / "workspace"
+        workspace.FONTS_DIR = workspace.WORKSPACE_DIR / "fonts"
+
+    def tearDown(self) -> None:
+        workspace.WORKSPACE_DIR = self._old_workspace_dir
+        workspace.FONTS_DIR = self._old_fonts_dir
+        self.tmp.cleanup()
+
+    def test_invalidate_workspace_route_removes_compiled_artifact(self) -> None:
+        from nodes.runebender import invalidate_workspace_file
+
+        slot_dir = workspace.FONTS_DIR / "demo"
+        glyphs_dir = slot_dir / "Demo.ufo" / "glyphs"
+        glyphs_dir.mkdir(parents=True, exist_ok=True)
+        (slot_dir / "Demo.designspace").write_text("<designspace/>", encoding="utf-8")
+        (glyphs_dir / "A_.glif").write_text("<glyph name=\"A\"/>", encoding="utf-8")
+        compiled = slot_dir / "demo.ttf"
+        compiled.write_bytes(b"compiled")
+        package = slot_dir / "demo.glyphspackage"
+        package.mkdir()
+        workspace._write_manifest(  # type: ignore[attr-defined]
+            slot_dir,
+            {
+                "source_kind": "ufo/designspace",
+                "compiled_path": "demo.ttf",
+                "compile_backend": "fontc",
+                "package_path": "demo.glyphspackage",
+            },
+        )
+
+        class _Request:
+            async def post(self):
+                return {"path": "demo/Demo.ufo/glyphs/A_.glif"}
+
+        payload = asyncio.run(invalidate_workspace_file(_Request()))
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["path"], "demo/Demo.ufo/glyphs/A_.glif")
+        self.assertFalse(compiled.exists())
+        self.assertFalse(package.exists())
+        manifest = json.loads((slot_dir / workspace.MANIFEST_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(manifest, {"source_kind": "ufo/designspace"})
+
+
 class FontPreviewNodeTests(unittest.TestCase):
     def test_font_preview_module_imports_without_image_stack(self) -> None:
         input_types = FontPreview.INPUT_TYPES()

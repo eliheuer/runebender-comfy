@@ -3487,6 +3487,7 @@ async function persistGlyphData(data: MasterData, glyphName: string): Promise<bo
   const writable = await fileHandle.createWritable();
   await writable.write(bytes);
   await writable.close();
+  await invalidateCompiledWorkspacePath(slotPath);
   return true;
 }
 
@@ -3575,6 +3576,22 @@ async function exportTextFile(
   return true;
 }
 
+async function invalidateCompiledWorkspacePath(path: string | null): Promise<void> {
+  if (!path || !currentFontPath.value) return;
+  try {
+    await fetch("/runebender/workspace/invalidate", {
+      method: "POST",
+      body: (() => {
+        const body = new FormData();
+        body.append("path", path);
+        return body;
+      })(),
+    });
+  } catch (error) {
+    console.warn("workspace invalidation failed:", error);
+  }
+}
+
 function filenameFromPath(path: string | null, fallback: string): string {
   if (!path) return fallback;
   return path.split("/").filter(Boolean).pop() ?? fallback;
@@ -3639,6 +3656,7 @@ async function persistGroupsData(data: MasterData, masterName = activeMasterName
     const writable = await data.groupsFileHandle.createWritable();
     await writable.write(new TextEncoder().encode(text));
     await writable.close();
+    await invalidateCompiledWorkspacePath(data.groupsPath);
     return true;
   }
 
@@ -3689,6 +3707,7 @@ async function persistKerningData(data: MasterData, masterName = activeMasterNam
     const writable = await data.kerningFileHandle.createWritable();
     await writable.write(new TextEncoder().encode(text));
     await writable.close();
+    await invalidateCompiledWorkspacePath(data.kerningPath);
     return true;
   }
 

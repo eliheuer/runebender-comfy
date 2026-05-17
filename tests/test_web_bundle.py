@@ -48,7 +48,7 @@ class WebBundleTests(unittest.TestCase):
         self.assertEqual(module.WEB_DIRECTORY, "./web/dist")
         self.assertEqual(
             set(module.NODE_CLASS_MAPPINGS),
-            {"Font", "CompileFont", "FontPreview", "FontSpecimen", "ForkFont", "Runebender", "DesignBot"},
+            {"LoadFont", "CompileFont", "FontPreview", "FontSpecimen", "ForkFont", "Runebender", "DesignBot"},
         )
         self.assertEqual(
             set(module.NODE_DISPLAY_NAME_MAPPINGS),
@@ -79,16 +79,17 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn('from "/scripts/app.js"', bundle)
         self.assertIn("registerExtension", bundle)
         self.assertIn("runebender-comfy.Runebender", bundle)
-        self.assertIn("addDOMWidget", bundle)
-        self.assertIn("runebender-import", bundle)
-        self.assertIn("runebender-edit", bundle)
         self.assertIn("Import Folder...", bundle)
         self.assertIn("Import File...", bundle)
         self.assertIn("Refresh Workspaces", bundle)
         self.assertIn("Close Editor", bundle)
-        self.assertIn("rb-bundle-2026-05-16", bundle)
+        self.assertIn("font input disconnect requested", bundle)
+        self.assertIn("workspace/invalidate", bundle)
+        self.assertIn("rb-bundle-2026-05-17-wiretrace", bundle)
         self.assertIn("console.info(`[runebender-comfy] loaded", bundle)
+        self.assertIn("JSON.stringify(", bundle)
         self.assertIn("glyph_data", bundle)
+        self.assertNotIn("onConnectionsChange", bundle)
         self.assertNotIn("process.env.NODE_ENV", bundle)
 
         dist_files = sorted(p.name for p in (ROOT / "web" / "dist").iterdir() if p.is_file())

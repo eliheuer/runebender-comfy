@@ -12,7 +12,7 @@ from aiohttp import web
 
 from server import PromptServer
 
-from .workspace import export_slot_text_files, write_workspace_text_file
+from .workspace import export_slot_text_files, invalidate_workspace_path, write_workspace_text_file
 
 
 RUNEBENDER_STATE: dict[str, dict[str, str]] = {}
@@ -54,6 +54,16 @@ async def write_workspace_file(request):
     return web.json_response({"success": True, "path": path})
 
 
+@routes.post("/runebender/workspace/invalidate")
+async def invalidate_workspace_file(request):
+    data = await request.post()
+    path = str(data.get("path", "")).strip()
+    if not path:
+        raise web.HTTPBadRequest(reason="path required")
+    invalidate_workspace_path(path)
+    return web.json_response({"success": True, "path": path})
+
+
 class Runebender:
     CATEGORY = "Runebender / Editor"
 
@@ -69,7 +79,7 @@ class Runebender:
         }
 
     RETURN_TYPES = ("FONT", "STRING")
-    RETURN_NAMES = ("font", "glyph_svg")
+    RETURN_NAMES = ("edited_font", "glyph_svg")
     FUNCTION = "run"
 
     def run(self, font: str, unique_id: str):
