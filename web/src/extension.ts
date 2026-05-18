@@ -9,7 +9,7 @@ import { createApp, ref } from "vue";
 
 import Runebender from "./Runebender.vue";
 
-const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-18-inject-css";
+const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-18-chrome-inset";
 console.info(`[runebender-comfy] loaded ${RUNEBENDER_BUNDLE_FINGERPRINT}`);
 
 // ComfyUI auto-loads .js from WEB_DIRECTORY but not sibling .css. Vite's
@@ -269,6 +269,33 @@ function closeActiveOverlay() {
   activeOverlay.cleanup();
 }
 
+// Measure ComfyUI's persistent chrome (top tabs, left/right rails) so the
+// editor overlay can sit inside it rather than covering it. Falls back to
+// conservative defaults if the selectors change in a future ComfyUI build.
+function measureComfyChromeInsets(): {
+  top: number;
+  left: number;
+  right: number;
+  bottom: number;
+} {
+  const pick = (selectors: string[], dimension: "h" | "w"): number => {
+    for (const sel of selectors) {
+      const el = document.querySelector(sel) as HTMLElement | null;
+      if (!el) continue;
+      const rect = el.getBoundingClientRect();
+      const value = dimension === "h" ? rect.height : rect.width;
+      if (value > 0) return Math.round(value);
+    }
+    return 0;
+  };
+  return {
+    top: pick([".comfyui-body-top", ".comfy-menu", "header.app-header"], "h") || 40,
+    left: pick([".comfyui-body-left", ".side-bar-panel.left"], "w") || 56,
+    right: pick([".comfyui-body-right", ".side-bar-panel.right"], "w") || 0,
+    bottom: pick([".comfyui-body-bottom"], "h") || 0,
+  };
+}
+
 function openRunebenderOverlay(options: {
   nodeId: string;
   fontPathRef: { value: string };
@@ -276,11 +303,16 @@ function openRunebenderOverlay(options: {
 }) {
   closeActiveOverlay();
 
+  const insets = measureComfyChromeInsets();
+
   const root = document.createElement("div");
   root.setAttribute("data-runebender-overlay", options.nodeId);
   root.style.cssText = [
     "position:fixed",
-    "inset:0",
+    `top:${insets.top}px`,
+    `left:${insets.left}px`,
+    `right:${insets.right}px`,
+    `bottom:${insets.bottom}px`,
     "z-index:9999",
     "display:block",
     "padding:0",
@@ -293,6 +325,12 @@ function openRunebenderOverlay(options: {
     // transparent, which made an unmounted overlay look indistinguishable
     // from the editor never opening at all.
     "background:#181818",
+    // Subtle border + shadow so the editor reads as a distinct surface
+    // sitting on top of ComfyUI rather than replacing it.
+    "border:1px solid #2a2a2a",
+    "border-radius:6px",
+    "box-shadow:0 8px 32px rgba(0,0,0,0.5)",
+    "overflow:hidden",
   ].join(";");
 
   const closeButton = document.createElement("button");
