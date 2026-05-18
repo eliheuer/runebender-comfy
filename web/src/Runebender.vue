@@ -110,22 +110,6 @@ const WELCOME_DEMO_FONTINFO = `<?xml version="1.0" encoding="UTF-8"?>
 </dict>
 </plist>`;
 
-// WebGPU's default minimum guaranteed maxTextureDimension2D is 8192. On
-// HiDPI displays (Retina, 5K) the overlay's CSS pixel size * devicePixelRatio
-// blows past that and wgpu refuses to create a swapchain texture. Clamping
-// the effective DPR keeps the backing-store dimensions inside the limit while
-// still using as much resolution as the screen can offer.
-const MAX_GPU_TEXTURE_DIM = 8192;
-function getEffectiveDpr(rectWidth: number, rectHeight: number): number {
-  const dpr = window.devicePixelRatio || 1;
-  if (rectWidth <= 0 || rectHeight <= 0) return dpr;
-  return Math.min(
-    dpr,
-    MAX_GPU_TEXTURE_DIM / rectWidth,
-    MAX_GPU_TEXTURE_DIM / rectHeight,
-  );
-}
-
 const canvas = ref<HTMLCanvasElement | null>(null);
 const gridView = ref<HTMLDivElement | null>(null);
 const gridViewportWidth = ref<number>(0);
@@ -711,8 +695,8 @@ onMounted(async () => {
   try {
     await init();
 
+    const dpr = window.devicePixelRatio || 1;
     const rect = canvas.value.getBoundingClientRect();
-    const dpr = getEffectiveDpr(rect.width, rect.height);
     const width = Math.max(1, Math.floor(rect.width * dpr));
     const height = Math.max(1, Math.floor(rect.height * dpr));
     canvas.value.width = width;
@@ -930,10 +914,7 @@ function refreshBackgroundImageFrame() {
     return;
   }
   const bg = backgroundImage.value;
-  const canvasRect = canvas.value?.getBoundingClientRect();
-  const dpr = canvasRect
-    ? getEffectiveDpr(canvasRect.width, canvasRect.height)
-    : (window.devicePixelRatio || 1);
+  const dpr = window.devicePixelRatio || 1;
   const topLeft = editor.designToScreen(
     bg.designX,
     bg.designY + bg.height * bg.designScaleY,
@@ -1971,8 +1952,8 @@ function handleTextToolKey(e: KeyboardEvent): boolean {
 function handleResize() {
   updateGridViewportSize();
   if (!editor || !canvas.value) return;
+  const dpr = window.devicePixelRatio || 1;
   const rect = canvas.value.getBoundingClientRect();
-  const dpr = getEffectiveDpr(rect.width, rect.height);
   const width = Math.max(1, Math.floor(rect.width * dpr));
   const height = Math.max(1, Math.floor(rect.height * dpr));
   if (canvas.value.width === width && canvas.value.height === height) return;
@@ -1990,7 +1971,7 @@ function updateGridViewportSize() {
 function canvasCoords(e: PointerEvent): [number, number] | null {
   if (!canvas.value) return null;
   const rect = canvas.value.getBoundingClientRect();
-  const dpr = getEffectiveDpr(rect.width, rect.height);
+  const dpr = window.devicePixelRatio || 1;
   const x = (e.clientX - rect.left) * dpr;
   const y = (e.clientY - rect.top) * dpr;
   return [x, y];
@@ -1999,7 +1980,7 @@ function canvasCoords(e: PointerEvent): [number, number] | null {
 function canvasMouseCoords(e: MouseEvent): [number, number] | null {
   if (!canvas.value) return null;
   const rect = canvas.value.getBoundingClientRect();
-  const dpr = getEffectiveDpr(rect.width, rect.height);
+  const dpr = window.devicePixelRatio || 1;
   const x = (e.clientX - rect.left) * dpr;
   const y = (e.clientY - rect.top) * dpr;
   return [x, y];

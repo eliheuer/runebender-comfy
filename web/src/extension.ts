@@ -9,7 +9,7 @@ import { createApp, ref } from "vue";
 
 import Runebender from "./Runebender.vue";
 
-const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-17-runebender-merge";
+const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-18-full-dpr";
 console.info(`[runebender-comfy] loaded ${RUNEBENDER_BUNDLE_FINGERPRINT}`);
 
 declare const window: any;

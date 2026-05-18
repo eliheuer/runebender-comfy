@@ -11,8 +11,8 @@
 use kurbo::{Affine, BezPath, Circle, Ellipse, Line, Point, Rect, Stroke};
 use runebender_core::theme;
 use vello::peniko::{Fill, color::AlphaColor};
-use vello::util::{RenderContext, RenderSurface};
 use vello::wgpu;
+use vello::wgpu::util::TextureBlitter;
 use vello::{AaConfig, Renderer as VelloRenderer, RendererOptions, Scene};
 use wasm_bindgen::JsValue;
 use web_sys::HtmlCanvasElement;
@@ -105,8 +105,18 @@ const DESIGN_GRID_COARSE_LINE_PX: f64 = 1.0;
 // ============================================================================
 
 pub struct Renderer {
-    render_cx: RenderContext,
-    surface: RenderSurface<'static>,
+    // Hand-rolled wgpu setup (instead of vello::util::RenderContext) so
+    // we can request the adapter's full max_texture_dimension_2d. Vello
+    // 0.8's RenderContext hardcodes Limits::default(), which caps
+    // textures at 8192 — too small for full-DPR rendering on Retina/5K
+    // displays.
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    surface: wgpu::Surface<'static>,
+    surface_config: wgpu::SurfaceConfiguration,
+    target_texture: wgpu::Texture,
+    target_view: wgpu::TextureView,
+    blitter: TextureBlitter,
     vello: VelloRenderer,
     scene: Scene,
     width: u32,
@@ -115,17 +125,67 @@ pub struct Renderer {
 
 impl Renderer {
     pub async fn new(canvas: HtmlCanvasElement, width: u32, height: u32) -> Result<Self, JsValue> {
-        let mut render_cx = RenderContext::new();
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
 
-        let surface_target = wgpu::SurfaceTarget::Canvas(canvas);
-        let surface = render_cx
-            .create_surface(surface_target, width, height, wgpu::PresentMode::AutoVsync)
-            .await
+        let surface = instance
+            .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
             .map_err(|e| JsValue::from_str(&format!("create_surface: {e:?}")))?;
 
-        let device_handle = &render_cx.devices[surface.dev_id];
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: Some(&surface),
+            })
+            .await
+            .map_err(|e| JsValue::from_str(&format!("request_adapter: {e:?}")))?;
+
+        let adapter_limits = adapter.limits();
+        let mut limits = wgpu::Limits::default();
+        limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
+
+        let optional_features = wgpu::Features::CLEAR_TEXTURE | wgpu::Features::PIPELINE_CACHE;
+        let required_features = adapter.features() & optional_features;
+
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("runebender device"),
+                required_features,
+                required_limits: limits,
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| JsValue::from_str(&format!("request_device: {e:?}")))?;
+
+        let capabilities = surface.get_capabilities(&adapter);
+        let surface_format = capabilities
+            .formats
+            .into_iter()
+            .find(|fmt| {
+                matches!(
+                    fmt,
+                    wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm
+                )
+            })
+            .ok_or_else(|| JsValue::from_str("no compatible surface format"))?;
+
+        let surface_config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: surface_format,
+            width,
+            height,
+            present_mode: wgpu::PresentMode::AutoVsync,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            view_formats: vec![],
+        };
+        surface.configure(&device, &surface_config);
+
+        let (target_texture, target_view) = create_intermediate_target(width, height, &device);
+        let blitter = TextureBlitter::new(&device, surface_format);
+
         let vello = VelloRenderer::new(
-            &device_handle.device,
+            &device,
             RendererOptions {
                 use_cpu: false,
                 antialiasing_support: vello::AaSupport::all(),
@@ -136,8 +196,13 @@ impl Renderer {
         .map_err(|e| JsValue::from_str(&format!("Renderer::new: {e:?}")))?;
 
         Ok(Self {
-            render_cx,
+            device,
+            queue,
             surface,
+            surface_config,
+            target_texture,
+            target_view,
+            blitter,
             vello,
             scene: Scene::new(),
             width,
@@ -149,8 +214,13 @@ impl Renderer {
         if width == 0 || height == 0 {
             return;
         }
-        self.render_cx
-            .resize_surface(&mut self.surface, width, height);
+        self.surface_config.width = width;
+        self.surface_config.height = height;
+        self.surface.configure(&self.device, &self.surface_config);
+        let (target_texture, target_view) =
+            create_intermediate_target(width, height, &self.device);
+        self.target_texture = target_texture;
+        self.target_view = target_view;
         self.width = width;
         self.height = height;
     }
@@ -986,18 +1056,15 @@ impl Renderer {
     fn present(&mut self) -> Result<(), JsValue> {
         let surface_texture = self
             .surface
-            .surface
             .get_current_texture()
             .map_err(|e| JsValue::from_str(&format!("get_current_texture: {e:?}")))?;
 
-        let device_handle = &self.render_cx.devices[self.surface.dev_id];
-
         self.vello
             .render_to_texture(
-                &device_handle.device,
-                &device_handle.queue,
+                &self.device,
+                &self.queue,
                 &self.scene,
-                &self.surface.target_view,
+                &self.target_view,
                 &vello::RenderParams {
                     base_color: BG.into(),
                     width: self.width,
@@ -1014,23 +1081,41 @@ impl Renderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder =
-            device_handle
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("runebender blit"),
-                });
-        self.surface.blitter.copy(
-            &device_handle.device,
-            &mut encoder,
-            &self.surface.target_view,
-            &surface_view,
-        );
-        device_handle.queue.submit([encoder.finish()]);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("runebender blit"),
+            });
+        self.blitter
+            .copy(&self.device, &mut encoder, &self.target_view, &surface_view);
+        self.queue.submit([encoder.finish()]);
 
         surface_texture.present();
         Ok(())
     }
+}
+
+fn create_intermediate_target(
+    width: u32,
+    height: u32,
+    device: &wgpu::Device,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let target_texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("runebender intermediate target"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        view_formats: &[],
+    });
+    let target_view = target_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (target_texture, target_view)
 }
 
 /// Whether the path is a closed contour (so handle/point wrap-around
