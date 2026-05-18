@@ -67,7 +67,9 @@ Load Font -> Runebender -> Compile Font -> Font Preview
    the same `FONT` wire into `Compile Font` and `Font Preview`.
 
 For a bundled smoke test, use
-`samples/demo-font/Demo.designspace` as the source path.
+`samples/virtua-grotesk/VirtuaGrotesk.designspace` as the source path.
+The bundled demo is the two-master (Regular/Bold) Virtua Grotesk font;
+the `demo` workspace alias resolves to it automatically.
 
 ## Notes
 

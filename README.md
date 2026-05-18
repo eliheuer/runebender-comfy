@@ -105,7 +105,8 @@ nodes, use the local install path below.
    workflow below as the simplest path into font work.
 
 For a first smoke test, use the checked-in demo source at
-`samples/demo-font/Demo.designspace`.
+`samples/virtua-grotesk/VirtuaGrotesk.designspace` (Regular + Bold
+masters; OFL-licensed, see `samples/virtua-grotesk/OFL.txt`).
 
 The nodes are grouped under the `Runebender` section in the ComfyUI
 add-node menu:

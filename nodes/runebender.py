@@ -13,8 +13,44 @@ from aiohttp import web
 
 from server import PromptServer
 
-from .font import SOURCE_KIND_OPTIONS, resolve_font_source
-from .workspace import export_slot_text_files, invalidate_workspace_path, write_workspace_text_file
+from .font import DEMO_SOURCE_PATH, SOURCE_KIND_OPTIONS, resolve_font_source
+from .workspace import (
+    FONTS_DIR,
+    create_slot_from_path,
+    export_slot_text_files,
+    invalidate_workspace_path,
+    write_workspace_text_file,
+)
+
+
+def _ensure_demo_workspace_fresh() -> None:
+    """Rebuild the cached 'demo' workspace if the source has changed.
+
+    Lets us swap DEMO_SOURCE_PATH (e.g. to a richer demo font) without
+    requiring users to manually delete the cached workspace/fonts/demo
+    directory. Compares the mtime of the bundled source against the
+    cached slot's directory mtime.
+    """
+    if not DEMO_SOURCE_PATH.exists():
+        return
+    slot_dir = FONTS_DIR / "demo"
+    try:
+        source_mtime = DEMO_SOURCE_PATH.stat().st_mtime
+    except OSError:
+        return
+    if slot_dir.exists():
+        try:
+            slot_mtime = slot_dir.stat().st_mtime
+        except OSError:
+            slot_mtime = 0.0
+        if slot_mtime >= source_mtime:
+            return
+    try:
+        create_slot_from_path(str(DEMO_SOURCE_PATH), "demo", source_kind=None)
+    except Exception as exc:
+        # Non-fatal: workspace may still be usable in its previous state.
+        # Log and move on so the editor at least opens.
+        print(f"[runebender] failed to refresh demo workspace: {exc}")
 
 
 RUNEBENDER_STATE: dict[str, dict[str, str]] = {}
@@ -41,6 +77,8 @@ async def get_workspace_slot(request):
     slot = str(request.match_info.get("slot", ""))
     if not slot:
         raise web.HTTPBadRequest(reason="slot required")
+    if slot == "demo":
+        _ensure_demo_workspace_fresh()
     files = export_slot_text_files(slot)
     return web.json_response({"slot": slot, "files": files})
 

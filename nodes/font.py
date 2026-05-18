@@ -20,7 +20,12 @@ from .font_preview import render_preview_png
 from .workspace import compile_slot, create_slot_from_path, list_slots, locate_source_root, slot_from_name
 
 SOURCE_KIND_OPTIONS = ("auto", "ufo/designspace", "glyphs", "glyphspackage")
-DEMO_SOURCE_PATH = Path(__file__).resolve().parent.parent / "samples" / "demo-font" / "Demo.designspace"
+DEMO_SOURCE_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "samples"
+    / "virtua-grotesk"
+    / "VirtuaGrotesk.designspace"
+)
 
 routes = PromptServer.instance.routes
 
