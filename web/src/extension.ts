@@ -9,7 +9,7 @@ import { createApp, ref } from "vue";
 
 import Runebender from "./Runebender.vue";
 
-const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-18-ui-cleanup";
+const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-18-visible-errors";
 console.info(`[runebender-comfy] loaded ${RUNEBENDER_BUNDLE_FINGERPRINT}`);
 
 declare const window: any;
@@ -267,7 +267,11 @@ function openRunebenderOverlay(options: {
     "box-sizing:border-box",
     "min-width:0",
     "min-height:0",
-    "background:transparent",
+    // Solid background so the overlay is obviously open even if Vue or
+    // the WASM editor never paints a frame. Previously this was
+    // transparent, which made an unmounted overlay look indistinguishable
+    // from the editor never opening at all.
+    "background:#181818",
   ].join(";");
 
   const closeButton = document.createElement("button");
@@ -277,7 +281,7 @@ function openRunebenderOverlay(options: {
     "position:absolute",
     "right:8px",
     "top:8px",
-    "z-index:1",
+    "z-index:2",
     "height:32px",
     "padding:0 12px",
     "border-radius:6px",
@@ -288,29 +292,104 @@ function openRunebenderOverlay(options: {
     "cursor:pointer",
   ].join(";");
 
+  const statusBanner = document.createElement("div");
+  statusBanner.style.cssText = [
+    "position:absolute",
+    "left:8px",
+    "top:8px",
+    "right:120px",
+    "z-index:2",
+    "padding:6px 12px",
+    "border-radius:6px",
+    "background:#222",
+    "color:#ddd",
+    "font:12px ui-sans-serif, system-ui, sans-serif",
+    "pointer-events:none",
+  ].join(";");
+  statusBanner.textContent = `Runebender (${RUNEBENDER_BUNDLE_FINGERPRINT}) — initializing editor…`;
+
+  const errorPane = document.createElement("pre");
+  errorPane.style.cssText = [
+    "position:absolute",
+    "left:20px",
+    "right:20px",
+    "top:56px",
+    "bottom:20px",
+    "z-index:2",
+    "margin:0",
+    "padding:16px",
+    "border:2px solid #d33",
+    "border-radius:8px",
+    "background:#2a0808",
+    "color:#fdd",
+    "font:13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace",
+    "white-space:pre-wrap",
+    "overflow:auto",
+    "display:none",
+  ].join(";");
+
+  const showError = (label: string, err: unknown) => {
+    const message = err instanceof Error
+      ? `${err.name}: ${err.message}\n\n${err.stack ?? ""}`
+      : String(err);
+    errorPane.textContent = `Runebender failed: ${label}\n\n${message}`;
+    errorPane.style.display = "block";
+    statusBanner.textContent = `Runebender — error: ${label}`;
+    statusBanner.style.background = "#502020";
+    statusBanner.style.color = "#fff";
+    console.error(`[runebender-comfy] ${label}:`, err);
+  };
+
   const mount = document.createElement("div");
   mount.style.cssText = [
-    "position:relative",
-    "width:100%",
-    "height:100%",
-    "min-width:0",
-    "min-height:0",
+    "position:absolute",
+    "inset:0",
+    "z-index:1",
     "overflow:hidden",
   ].join(";");
 
-  root.append(closeButton, mount);
+  root.append(mount, statusBanner, errorPane, closeButton);
   document.body.appendChild(root);
 
-  const app = createApp(Runebender, {
-    nodeId: options.nodeId,
-    fontPathRef: options.fontPathRef,
-    onGlyphDataChange: options.onGlyphDataChange,
-  });
-  app.mount(mount);
+  // Anything thrown by Vue setup or async WASM init while the overlay
+  // is open should land on the visible error pane so users don't need
+  // DevTools to diagnose.
+  const onWindowError = (event: ErrorEvent) => {
+    if (errorPane.style.display !== "none") return;
+    showError("uncaught error", event.error ?? event.message);
+  };
+  const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+    if (errorPane.style.display !== "none") return;
+    showError("unhandled rejection", event.reason);
+  };
+  window.addEventListener("error", onWindowError);
+  window.addEventListener("unhandledrejection", onUnhandledRejection);
+
+  let app: ReturnType<typeof createApp> | null = null;
+  try {
+    app = createApp(Runebender, {
+      nodeId: options.nodeId,
+      fontPathRef: options.fontPathRef,
+      onGlyphDataChange: options.onGlyphDataChange,
+    });
+    app.config.errorHandler = (err, _instance, info) => {
+      showError(`Vue error (${info})`, err);
+    };
+    app.mount(mount);
+    statusBanner.textContent = `Runebender (${RUNEBENDER_BUNDLE_FINGERPRINT}) — editor mounted; loading font…`;
+  } catch (err) {
+    showError("createApp/mount threw synchronously", err);
+  }
 
   const cleanup = () => {
+    window.removeEventListener("error", onWindowError);
+    window.removeEventListener("unhandledrejection", onUnhandledRejection);
     document.removeEventListener("keydown", onKeyDown, true);
-    app.unmount();
+    try {
+      app?.unmount();
+    } catch (err) {
+      console.warn("[runebender-comfy] unmount threw:", err);
+    }
     root.remove();
     if (activeOverlay?.root === root) {
       activeOverlay = null;
@@ -490,20 +569,28 @@ app.registerExtension({
       workspaceSelect.serialize = false;
 
       const editButton = this.addWidget("button", "Edit", null, () => {
-        const currentFont = currentSourceValue();
-        if (!currentFont) {
-          console.warn("runebender editor requested without a loaded font");
-          return;
+        try {
+          const currentFont = currentSourceValue();
+          if (!currentFont) {
+            alert("Runebender: pick a workspace first (the Edit button needs a loaded font).");
+            return;
+          }
+          const fontPath = ref(currentFont);
+          openRunebenderOverlay({
+            nodeId: String(this.id),
+            fontPathRef: fontPath,
+            onGlyphDataChange: (value: string) => {
+              this.setDirtyCanvas(true, true);
+              this.properties.glyph_data = value;
+            },
+          });
+        } catch (err) {
+          const message = err instanceof Error
+            ? `${err.name}: ${err.message}\n\n${err.stack ?? ""}`
+            : String(err);
+          alert(`Runebender Edit click threw:\n\n${message}`);
+          console.error("[runebender-comfy] Edit click threw:", err);
         }
-        const fontPath = ref(currentFont);
-        openRunebenderOverlay({
-          nodeId: String(this.id),
-          fontPathRef: fontPath,
-          onGlyphDataChange: (value: string) => {
-            this.setDirtyCanvas(true, true);
-            this.properties.glyph_data = value;
-          },
-        });
       }, {});
       editButton.serialize = false;
 
