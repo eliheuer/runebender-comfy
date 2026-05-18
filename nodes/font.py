@@ -145,27 +145,35 @@ class Font:
     FUNCTION = "run"
 
     def run(self, source_path: str, source_kind: str = "auto", workspace_name: str = ""):
-        source_path = source_path.strip()
-        if not source_path:
-            source_path = "demo"
+        return (resolve_font_source(source_path, source_kind, workspace_name),)
 
-        if source_path.lower() == "demo" or source_path.lower() == "ufo/designspace":
-            source_path = str(DEMO_SOURCE_PATH)
-        elif source_path.startswith("workspace://"):
-            source_path = source_path.removeprefix("workspace://").strip()
 
-        if source_path and slot_from_name(source_path) is not None and not Path(source_path).expanduser().exists():
-            return (source_path,)
+def resolve_font_source(source_path: str, source_kind: str = "auto", workspace_name: str = "") -> str:
+    """Resolve a user-entered source_path into a workspace slot.
 
-        candidate = Path(source_path).expanduser()
-        if candidate.exists() and candidate.is_dir():
-            located = locate_source_root(candidate)
-            if located is not None:
-                source_path = str(located)
+    Centralized so both the (legacy) Font node and the merged Runebender
+    node share the same path-to-slot rules.
+    """
+    source_path = (source_path or "").strip()
+    if not source_path:
+        source_path = "demo"
 
-        source_kind = source_kind.strip().lower()
-        if source_kind in {"", "auto"}:
-            source_kind = None
-        workspace_name = workspace_name.strip()
-        slot = create_slot_from_path(source_path, workspace_name or None, source_kind=source_kind)
-        return (slot,)
+    if source_path.lower() == "demo" or source_path.lower() == "ufo/designspace":
+        source_path = str(DEMO_SOURCE_PATH)
+    elif source_path.startswith("workspace://"):
+        source_path = source_path.removeprefix("workspace://").strip()
+
+    if source_path and slot_from_name(source_path) is not None and not Path(source_path).expanduser().exists():
+        return source_path
+
+    candidate = Path(source_path).expanduser()
+    if candidate.exists() and candidate.is_dir():
+        located = locate_source_root(candidate)
+        if located is not None:
+            source_path = str(located)
+
+    source_kind = (source_kind or "auto").strip().lower()
+    if source_kind in {"", "auto"}:
+        source_kind = None
+    workspace_name = (workspace_name or "").strip()
+    return create_slot_from_path(source_path, workspace_name or None, source_kind=source_kind)

@@ -364,24 +364,60 @@ class WorkspaceTests(unittest.TestCase):
 
 
 class RunebenderNodeTests(unittest.TestCase):
-    def tearDown(self) -> None:
-        RUNEBENDER_STATE.clear()
+    def setUp(self) -> None:
+        self._old_workspace_dir = workspace.WORKSPACE_DIR
+        self._old_fonts_dir = workspace.FONTS_DIR
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        workspace.WORKSPACE_DIR = root / "workspace"
+        workspace.FONTS_DIR = workspace.WORKSPACE_DIR / "fonts"
 
-    def test_runebender_returns_font_and_live_glyph_svg(self) -> None:
+    def tearDown(self) -> None:
+        workspace.WORKSPACE_DIR = self._old_workspace_dir
+        workspace.FONTS_DIR = self._old_fonts_dir
+        RUNEBENDER_STATE.clear()
+        self.tmp.cleanup()
+
+    def test_runebender_live_state_overrides_everything(self) -> None:
         RUNEBENDER_STATE["42"] = {
             "font": "edited-slot",
             "glyph_data": "<svg><path d='M0 0Z'/></svg>",
         }
 
-        font, glyph_svg = Runebender().run("input-slot", "42")
+        font, glyph_svg = Runebender().run(
+            source_path="demo",
+            font="wired-slot",
+            unique_id="42",
+        )
 
         self.assertEqual(font, "edited-slot")
         self.assertEqual(glyph_svg, "<svg><path d='M0 0Z'/></svg>")
 
-    def test_runebender_falls_back_to_input_font_and_empty_svg(self) -> None:
-        font, glyph_svg = Runebender().run("input-slot", "missing")
+    def test_runebender_uses_wired_font_when_no_live_state(self) -> None:
+        font, glyph_svg = Runebender().run(
+            source_path="demo",
+            font="wired-slot",
+            unique_id="missing",
+        )
 
-        self.assertEqual(font, "input-slot")
+        self.assertEqual(font, "wired-slot")
+        self.assertEqual(glyph_svg, "")
+
+    def test_runebender_falls_back_to_existing_workspace_slot(self) -> None:
+        slot_dir = workspace.FONTS_DIR / "imported-demo"
+        slot_dir.mkdir(parents=True, exist_ok=True)
+        (slot_dir / "Demo.designspace").write_text("<designspace/>", encoding="utf-8")
+        (slot_dir / workspace.MANIFEST_NAME).write_text(
+            json.dumps({"source_kind": "ufo/designspace"}) + "\n",
+            encoding="utf-8",
+        )
+
+        font, glyph_svg = Runebender().run(
+            source_path="imported-demo",
+            unique_id="missing",
+        )
+
+        self.assertEqual(font, "imported-demo")
         self.assertEqual(glyph_svg, "")
 
 
@@ -690,12 +726,20 @@ class LocalWorkflowSmokeTests(unittest.TestCase):
     def test_local_font_workflow_chain_round_trips_through_nodes(self) -> None:
         source_path = self._make_source()
 
-        slot, = Font().run(str(source_path), "auto", "demo")
+        slot, glyph_svg = Runebender().run(
+            source_path=str(source_path),
+            workspace_name="demo",
+            unique_id=None,
+        )
+
         RUNEBENDER_STATE["7"] = {
             "font": slot,
             "glyph_data": "<svg><path d='M0 0Z'/></svg>",
         }
-        font, glyph_svg = Runebender().run(slot, "7")
+        font, glyph_svg = Runebender().run(
+            source_path=slot,
+            unique_id="7",
+        )
 
         self.assertEqual(font, slot)
         self.assertEqual(glyph_svg, "<svg><path d='M0 0Z'/></svg>")

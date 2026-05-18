@@ -48,7 +48,7 @@ class WebBundleTests(unittest.TestCase):
         self.assertEqual(module.WEB_DIRECTORY, "./web/dist")
         self.assertEqual(
             set(module.NODE_CLASS_MAPPINGS),
-            {"LoadFont", "CompileFont", "FontPreview", "FontSpecimen", "ForkFont", "Runebender", "DesignBot"},
+            {"CompileFont", "FontPreview", "FontSpecimen", "ForkFont", "Runebender", "DesignBot"},
         )
         self.assertEqual(
             set(module.NODE_DISPLAY_NAME_MAPPINGS),
@@ -85,7 +85,7 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn("Close Editor", bundle)
         self.assertIn("font input disconnect requested", bundle)
         self.assertIn("workspace/invalidate", bundle)
-        self.assertIn("rb-bundle-2026-05-17-wiretrace", bundle)
+        self.assertIn("rb-bundle-2026-05-17-runebender-merge", bundle)
         self.assertIn("console.info(`[runebender-comfy] loaded", bundle)
         self.assertIn("JSON.stringify(", bundle)
         self.assertIn("glyph_data", bundle)

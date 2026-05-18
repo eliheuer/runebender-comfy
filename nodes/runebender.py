@@ -1,9 +1,10 @@
-"""Runebender — full-screen glyph editor node.
+"""Runebender — workspace producer + full-screen glyph editor node.
 
-The actual editor is a Vue widget in `web/` backed by a Vello+Kurbo
-WASM module in `rust-core/`. This Python class is the ComfyUI graph
-endpoint: it passes a FONT workspace reference through the graph while
-keeping the live editor state available as a side-channel preview.
+This is the merged producer/editor: it owns the workspace selection
+widgets (so it can stand alone as a FONT producer) and also accepts an
+optional incoming FONT input for users who want to drive it from
+another producer in the graph. The editor itself is a Vue widget in
+`web/` backed by a Vello+Kurbo WASM module in `rust-core/`.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from aiohttp import web
 
 from server import PromptServer
 
+from .font import SOURCE_KIND_OPTIONS, resolve_font_source
 from .workspace import export_slot_text_files, invalidate_workspace_path, write_workspace_text_file
 
 
@@ -71,6 +73,33 @@ class Runebender:
     def INPUT_TYPES(cls):
         return {
             "required": {
+                "source_path": (
+                    "STRING",
+                    {
+                        "multiline": False,
+                        "default": "demo",
+                        "tooltip": "Use 'demo' for the bundled sample font, or enter an absolute path to a .designspace, .ufo, .glyphs, or .glyphspackage source. Ignored when a FONT wire is connected.",
+                    },
+                ),
+            },
+            "optional": {
+                "source_kind": (
+                    SOURCE_KIND_OPTIONS,
+                    {
+                        "default": "auto",
+                        "tooltip": "Auto-detect from the file extension unless you need to override it.",
+                        "advanced": True,
+                    },
+                ),
+                "workspace_name": (
+                    "STRING",
+                    {
+                        "multiline": False,
+                        "default": "",
+                        "tooltip": "Leave blank to auto-name the workspace from the source file.",
+                        "advanced": True,
+                    },
+                ),
                 "font": ("FONT",),
             },
             "hidden": {
@@ -79,13 +108,28 @@ class Runebender:
         }
 
     RETURN_TYPES = ("FONT", "STRING")
-    RETURN_NAMES = ("edited_font", "glyph_svg")
+    RETURN_NAMES = ("font", "glyph_svg")
     FUNCTION = "run"
 
-    def run(self, font: str, unique_id: str):
-        node_id = str(unique_id)
+    def run(
+        self,
+        source_path: str,
+        source_kind: str = "auto",
+        workspace_name: str = "",
+        font: str | None = None,
+        unique_id: str | None = None,
+    ):
+        node_id = str(unique_id) if unique_id is not None else ""
         state = RUNEBENDER_STATE.get(node_id, {})
+
+        if state.get("font"):
+            resolved = state["font"]
+        elif font:
+            resolved = font
+        else:
+            resolved = resolve_font_source(source_path, source_kind, workspace_name)
+
         return (
-            state.get("font") or font,
+            resolved,
             state.get("glyph_data") or "",
         )
