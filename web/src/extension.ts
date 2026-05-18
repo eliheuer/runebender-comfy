@@ -9,8 +9,29 @@ import { createApp, ref } from "vue";
 
 import Runebender from "./Runebender.vue";
 
-const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-18-visible-errors";
+const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-18-inject-css";
 console.info(`[runebender-comfy] loaded ${RUNEBENDER_BUNDLE_FINGERPRINT}`);
+
+// ComfyUI auto-loads .js from WEB_DIRECTORY but not sibling .css. Vite's
+// library build emits the Vue scoped styles to a separate style.css, so
+// without this injection the editor renders unstyled (file pickers as
+// raw inputs, panels as plain text lists, no canvas background).
+function injectRunebenderStyles() {
+  const STYLE_ID = "runebender-comfy-styles";
+  if (document.getElementById(STYLE_ID)) return;
+  try {
+    const cssUrl = new URL("./style.css", import.meta.url).href;
+    const link = document.createElement("link");
+    link.id = STYLE_ID;
+    link.rel = "stylesheet";
+    link.href = cssUrl;
+    document.head.appendChild(link);
+    console.info(`[runebender-comfy] injected styles from ${cssUrl}`);
+  } catch (error) {
+    console.warn("[runebender-comfy] could not inject style.css:", error);
+  }
+}
+injectRunebenderStyles();
 
 declare const window: any;
 

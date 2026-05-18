@@ -85,7 +85,7 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn("Close Editor", bundle)
         self.assertIn("font input disconnect requested", bundle)
         self.assertIn("workspace/invalidate", bundle)
-        self.assertIn("rb-bundle-2026-05-18-visible-errors", bundle)
+        self.assertIn("rb-bundle-2026-05-18-inject-css", bundle)
         self.assertIn("console.info(`[runebender-comfy] loaded", bundle)
         self.assertIn("JSON.stringify(", bundle)
         self.assertIn("glyph_data", bundle)
