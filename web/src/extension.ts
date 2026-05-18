@@ -9,7 +9,7 @@ import { createApp, ref } from "vue";
 
 import Runebender from "./Runebender.vue";
 
-const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-18-full-dpr";
+const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-18-ui-cleanup";
 console.info(`[runebender-comfy] loaded ${RUNEBENDER_BUNDLE_FINGERPRINT}`);
 
 declare const window: any;
@@ -467,19 +467,16 @@ app.registerExtension({
         folderInput.click();
       }, {});
       importFolderButton.serialize = false;
-      importFolderButton.label = `Import Folder... (${RUNEBENDER_BUNDLE_FINGERPRINT})`;
 
       const importFileButton = this.addWidget("button", "Import File...", null, () => {
         fileInput.click();
       }, {});
       importFileButton.serialize = false;
-      importFileButton.label = `Import File... (${RUNEBENDER_BUNDLE_FINGERPRINT})`;
 
       const refreshButton = this.addWidget("button", "Refresh Workspaces", null, () => {
         void refreshChoices();
       }, {});
       refreshButton.serialize = false;
-      refreshButton.label = `Refresh Workspaces (${RUNEBENDER_BUNDLE_FINGERPRINT})`;
 
       const workspaceSelect = this.addWidget("combo", "workspace", "demo", (value: any) => {
         if (sourceWidget) {
@@ -509,28 +506,28 @@ app.registerExtension({
         });
       }, {});
       editButton.serialize = false;
-      editButton.label = `Edit (${RUNEBENDER_BUNDLE_FINGERPRINT})`;
+
+      const hideWidget = (widget: any) => {
+        if (!widget) return;
+        widget.hidden = true;
+        widget.type = "hidden";
+        widget.computeSize = () => [0, -4];
+        widget.draw = () => {};
+      };
 
       if (sourceWidget) {
-        sourceWidget.hidden = true;
-        sourceWidget.computeSize = () => [0, -4];
         const origCallback = sourceWidget.callback;
         sourceWidget.callback = (...args: any[]) => {
           origCallback?.(...args);
           syncPreview();
         };
+        hideWidget(sourceWidget);
       }
-      if (sourceKindWidget) {
-        sourceKindWidget.hidden = true;
-        sourceKindWidget.computeSize = () => [0, -4];
-      }
-      if (workspaceNameWidget) {
-        workspaceNameWidget.hidden = true;
-        workspaceNameWidget.computeSize = () => [0, -4];
-      }
+      hideWidget(sourceKindWidget);
+      hideWidget(workspaceNameWidget);
 
       const [oldWidth, oldHeight] = this.size;
-      this.setSize([Math.max(oldWidth, 420), Math.max(oldHeight, 320)]);
+      this.setSize([Math.max(oldWidth, 360), Math.max(oldHeight, 220)]);
 
       void refreshChoices();
       syncPreview();
