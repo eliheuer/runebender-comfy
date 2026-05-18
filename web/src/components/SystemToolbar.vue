@@ -2,18 +2,23 @@
 // File-operation toolbar peer for runebender-xilem's
 // `components/system_toolbar.rs`. Save is wired through the host
 // and stays disabled only when there is no loaded font/workspace.
+// Close is shown only when the host provides somewhere to close to
+// (i.e. running embedded inside another app like ComfyUI).
 
 withDefaults(
   defineProps<{
     saveEnabled?: boolean;
+    closeEnabled?: boolean;
   }>(),
   {
     saveEnabled: false,
+    closeEnabled: false,
   },
 );
 
 const emit = defineEmits<{
   (e: "save"): void;
+  (e: "close"): void;
 }>();
 
 function onSave(enabled: boolean) {
@@ -38,6 +43,18 @@ function onSave(enabled: boolean) {
         <path d="M5 3h12l2 2v16H5V3Z" />
         <path d="M8 3v6h8V3M8 21v-7h8v7" />
         <path d="M10 6h4" />
+      </svg>
+    </button>
+    <button
+      v-if="closeEnabled"
+      type="button"
+      class="system-btn close-btn"
+      title="Close editor"
+      aria-label="Close editor"
+      @click="emit('close')"
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M6 6l12 12M18 6l-12 12" />
       </svg>
     </button>
   </div>
@@ -74,6 +91,11 @@ function onSave(enabled: boolean) {
 
 .system-btn:not(:disabled):hover {
   color: var(--rb-accent, #66ee88);
+}
+
+.close-btn:not(:disabled):hover {
+  color: var(--rb-warning, #ffdd33);
+  border-color: var(--rb-warning, #ffdd33);
 }
 
 .system-btn.disabled {

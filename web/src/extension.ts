@@ -9,7 +9,7 @@ import { createApp, ref } from "vue";
 
 import Runebender from "./Runebender.vue";
 
-const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-18-chrome-inset";
+const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-18-close-in-toolbar";
 console.info(`[runebender-comfy] loaded ${RUNEBENDER_BUNDLE_FINGERPRINT}`);
 
 // ComfyUI auto-loads .js from WEB_DIRECTORY but not sibling .css. Vite's
@@ -333,30 +333,17 @@ function openRunebenderOverlay(options: {
     "overflow:hidden",
   ].join(";");
 
-  const closeButton = document.createElement("button");
-  closeButton.type = "button";
-  closeButton.textContent = "Close Editor";
-  closeButton.style.cssText = [
-    "position:absolute",
-    "right:8px",
-    "top:8px",
-    "z-index:2",
-    "height:32px",
-    "padding:0 12px",
-    "border-radius:6px",
-    "border:1px solid var(--input-border,#555)",
-    "background:var(--button-bg,#1f1f1f)",
-    "color:var(--fg,#eee)",
-    "font:12px ui-sans-serif, system-ui, sans-serif",
-    "cursor:pointer",
-  ].join(";");
+  // The Close button now lives inside the editor's own SystemToolbar
+  // (top-right, next to Save) via the onCloseRequested prop passed to
+  // the Vue app. Keep a tiny diagnostic status banner up top until the
+  // editor is mounted, then hide it.
 
   const statusBanner = document.createElement("div");
   statusBanner.style.cssText = [
     "position:absolute",
     "left:8px",
     "top:8px",
-    "right:120px",
+    "right:8px",
     "z-index:2",
     "padding:6px 12px",
     "border-radius:6px",
@@ -407,7 +394,7 @@ function openRunebenderOverlay(options: {
     "overflow:hidden",
   ].join(";");
 
-  root.append(mount, statusBanner, errorPane, closeButton);
+  root.append(mount, statusBanner, errorPane);
   document.body.appendChild(root);
 
   // Anything thrown by Vue setup or async WASM init while the overlay
@@ -424,23 +411,29 @@ function openRunebenderOverlay(options: {
   window.addEventListener("error", onWindowError);
   window.addEventListener("unhandledrejection", onUnhandledRejection);
 
+  // Forward-declared so the Vue app can call it via onCloseRequested.
+  let cleanup: () => void = () => {};
+
   let app: ReturnType<typeof createApp> | null = null;
   try {
     app = createApp(Runebender, {
       nodeId: options.nodeId,
       fontPathRef: options.fontPathRef,
       onGlyphDataChange: options.onGlyphDataChange,
+      onCloseRequested: () => cleanup(),
     });
     app.config.errorHandler = (err, _instance, info) => {
       showError(`Vue error (${info})`, err);
     };
     app.mount(mount);
-    statusBanner.textContent = `Runebender (${RUNEBENDER_BUNDLE_FINGERPRINT}) — editor mounted; loading font…`;
+    // Editor mounted cleanly — hide the diagnostic banner so the
+    // editor's own toolbar is the only chrome on screen.
+    statusBanner.style.display = "none";
   } catch (err) {
     showError("createApp/mount threw synchronously", err);
   }
 
-  const cleanup = () => {
+  cleanup = () => {
     window.removeEventListener("error", onWindowError);
     window.removeEventListener("unhandledrejection", onUnhandledRejection);
     document.removeEventListener("keydown", onKeyDown, true);
@@ -462,7 +455,6 @@ function openRunebenderOverlay(options: {
     }
   };
 
-  closeButton.addEventListener("click", cleanup);
   document.addEventListener("keydown", onKeyDown, true);
 
   activeOverlay = { root, cleanup };

@@ -47,6 +47,9 @@ const props = defineProps<{
   nodeId?: string;
   fontPathRef?: { value: string };
   onGlyphDataChange?: (value: string) => void;
+  // Host-provided callback. When set (e.g. ComfyUI embedded mode), the
+  // editor shows a Close button next to Save and invokes this on click.
+  onCloseRequested?: () => void;
 }>();
 
 const currentFontPath = computed(() => props.fontPathRef?.value ?? "");
@@ -4373,8 +4376,10 @@ onBeforeUnmount(() => {
       :active-master="activeMasterIndex"
       :master-previews="masterPreviewSvgs"
       :save-enabled="glyphNames.length > 0"
+      :close-enabled="!!props.onCloseRequested"
       @select-master="onSelectMaster"
       @save="onSave"
+      @close="props.onCloseRequested?.()"
     />
 
     <!-- Content row: left rail switches based on view mode

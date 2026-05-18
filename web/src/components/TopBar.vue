@@ -28,6 +28,9 @@ defineProps<{
   masterPreviews?: Array<string | undefined>;
   /** False when there is no loaded font/workspace to persist. */
   saveEnabled?: boolean;
+  /** True when the host wants a Close button next to Save (e.g. when
+   *  embedded as a ComfyUI overlay). */
+  closeEnabled?: boolean;
 }>();
 
 function masterLabel(name: string): string {
@@ -37,6 +40,7 @@ function masterLabel(name: string): string {
 defineEmits<{
   (e: "selectMaster", index: number): void;
   (e: "save"): void;
+  (e: "close"): void;
 }>();
 </script>
 
@@ -79,7 +83,9 @@ defineEmits<{
 
     <SystemToolbar
       :save-enabled="saveEnabled"
+      :close-enabled="closeEnabled"
       @save="$emit('save')"
+      @close="$emit('close')"
     />
   </div>
 </template>
