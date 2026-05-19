@@ -17,9 +17,11 @@ from .font import DEMO_SOURCE_PATH, SOURCE_KIND_OPTIONS, resolve_font_source
 from .workspace import (
     FONTS_DIR,
     create_slot_from_path,
+    export_slot_to_directory,
     export_slot_text_files,
     invalidate_workspace_path,
-    write_workspace_text_file,
+    source_info_for_slot,
+    write_workspace_text_file_with_result,
 )
 
 
@@ -80,7 +82,14 @@ async def get_workspace_slot(request):
     if slot == "demo":
         _ensure_demo_workspace_fresh()
     files = export_slot_text_files(slot)
-    return web.json_response({"slot": slot, "files": files})
+    source_info = source_info_for_slot(slot)
+    return web.json_response({
+        "slot": slot,
+        "files": files,
+        "linked_source": source_info.linked,
+        "origin_root": str(source_info.origin_root) if source_info.origin_root is not None else "",
+        "origin_source": str(source_info.origin_source) if source_info.origin_source is not None else "",
+    })
 
 
 @routes.post("/runebender/workspace/write")
@@ -90,8 +99,36 @@ async def write_workspace_file(request):
     text = str(data.get("text", ""))
     if not path:
         raise web.HTTPBadRequest(reason="path required")
-    write_workspace_text_file(path, text)
-    return web.json_response({"success": True, "path": path})
+    result = write_workspace_text_file_with_result(path, text)
+    return web.json_response({
+        "success": True,
+        "path": path,
+        "workspace_path": str(result.workspace_path),
+        "source_path": str(result.source_path) if result.source_path is not None else "",
+        "saved_to_source": result.source_path is not None,
+    })
+
+
+@routes.post("/runebender/workspace/save_as")
+async def save_workspace_as(request):
+    data = await request.post()
+    slot = str(data.get("slot", "")).strip()
+    destination = str(data.get("destination", "")).strip()
+    relink = str(data.get("relink", "")).strip().lower() in {"1", "true", "yes", "on"}
+    if not slot:
+        raise web.HTTPBadRequest(reason="slot required")
+    if not destination:
+        raise web.HTTPBadRequest(reason="destination required")
+    result = export_slot_to_directory(slot, destination, relink=relink)
+    return web.json_response({
+        "success": True,
+        "slot": slot,
+        "destination": str(result.destination),
+        "copied_paths": [str(path) for path in result.copied_paths],
+        "linked_source": result.linked,
+        "origin_root": str(result.origin_root) if result.origin_root is not None else "",
+        "origin_source": str(result.origin_source) if result.origin_source is not None else "",
+    })
 
 
 @routes.post("/runebender/workspace/invalidate")

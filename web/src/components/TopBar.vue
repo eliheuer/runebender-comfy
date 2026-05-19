@@ -19,6 +19,8 @@ defineProps<{
   unsaved?: boolean;
   /** Last successful save time, e.g. "03:42 PM". */
   lastSaved?: string | null;
+  /** Source destination summary, e.g. linked disk root. */
+  sourceLabel?: string | null;
   /** Names of available masters. Stubbed to a single entry until
    *  designspace loading lands (Phase 7). */
   masters?: string[];
@@ -28,6 +30,8 @@ defineProps<{
   masterPreviews?: Array<string | undefined>;
   /** False when there is no loaded font/workspace to persist. */
   saveEnabled?: boolean;
+  /** False when there is no loaded workspace to export. */
+  saveAsEnabled?: boolean;
   /** True when the host wants a Close button next to Save (e.g. when
    *  embedded as a ComfyUI overlay). */
   closeEnabled?: boolean;
@@ -40,6 +44,7 @@ function masterLabel(name: string): string {
 defineEmits<{
   (e: "selectMaster", index: number): void;
   (e: "save"): void;
+  (e: "saveAs"): void;
   (e: "close"): void;
 }>();
 </script>
@@ -57,6 +62,7 @@ defineEmits<{
         :class="{ saved: !unsaved && lastSaved }"
       >
         {{ !unsaved && lastSaved ? `Saved ${lastSaved}` : "Not saved" }}
+        <span v-if="sourceLabel" class="source-label" :title="sourceLabel"> · {{ sourceLabel }}</span>
       </div>
     </div>
 
@@ -83,8 +89,10 @@ defineEmits<{
 
     <SystemToolbar
       :save-enabled="saveEnabled"
+      :save-as-enabled="saveAsEnabled"
       :close-enabled="closeEnabled"
       @save="$emit('save')"
+      @save-as="$emit('saveAs')"
       @close="$emit('close')"
     />
   </div>
@@ -143,9 +151,16 @@ defineEmits<{
   color: var(--rb-warning, #ffdd33);
   font: 16px ui-sans-serif, system-ui, sans-serif;
   flex-shrink: 0;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .save-status.saved {
   color: var(--rb-accent, #66ee88);
+}
+.source-label {
+  color: var(--rb-secondary-text, #707070);
 }
 
 .masters {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -11,6 +12,8 @@ from pathlib import Path
 from unittest import mock
 
 from nodes import workspace
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class _Routes:
@@ -142,6 +145,53 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIn("package_path", manifest)
         self.assertTrue((workspace.FONTS_DIR / "demo" / manifest["package_path"]).exists())
 
+    def test_compile_slot_preserves_linked_source_manifest_provenance(self) -> None:
+        source_root = Path(self.tmp.name) / "source"
+        glyphs_dir = source_root / "Demo.ufo" / "glyphs"
+        glyphs_dir.mkdir(parents=True)
+        (glyphs_dir / "A_.glif").write_text("<glyph name=\"A\"/>", encoding="utf-8")
+        (source_root / "Demo.ufo" / "metainfo.plist").write_text("<plist/>", encoding="utf-8")
+        designspace = source_root / "Demo.designspace"
+        designspace.write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<designspace format=\"5\">
+  <sources>
+    <source name=\"Regular\" filename=\"Demo.ufo\"/>
+  </sources>
+</designspace>
+""",
+            encoding="utf-8",
+        )
+        slot = workspace.create_slot_from_path(str(designspace), "linked-demo", linked=True)
+
+        def fake_run(cmd, check, cwd, **kwargs):
+            self.assertTrue(check)
+            self.assertTrue(kwargs["capture_output"])
+            self.assertTrue(kwargs["text"])
+            out_index = cmd.index("--output-file") + 1
+            out_path = Path(cmd[out_index])
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_bytes(b"dummy font")
+            return mock.Mock(returncode=0)
+
+        with mock.patch.object(workspace.shutil, "which", return_value="/usr/bin/fontc"), \
+             mock.patch.object(workspace.subprocess, "run", side_effect=fake_run):
+            workspace.compile_slot(slot, force=True)
+
+        manifest = json.loads((workspace.FONTS_DIR / slot / workspace.MANIFEST_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(manifest["origin_mode"], "linked")
+        self.assertEqual(Path(manifest["origin_root"]).resolve(), source_root.resolve())
+        self.assertEqual(Path(manifest["origin_source"]).resolve(), designspace.resolve())
+        self.assertEqual(manifest["compile_backend"], "fontc")
+
+        result = workspace.write_workspace_text_file_with_result(
+            "linked-demo/Demo.ufo/glyphs/A_.glif",
+            "<glyph name=\"A\"><advance width=\"620\"/></glyph>",
+        )
+        self.assertIsNotNone(result.source_path)
+        self.assertEqual(result.source_path.resolve(), (source_root / "Demo.ufo" / "glyphs" / "A_.glif").resolve())
+        self.assertIn('width="620"', (source_root / "Demo.ufo" / "glyphs" / "A_.glif").read_text(encoding="utf-8"))
+
     def test_compile_slot_rebuilds_package_when_no_compiled_artifact(self) -> None:
         slot_dir = self._make_slot()
         slot_info = workspace.slot_from_name("demo")
@@ -217,6 +267,138 @@ class WorkspaceTests(unittest.TestCase):
 
         self.assertTrue((slot_dir / "Demo.designspace").exists())
         self.assertTrue((slot_dir / "Demo.ufo" / "glyphs" / "A_.glif").exists())
+
+    def test_linked_designspace_write_mirrors_back_to_original_source(self) -> None:
+        source_dir = Path(self.tmp.name) / "linked-source"
+        glyphs_dir = source_dir / "Demo.ufo" / "glyphs"
+        glyphs_dir.mkdir(parents=True)
+        (source_dir / "Demo.ufo" / "metainfo.plist").write_text("<plist/>", encoding="utf-8")
+        original_glif = glyphs_dir / "A_.glif"
+        original_glif.write_text("<glyph name=\"A\"><advance width=\"600\"/></glyph>", encoding="utf-8")
+        designspace = source_dir / "Demo.designspace"
+        designspace.write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<designspace format=\"5\">
+  <sources>
+    <source name=\"Regular\" filename=\"Demo.ufo\"/>
+  </sources>
+</designspace>
+""",
+            encoding="utf-8",
+        )
+
+        slot = workspace.create_slot_from_path(str(designspace), "linked-demo", linked=True)
+        slot_dir = workspace.FONTS_DIR / slot
+        workspace_glif = slot_dir / "Demo.ufo" / "glyphs" / "A_.glif"
+
+        result = workspace.write_workspace_text_file_with_result(
+            "linked-demo/Demo.ufo/glyphs/A_.glif",
+            "<glyph name=\"A\"><advance width=\"720\"/></glyph>",
+        )
+        designspace_result = workspace.write_workspace_text_file_with_result(
+            "linked-demo/Demo.designspace",
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<designspace format=\"5\">
+  <sources>
+    <source name=\"Regular\" filename=\"Demo.ufo\"/>
+  </sources>
+  <axes>
+    <axis tag=\"wght\" name=\"Weight\" minimum=\"400\" maximum=\"700\" default=\"400\"/>
+  </axes>
+</designspace>
+""",
+        )
+
+        manifest = json.loads((slot_dir / workspace.MANIFEST_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(manifest["origin_mode"], "linked")
+        self.assertEqual(Path(manifest["origin_root"]).resolve(), source_dir.resolve())
+        source_info = workspace.source_info_for_slot("linked-demo")
+        self.assertTrue(source_info.linked)
+        self.assertEqual(source_info.origin_root, source_dir.resolve())
+        self.assertEqual(source_info.origin_source, designspace.resolve())
+        self.assertEqual(result.workspace_path.resolve(), workspace_glif.resolve())
+        self.assertEqual(result.source_path.resolve(), original_glif.resolve())  # type: ignore[union-attr]
+        self.assertEqual(designspace_result.source_path.resolve(), designspace.resolve())  # type: ignore[union-attr]
+        self.assertIn('width="720"', workspace_glif.read_text(encoding="utf-8"))
+        self.assertIn('width="720"', original_glif.read_text(encoding="utf-8"))
+        self.assertIn('tag="wght"', designspace.read_text(encoding="utf-8"))
+
+    def test_text_writes_normalize_browser_crlf_to_existing_lf_style(self) -> None:
+        source_dir = Path(self.tmp.name) / "linked-source"
+        glyphs_dir = source_dir / "Demo.ufo" / "glyphs"
+        glyphs_dir.mkdir(parents=True)
+        (source_dir / "Demo.ufo" / "metainfo.plist").write_text("<plist/>\n", encoding="utf-8")
+        original_glif = glyphs_dir / "A_.glif"
+        original_glif.write_text("<glyph name=\"A\">\n  <advance width=\"600\"/>\n</glyph>\n", encoding="utf-8")
+        designspace = source_dir / "Demo.designspace"
+        designspace.write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<designspace format=\"5\">
+  <sources>
+    <source name=\"Regular\" filename=\"Demo.ufo\"/>
+  </sources>
+</designspace>
+""",
+            encoding="utf-8",
+        )
+        workspace.create_slot_from_path(str(designspace), "linked-demo", linked=True)
+
+        workspace.write_workspace_text_file_with_result(
+            "linked-demo/Demo.ufo/glyphs/A_.glif",
+            "<glyph name=\"A\">\r\n  <advance width=\"720\"/>\r\n</glyph>\r\n",
+        )
+
+        self.assertNotIn(b"\r\n", (workspace.FONTS_DIR / "linked-demo" / "Demo.ufo" / "glyphs" / "A_.glif").read_bytes())
+        self.assertNotIn(b"\r\n", original_glif.read_bytes())
+        self.assertIn(b'width="720"', original_glif.read_bytes())
+
+    def test_export_slot_to_directory_copies_source_and_can_relink(self) -> None:
+        self._make_slot("managed-demo")
+        destination = Path(self.tmp.name) / "exported-source"
+
+        result = workspace.export_slot_to_directory(
+            "managed-demo",
+            str(destination),
+            relink=True,
+        )
+
+        exported_designspace = destination / "Demo.designspace"
+        exported_glif = destination / "Demo.ufo" / "glyphs" / "A_.glif"
+        self.assertEqual(result.destination, destination.resolve())
+        self.assertTrue(exported_designspace.exists())
+        self.assertTrue(exported_glif.exists())
+        self.assertTrue(result.linked)
+        self.assertEqual(result.origin_root, destination.resolve())
+        self.assertEqual(result.origin_source, exported_designspace.resolve())
+
+        write_result = workspace.write_workspace_text_file_with_result(
+            "managed-demo/Demo.ufo/glyphs/A_.glif",
+            "<glyph name=\"A\"><advance width=\"755\"/></glyph>",
+        )
+
+        self.assertEqual(write_result.source_path, exported_glif.resolve())
+        self.assertIn('width="755"', exported_glif.read_text(encoding="utf-8"))
+
+    def test_export_slot_to_directory_without_relink_leaves_original_source_unlinked(self) -> None:
+        self._make_slot("managed-demo")
+        destination = Path(self.tmp.name) / "exported-copy"
+
+        result = workspace.export_slot_to_directory(
+            "managed-demo",
+            str(destination),
+            relink=False,
+        )
+
+        self.assertFalse(result.linked)
+        self.assertIsNone(result.origin_source)
+        self.assertTrue((destination / "Demo.designspace").exists())
+        self.assertTrue((destination / "Demo.ufo" / "glyphs" / "A_.glif").exists())
+        write_result = workspace.write_workspace_text_file_with_result(
+            "managed-demo/Demo.ufo/glyphs/A_.glif",
+            "<glyph name=\"A\"><advance width=\"755\"/></glyph>",
+        )
+        self.assertIsNone(write_result.source_path)
+        self.assertNotIn('width="755"', (destination / "Demo.ufo" / "glyphs" / "A_.glif").read_text(encoding="utf-8"))
 
     def test_locate_source_root_finds_nested_designspace(self) -> None:
         project_root = Path(self.tmp.name) / "project"
@@ -557,6 +739,198 @@ class FontImportRouteTests(unittest.TestCase):
         self.assertEqual(payload["source_root"], "Demo.designspace")
         self.assertTrue((workspace.FONTS_DIR / "Demo" / "Demo.designspace").exists())
 
+    def test_link_source_route_creates_linked_workspace_slot(self) -> None:
+        from nodes.font import link_source
+
+        source_dir = Path(self.tmp.name) / "linked"
+        glyphs_dir = source_dir / "Demo.ufo" / "glyphs"
+        glyphs_dir.mkdir(parents=True)
+        (glyphs_dir / "A_.glif").write_text("<glyph name=\"A\"/>", encoding="utf-8")
+        (source_dir / "Demo.ufo" / "metainfo.plist").write_text("<plist/>", encoding="utf-8")
+        designspace = source_dir / "Demo.designspace"
+        designspace.write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<designspace format=\"5\">
+  <sources>
+    <source name=\"Regular\" filename=\"Demo.ufo\"/>
+  </sources>
+</designspace>
+""",
+            encoding="utf-8",
+        )
+
+        class _Request:
+            async def post(self):
+                return {
+                    "source_path": str(designspace),
+                    "workspace_name": "linked-demo",
+                    "source_kind": "auto",
+                }
+
+        payload = asyncio.run(link_source(_Request()))
+        manifest = json.loads((workspace.FONTS_DIR / "linked-demo" / workspace.MANIFEST_NAME).read_text(encoding="utf-8"))
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["slot"], "linked-demo")
+        self.assertEqual(manifest["origin_mode"], "linked")
+        self.assertEqual(Path(manifest["origin_root"]).resolve(), source_dir.resolve())
+        self.assertTrue((workspace.FONTS_DIR / "linked-demo" / "Demo.ufo" / "glyphs" / "A_.glif").exists())
+
+    def test_import_source_path_route_creates_managed_copy_slot(self) -> None:
+        from nodes.font import import_source_path
+
+        source_dir = Path(self.tmp.name) / "import-copy"
+        glyphs_dir = source_dir / "Demo.ufo" / "glyphs"
+        glyphs_dir.mkdir(parents=True)
+        (glyphs_dir / "A_.glif").write_text("<glyph name=\"A\"/>", encoding="utf-8")
+        (source_dir / "Demo.ufo" / "metainfo.plist").write_text("<plist/>", encoding="utf-8")
+        designspace = source_dir / "Demo.designspace"
+        designspace.write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<designspace format=\"5\">
+  <sources>
+    <source name=\"Regular\" filename=\"Demo.ufo\"/>
+  </sources>
+</designspace>
+""",
+            encoding="utf-8",
+        )
+
+        class _Request:
+            async def post(self):
+                return {
+                    "source_path": str(designspace),
+                    "workspace_name": "managed-copy",
+                    "source_kind": "auto",
+                }
+
+        payload = asyncio.run(import_source_path(_Request()))
+        manifest = json.loads((workspace.FONTS_DIR / "managed-copy" / workspace.MANIFEST_NAME).read_text(encoding="utf-8"))
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["slot"], "managed-copy")
+        self.assertFalse(payload["linked_source"])
+        self.assertNotIn("origin_mode", manifest)
+        self.assertTrue((workspace.FONTS_DIR / "managed-copy" / "Demo.ufo" / "glyphs" / "A_.glif").exists())
+
+    def test_imported_copy_write_does_not_modify_original_disk_source(self) -> None:
+        from nodes.font import import_font
+        from nodes.runebender import write_workspace_file
+
+        source_dir = Path(self.tmp.name) / "original-source"
+        glyphs_dir = source_dir / "Demo.ufo" / "glyphs"
+        glyphs_dir.mkdir(parents=True)
+        designspace = source_dir / "Demo.designspace"
+        designspace.write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<designspace format=\"5\">
+  <sources>
+    <source name=\"Regular\" filename=\"Demo.ufo\"/>
+  </sources>
+</designspace>
+""",
+            encoding="utf-8",
+        )
+        (source_dir / "Demo.ufo" / "metainfo.plist").write_text("<plist/>", encoding="utf-8")
+        original_glif = glyphs_dir / "A_.glif"
+        original_glif.write_text("<glyph name=\"A\"><advance width=\"600\"/></glyph>", encoding="utf-8")
+
+        class _UploadedFile:
+            def __init__(self, filename: str, content: bytes):
+                self.filename = filename
+                self.file = types.SimpleNamespace(read=lambda: content)
+
+        files = [
+            _UploadedFile("project/Demo.designspace", designspace.read_bytes()),
+            _UploadedFile("project/Demo.ufo/metainfo.plist", (source_dir / "Demo.ufo" / "metainfo.plist").read_bytes()),
+            _UploadedFile("project/Demo.ufo/glyphs/A_.glif", original_glif.read_bytes()),
+        ]
+        import_payload = asyncio.run(import_font(self._request_with_files(
+            files,
+            {"workspace_name": "imported-copy", "source_kind": "auto"},
+        )))
+        self.assertEqual(import_payload["slot"], "imported-copy")
+
+        class _WriteRequest:
+            async def post(self):
+                return {
+                    "path": "imported-copy/Demo.ufo/glyphs/A_.glif",
+                    "text": "<glyph name=\"A\"><advance width=\"720\"/></glyph>",
+                }
+
+        write_payload = asyncio.run(write_workspace_file(_WriteRequest()))
+
+        self.assertFalse(write_payload["saved_to_source"])
+        self.assertIn('width="720"', (workspace.FONTS_DIR / "imported-copy" / "Demo.ufo" / "glyphs" / "A_.glif").read_text(encoding="utf-8"))
+        self.assertIn('width="600"', original_glif.read_text(encoding="utf-8"))
+
+    def test_imported_copy_save_as_relink_then_writes_to_exported_folder(self) -> None:
+        from nodes.font import import_font
+        from nodes.runebender import save_workspace_as, write_workspace_file
+
+        source_dir = Path(self.tmp.name) / "original-source"
+        glyphs_dir = source_dir / "Demo.ufo" / "glyphs"
+        glyphs_dir.mkdir(parents=True)
+        designspace = source_dir / "Demo.designspace"
+        designspace.write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<designspace format=\"5\">
+  <sources>
+    <source name=\"Regular\" filename=\"Demo.ufo\"/>
+  </sources>
+</designspace>
+""",
+            encoding="utf-8",
+        )
+        (source_dir / "Demo.ufo" / "metainfo.plist").write_text("<plist/>", encoding="utf-8")
+        original_glif = glyphs_dir / "A_.glif"
+        original_glif.write_text("<glyph name=\"A\"><advance width=\"600\"/></glyph>", encoding="utf-8")
+
+        class _UploadedFile:
+            def __init__(self, filename: str, content: bytes):
+                self.filename = filename
+                self.file = types.SimpleNamespace(read=lambda: content)
+
+        files = [
+            _UploadedFile("project/Demo.designspace", designspace.read_bytes()),
+            _UploadedFile("project/Demo.ufo/metainfo.plist", (source_dir / "Demo.ufo" / "metainfo.plist").read_bytes()),
+            _UploadedFile("project/Demo.ufo/glyphs/A_.glif", original_glif.read_bytes()),
+        ]
+        import_payload = asyncio.run(import_font(self._request_with_files(
+            files,
+            {"workspace_name": "imported-save-as", "source_kind": "auto"},
+        )))
+        self.assertEqual(import_payload["slot"], "imported-save-as")
+
+        destination = Path(self.tmp.name) / "exported-source"
+
+        class _SaveAsRequest:
+            async def post(self):
+                return {
+                    "slot": "imported-save-as",
+                    "destination": str(destination),
+                    "relink": "true",
+                }
+
+        save_as_payload = asyncio.run(save_workspace_as(_SaveAsRequest()))
+        self.assertTrue(save_as_payload["linked_source"])
+        self.assertEqual(Path(save_as_payload["origin_root"]).resolve(), destination.resolve())
+
+        class _WriteRequest:
+            async def post(self):
+                return {
+                    "path": "imported-save-as/Demo.ufo/glyphs/A_.glif",
+                    "text": "<glyph name=\"A\"><advance width=\"730\"/></glyph>",
+                }
+
+        write_payload = asyncio.run(write_workspace_file(_WriteRequest()))
+
+        exported_glif = destination / "Demo.ufo" / "glyphs" / "A_.glif"
+        self.assertTrue(write_payload["saved_to_source"])
+        self.assertEqual(Path(write_payload["source_path"]).resolve(), exported_glif.resolve())
+        self.assertIn('width="730"', exported_glif.read_text(encoding="utf-8"))
+        self.assertIn('width="600"', original_glif.read_text(encoding="utf-8"))
+
 
 class WorkspaceInvalidateRouteTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -606,6 +980,278 @@ class WorkspaceInvalidateRouteTests(unittest.TestCase):
         self.assertFalse(package.exists())
         manifest = json.loads((slot_dir / workspace.MANIFEST_NAME).read_text(encoding="utf-8"))
         self.assertEqual(manifest, {"source_kind": "ufo/designspace"})
+
+    def test_workspace_route_reports_linked_source_metadata(self) -> None:
+        from nodes.runebender import get_workspace_slot
+
+        source_dir = Path(self.tmp.name) / "linked"
+        glyphs_dir = source_dir / "Demo.ufo" / "glyphs"
+        glyphs_dir.mkdir(parents=True)
+        (glyphs_dir / "A_.glif").write_text("<glyph name=\"A\"/>", encoding="utf-8")
+        (source_dir / "Demo.ufo" / "metainfo.plist").write_text("<plist/>", encoding="utf-8")
+        designspace = source_dir / "Demo.designspace"
+        designspace.write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<designspace format=\"5\">
+  <sources>
+    <source name=\"Regular\" filename=\"Demo.ufo\"/>
+  </sources>
+</designspace>
+""",
+            encoding="utf-8",
+        )
+        workspace.create_slot_from_path(str(designspace), "linked-demo", linked=True)
+
+        class _Request:
+            match_info = {"slot": "linked-demo"}
+
+        payload = asyncio.run(get_workspace_slot(_Request()))
+
+        self.assertEqual(payload["slot"], "linked-demo")
+        self.assertTrue(payload["linked_source"])
+        self.assertEqual(Path(payload["origin_root"]).resolve(), source_dir.resolve())
+        self.assertEqual(Path(payload["origin_source"]).resolve(), designspace.resolve())
+
+    def test_linked_workspace_routes_round_trip_glif_and_designspace_to_source(self) -> None:
+        from nodes.font import link_source
+        from nodes.runebender import get_workspace_slot, write_workspace_file
+
+        source_dir = Path(self.tmp.name) / "linked"
+        glyphs_dir = source_dir / "Demo.ufo" / "glyphs"
+        glyphs_dir.mkdir(parents=True)
+        original_glif = glyphs_dir / "A_.glif"
+        original_glif.write_text(
+            "<glyph name=\"A\"><advance width=\"600\"/></glyph>",
+            encoding="utf-8",
+        )
+        (source_dir / "Demo.ufo" / "metainfo.plist").write_text("<plist/>", encoding="utf-8")
+        designspace = source_dir / "Demo.designspace"
+        designspace.write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<designspace format=\"5\">
+  <sources>
+    <source name=\"Regular\" filename=\"Demo.ufo\"/>
+  </sources>
+</designspace>
+""",
+            encoding="utf-8",
+        )
+
+        class _LinkRequest:
+            async def post(self):
+                return {
+                    "source_path": str(designspace),
+                    "workspace_name": "linked-demo",
+                    "source_kind": "auto",
+                }
+
+        link_payload = asyncio.run(link_source(_LinkRequest()))
+        self.assertEqual(link_payload["slot"], "linked-demo")
+
+        class _WorkspaceRequest:
+            match_info = {"slot": "linked-demo"}
+
+        workspace_payload = asyncio.run(get_workspace_slot(_WorkspaceRequest()))
+        exported_paths = {entry["path"] for entry in workspace_payload["files"]}
+        self.assertTrue(workspace_payload["linked_source"])
+        self.assertIn("Demo.designspace", exported_paths)
+        self.assertIn("Demo.ufo/glyphs/A_.glif", exported_paths)
+
+        class _WriteGlifRequest:
+            async def post(self):
+                return {
+                    "path": "linked-demo/Demo.ufo/glyphs/A_.glif",
+                    "text": "<glyph name=\"A\"><advance width=\"720\"/></glyph>",
+                }
+
+        glif_payload = asyncio.run(write_workspace_file(_WriteGlifRequest()))
+        self.assertTrue(glif_payload["success"])
+        self.assertTrue(glif_payload["saved_to_source"])
+        self.assertEqual(Path(glif_payload["source_path"]).resolve(), original_glif.resolve())
+        self.assertIn('width="720"', original_glif.read_text(encoding="utf-8"))
+
+        class _WriteDesignspaceRequest:
+            async def post(self):
+                return {
+                    "path": "linked-demo/Demo.designspace",
+                    "text": """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<designspace format=\"5\">
+  <sources>
+    <source name=\"Regular\" filename=\"Demo.ufo\"/>
+  </sources>
+  <axes>
+    <axis tag=\"wght\" name=\"Weight\" minimum=\"400\" maximum=\"700\" default=\"400\"/>
+  </axes>
+</designspace>
+""",
+                }
+
+        designspace_payload = asyncio.run(write_workspace_file(_WriteDesignspaceRequest()))
+        self.assertTrue(designspace_payload["success"])
+        self.assertTrue(designspace_payload["saved_to_source"])
+        self.assertEqual(Path(designspace_payload["source_path"]).resolve(), designspace.resolve())
+        self.assertIn('tag="wght"', designspace.read_text(encoding="utf-8"))
+
+    def test_macos_source_picker_route_returns_chosen_file_path(self) -> None:
+        from nodes.font import choose_source
+
+        class _Request:
+            async def post(self):
+                return {"mode": "file"}
+
+        completed = mock.Mock(returncode=0, stdout="/tmp/Demo.designspace\n", stderr="")
+        with mock.patch("nodes.font.sys.platform", "darwin"), \
+             mock.patch("nodes.font.subprocess.run", return_value=completed) as run:
+            payload = asyncio.run(choose_source(_Request()))
+
+        self.assertEqual(payload["path"], "/tmp/Demo.designspace")
+        run.assert_called_once()
+        self.assertIn("choose file", run.call_args.args[0][2])
+
+    def test_macos_source_picker_route_returns_chosen_folder_path(self) -> None:
+        from nodes.font import choose_source
+
+        class _Request:
+            async def post(self):
+                return {"mode": "folder"}
+
+        completed = mock.Mock(returncode=0, stdout="/tmp/Demo.ufo/\n", stderr="")
+        with mock.patch("nodes.font.sys.platform", "darwin"), \
+             mock.patch("nodes.font.subprocess.run", return_value=completed) as run:
+            payload = asyncio.run(choose_source(_Request()))
+
+        self.assertEqual(payload["path"], "/tmp/Demo.ufo/")
+        run.assert_called_once()
+        self.assertIn("choose folder", run.call_args.args[0][2])
+
+    def test_macos_source_picker_route_reports_cancelled_selection(self) -> None:
+        from nodes.font import choose_source
+
+        class _Request:
+            async def post(self):
+                return {"mode": "folder"}
+
+        completed = mock.Mock(returncode=1, stdout="", stderr="User canceled. (-128)")
+        with mock.patch("nodes.font.sys.platform", "darwin"), \
+             mock.patch("nodes.font.subprocess.run", return_value=completed):
+            payload = asyncio.run(choose_source(_Request()))
+
+        self.assertFalse(payload["success"])
+        self.assertTrue(payload["cancelled"])
+        self.assertEqual(payload["path"], "")
+
+    def test_source_picker_route_rejects_non_macos_backend(self) -> None:
+        from nodes.font import choose_source
+
+        class _Request:
+            async def post(self):
+                return {"mode": "folder"}
+
+        with mock.patch("nodes.font.sys.platform", "linux"), self.assertRaises(Exception):
+            asyncio.run(choose_source(_Request()))
+
+    def test_save_as_route_exports_workspace_and_relinks_destination(self) -> None:
+        from nodes.runebender import save_workspace_as, write_workspace_file
+
+        slot_dir = workspace.FONTS_DIR / "managed-demo"
+        glyphs_dir = slot_dir / "Demo.ufo" / "glyphs"
+        glyphs_dir.mkdir(parents=True)
+        (slot_dir / "Demo.designspace").write_text("<designspace/>", encoding="utf-8")
+        (slot_dir / "Demo.ufo" / "metainfo.plist").write_text("<plist/>", encoding="utf-8")
+        (glyphs_dir / "A_.glif").write_text("<glyph name=\"A\"/>", encoding="utf-8")
+        workspace._write_manifest(slot_dir, {"source_kind": "ufo/designspace"})  # type: ignore[attr-defined]
+        destination = Path(self.tmp.name) / "saved-as"
+
+        class _SaveAsRequest:
+            async def post(self):
+                return {
+                    "slot": "managed-demo",
+                    "destination": str(destination),
+                    "relink": "true",
+                }
+
+        payload = asyncio.run(save_workspace_as(_SaveAsRequest()))
+
+        self.assertTrue(payload["success"])
+        self.assertTrue(payload["linked_source"])
+        self.assertEqual(Path(payload["destination"]).resolve(), destination.resolve())
+        self.assertTrue((destination / "Demo.designspace").exists())
+        self.assertTrue((destination / "Demo.ufo" / "glyphs" / "A_.glif").exists())
+
+        class _WriteRequest:
+            async def post(self):
+                return {
+                    "path": "managed-demo/Demo.ufo/glyphs/A_.glif",
+                    "text": "<glyph name=\"A\"><advance width=\"777\"/></glyph>",
+                }
+
+        write_payload = asyncio.run(write_workspace_file(_WriteRequest()))
+        self.assertTrue(write_payload["saved_to_source"])
+        self.assertEqual(
+            Path(write_payload["source_path"]).resolve(),
+            (destination / "Demo.ufo" / "glyphs" / "A_.glif").resolve(),
+        )
+        self.assertIn('width="777"', (destination / "Demo.ufo" / "glyphs" / "A_.glif").read_text(encoding="utf-8"))
+
+    def test_linked_virtua_sample_round_trip_uses_real_designspace_layout(self) -> None:
+        from nodes.font import link_source
+        from nodes.runebender import get_workspace_slot, write_workspace_file
+
+        source_dir = Path(self.tmp.name) / "virtua-linked"
+        shutil.copytree(ROOT / "samples" / "virtua-grotesk", source_dir)
+        designspace = source_dir / "VirtuaGrotesk.designspace"
+        regular_k = source_dir / "VirtuaGrotesk-Regular.ufo" / "glyphs" / "k.glif"
+        original_designspace = designspace.read_text(encoding="utf-8")
+        original_k = regular_k.read_text(encoding="utf-8")
+
+        class _LinkRequest:
+            async def post(self):
+                return {
+                    "source_path": str(designspace),
+                    "workspace_name": "virtua-linked",
+                    "source_kind": "auto",
+                }
+
+        link_payload = asyncio.run(link_source(_LinkRequest()))
+        self.assertEqual(link_payload["slot"], "virtua-linked")
+
+        class _WorkspaceRequest:
+            match_info = {"slot": "virtua-linked"}
+
+        workspace_payload = asyncio.run(get_workspace_slot(_WorkspaceRequest()))
+        exported_paths = {entry["path"] for entry in workspace_payload["files"]}
+        self.assertTrue(workspace_payload["linked_source"])
+        self.assertIn("VirtuaGrotesk.designspace", exported_paths)
+        self.assertIn("VirtuaGrotesk-Regular.ufo/glyphs/k.glif", exported_paths)
+        self.assertIn("VirtuaGrotesk-Bold.ufo/glyphs/k.glif", exported_paths)
+
+        class _WriteGlifRequest:
+            async def post(self):
+                return {
+                    "path": "virtua-linked/VirtuaGrotesk-Regular.ufo/glyphs/k.glif",
+                    "text": original_k.replace('width="540"', 'width="541"', 1),
+                }
+
+        glif_payload = asyncio.run(write_workspace_file(_WriteGlifRequest()))
+        self.assertTrue(glif_payload["saved_to_source"])
+        self.assertEqual(Path(glif_payload["source_path"]).resolve(), regular_k.resolve())
+        self.assertIn('width="541"', regular_k.read_text(encoding="utf-8"))
+
+        class _WriteDesignspaceRequest:
+            async def post(self):
+                return {
+                    "path": "virtua-linked/VirtuaGrotesk.designspace",
+                    "text": original_designspace.replace(
+                        '<axes>',
+                        '<axes>\n    <axis tag="TEST" name="Test Axis" minimum="0" maximum="1" default="0"/>',
+                        1,
+                    ),
+                }
+
+        designspace_payload = asyncio.run(write_workspace_file(_WriteDesignspaceRequest()))
+        self.assertTrue(designspace_payload["saved_to_source"])
+        self.assertEqual(Path(designspace_payload["source_path"]).resolve(), designspace.resolve())
+        self.assertIn('tag="TEST"', designspace.read_text(encoding="utf-8"))
 
 
 class FontPreviewNodeTests(unittest.TestCase):

@@ -40,6 +40,28 @@ class WorkspaceSlot:
     compiled_path: Path | None
 
 
+@dataclass(frozen=True)
+class WorkspaceWriteResult:
+    workspace_path: Path
+    source_path: Path | None = None
+
+
+@dataclass(frozen=True)
+class WorkspaceExportResult:
+    destination: Path
+    copied_paths: tuple[Path, ...]
+    linked: bool = False
+    origin_root: Path | None = None
+    origin_source: Path | None = None
+
+
+@dataclass(frozen=True)
+class WorkspaceSourceInfo:
+    linked: bool
+    origin_root: Path | None = None
+    origin_source: Path | None = None
+
+
 def ensure_workspace() -> None:
     FONTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -118,10 +140,25 @@ def slot_from_name(slot: str) -> WorkspaceSlot | None:
     )
 
 
+def source_info_for_slot(slot: str) -> WorkspaceSourceInfo:
+    ensure_workspace()
+    manifest = _read_manifest(_slot_dir(slot))
+    if manifest.get("origin_mode") != "linked":
+        return WorkspaceSourceInfo(linked=False)
+    origin_root_raw = manifest.get("origin_root", "")
+    origin_source_raw = manifest.get("origin_source", "")
+    return WorkspaceSourceInfo(
+        linked=True,
+        origin_root=Path(origin_root_raw).expanduser().resolve() if origin_root_raw else None,
+        origin_source=Path(origin_source_raw).expanduser().resolve() if origin_source_raw else None,
+    )
+
+
 def create_slot_from_path(
     source_path: str,
     slot_name: str | None = None,
     source_kind: str | None = None,
+    linked: bool = False,
 ) -> str:
     ensure_workspace()
     src = Path(source_path).expanduser().resolve()
@@ -131,6 +168,8 @@ def create_slot_from_path(
     if source_kind is None or not str(source_kind).strip() or str(source_kind).strip().lower() == "auto":
         source_kind = _infer_source_kind(src) or "ufo/designspace"
     source_kind = _clean_source_kind(source_kind, src)
+    if linked and source_kind != "ufo/designspace":
+        raise ValueError("linked save-back is currently supported only for .designspace and .ufo sources")
 
     slot = _clean_slot_name((slot_name or "").strip() or make_slot_name(src.name))
     dest = _slot_dir(slot)
@@ -151,9 +190,18 @@ def create_slot_from_path(
         if converted:
             source_kind = "ufo/designspace"
 
-    _write_manifest(dest, {
+    manifest = {
         "source_kind": source_kind,
-    })
+    }
+    if linked:
+        origin_root = _origin_root_for_source(src)
+        manifest.update({
+            "origin_mode": "linked",
+            "origin_kind": source_kind,
+            "origin_root": str(origin_root),
+            "origin_source": str(src),
+        })
+    _write_manifest(dest, manifest)
 
     return slot
 
@@ -249,12 +297,14 @@ def compile_slot(slot: str, output_path: str | None = None, force: bool = False)
         if detail:
             message = f"{message}:\n{detail}"
         raise RuntimeError(message) from None
-    _write_manifest(slot_dir, {
+    manifest = _read_manifest(slot_dir)
+    manifest.update({
         "source_kind": source_kind,
         "compiled_path": str(target.relative_to(slot_dir)),
         "compile_backend": "fontc",
         "package_path": str(source.relative_to(slot_dir)),
     })
+    _write_manifest(slot_dir, manifest)
     return target
 
 
@@ -340,6 +390,10 @@ def export_slot_text_files(slot: str) -> list[dict[str, str]]:
 
 
 def write_workspace_text_file(rel_path: str, text: str) -> Path:
+    return write_workspace_text_file_with_result(rel_path, text).workspace_path
+
+
+def write_workspace_text_file_with_result(rel_path: str, text: str) -> WorkspaceWriteResult:
     ensure_workspace()
     cleaned = Path(rel_path)
     if cleaned.is_absolute():
@@ -357,9 +411,63 @@ def write_workspace_text_file(rel_path: str, text: str) -> Path:
     ):
         raise ValueError("workspace path escapes workspace root")
     target.parent.mkdir(parents=True, exist_ok=True)
+    text = _normalize_text_for_existing_file(target, text)
     target.write_text(text, encoding="utf-8")
+    source_path = _mirror_linked_source_write(target, text)
     _invalidate_compiled_slot_for_path(target)
-    return target
+    return WorkspaceWriteResult(workspace_path=target, source_path=source_path)
+
+
+def export_slot_to_directory(slot: str, destination: str, relink: bool = False) -> WorkspaceExportResult:
+    ensure_workspace()
+    slot_dir = resolve_slot(slot).resolve()
+    slot_info = slot_from_name(slot)
+    if slot_info is None:
+        raise FileNotFoundError(f"Workspace slot not found: {slot!r}")
+
+    dest = Path(destination).expanduser()
+    if dest.exists() and not dest.is_dir():
+        raise ValueError("destination must be a folder")
+    dest = dest.resolve()
+    dest.mkdir(parents=True, exist_ok=True)
+
+    if dest == slot_dir or slot_dir in dest.parents:
+        raise ValueError("destination must be outside the workspace slot")
+
+    source_entries = _collect_source_entries(slot_dir, slot_info)
+    if not source_entries:
+        raise FileNotFoundError(f"No source files found in slot: {slot!r}")
+
+    copied: list[Path] = []
+    for entry in source_entries:
+        copied.append(_copy_source_entry_overwriting(entry, dest))
+
+    origin_source = _preferred_origin_source(copied)
+    origin_root: Path | None = None
+    if relink:
+        source_kind = slot_info.source_kind or _infer_source_kind(origin_source) or "ufo/designspace"
+        if source_kind != "ufo/designspace":
+            raise ValueError("relink after Save As is currently supported only for .designspace and .ufo sources")
+        if origin_source is None:
+            raise FileNotFoundError("No relinkable designspace or UFO source was exported")
+        origin_root = _origin_root_for_source(origin_source)
+        manifest = _read_manifest(slot_dir)
+        manifest.update({
+            "source_kind": source_kind,
+            "origin_mode": "linked",
+            "origin_kind": source_kind,
+            "origin_root": str(origin_root),
+            "origin_source": str(origin_source),
+        })
+        _write_manifest(slot_dir, manifest)
+
+    return WorkspaceExportResult(
+        destination=dest,
+        copied_paths=tuple(copied),
+        linked=relink,
+        origin_root=origin_root,
+        origin_source=origin_source if relink else None,
+    )
 
 
 def invalidate_workspace_path(rel_path: str) -> None:
@@ -419,6 +527,68 @@ def _invalidate_compiled_slot_for_path(target: Path) -> None:
         if package_path.exists() and package_path.is_dir():
             shutil.rmtree(package_path)
     _write_manifest(slot_dir, manifest)
+
+
+def _origin_root_for_source(src: Path) -> Path:
+    if src.suffix.lower() in {".designspace", ".ufo"}:
+        return src.parent.resolve()
+    return src.resolve().parent
+
+
+def _mirror_linked_source_write(target: Path, text: str) -> Path | None:
+    fonts_root = FONTS_DIR.resolve()
+    try:
+        rel = target.resolve().relative_to(fonts_root)
+    except ValueError:
+        return None
+    if len(rel.parts) < 2:
+        return None
+
+    slot_dir = fonts_root / rel.parts[0]
+    manifest = _read_manifest(slot_dir)
+    if manifest.get("origin_mode") != "linked":
+        return None
+    if manifest.get("origin_kind") != "ufo/designspace":
+        return None
+
+    origin_root_raw = manifest.get("origin_root", "")
+    if not origin_root_raw:
+        return None
+    origin_root = Path(origin_root_raw).expanduser().resolve()
+    if not origin_root.exists() or not origin_root.is_dir():
+        raise FileNotFoundError(f"Linked source root not found: {origin_root}")
+
+    source_rel = Path(*rel.parts[1:])
+    if source_rel.is_absolute() or ".." in source_rel.parts:
+        raise ValueError("linked source path cannot escape origin root")
+    source_target = (origin_root / source_rel).resolve()
+    if origin_root not in source_target.parents and source_target != origin_root:
+        raise ValueError("linked source path escapes origin root")
+    if source_target.suffix.lower() not in TEXT_EXTS:
+        raise ValueError(f"refusing to mirror unsupported linked source file: {source_target.name}")
+
+    source_target.parent.mkdir(parents=True, exist_ok=True)
+    text = _normalize_text_for_existing_file(source_target, text)
+    source_target.write_text(text, encoding="utf-8")
+    return source_target
+
+
+def _normalize_text_for_existing_file(path: Path, text: str) -> str:
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    if not path.exists() or not path.is_file():
+        return normalized
+    try:
+        current = path.read_bytes()
+    except OSError:
+        return normalized
+    if not current:
+        return normalized
+    crlf_count = current.count(b"\r\n")
+    lf_count = current.count(b"\n")
+    lf_only_count = lf_count - crlf_count
+    if crlf_count > 0 and crlf_count >= lf_only_count:
+        return normalized.replace("\n", "\r\n")
+    return normalized
 
 
 def _find_entry(slot_dir: Path, exts: tuple[str, ...]) -> Path | None:
@@ -651,6 +821,31 @@ def _copy_source_entry(src: Path, sources_dir: Path) -> Path:
     else:
         shutil.copy2(src, target)
     return target
+
+
+def _copy_source_entry_overwriting(src: Path, destination: Path) -> Path:
+    target = destination / src.name
+    if src.is_dir():
+        if target.exists():
+            if not target.is_dir():
+                target.unlink()
+            else:
+                shutil.rmtree(target)
+        shutil.copytree(src, target)
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists() and target.is_dir():
+            shutil.rmtree(target)
+        shutil.copy2(src, target)
+    return target
+
+
+def _preferred_origin_source(paths: list[Path]) -> Path | None:
+    for suffix in (".designspace", ".ufo"):
+        for path in paths:
+            if path.suffix.lower() == suffix:
+                return path
+    return None
 
 
 def _glyphspackage_config(slot_info: WorkspaceSlot, copied_sources: list[str]) -> str:

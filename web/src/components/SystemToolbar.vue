@@ -8,22 +8,30 @@
 withDefaults(
   defineProps<{
     saveEnabled?: boolean;
+    saveAsEnabled?: boolean;
     closeEnabled?: boolean;
   }>(),
   {
     saveEnabled: false,
+    saveAsEnabled: false,
     closeEnabled: false,
   },
 );
 
 const emit = defineEmits<{
   (e: "save"): void;
+  (e: "saveAs"): void;
   (e: "close"): void;
 }>();
 
 function onSave(enabled: boolean) {
   if (!enabled) return;
   emit("save");
+}
+
+function onSaveAs(enabled: boolean) {
+  if (!enabled) return;
+  emit("saveAs");
 }
 </script>
 
@@ -43,6 +51,21 @@ function onSave(enabled: boolean) {
         <path d="M5 3h12l2 2v16H5V3Z" />
         <path d="M8 3v6h8V3M8 21v-7h8v7" />
         <path d="M10 6h4" />
+      </svg>
+    </button>
+    <button
+      type="button"
+      class="system-btn"
+      :class="{ disabled: !saveAsEnabled }"
+      :disabled="!saveAsEnabled"
+      :aria-disabled="!saveAsEnabled"
+      :title="saveAsEnabled ? 'Save As...' : 'Save As unavailable'"
+      aria-label="Save As"
+      @click="onSaveAs(saveAsEnabled)"
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 6h6l2 2h8v10H4V6Z" />
+        <path d="M12 12v5M9.5 14.5 12 17l2.5-2.5" />
       </svg>
     </button>
     <button

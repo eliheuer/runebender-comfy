@@ -13,25 +13,19 @@ compile, and preview it through downstream nodes.
 ## Recommended graph
 
 ```text
-Load Font -> Runebender -> Compile Font -> Font Preview
-          |
+Runebender -> Compile Font -> Font Preview
           +-> Fork Font -> (alternate branch)
 ```
 
 ## Node roles
 
-`Load Font`
-: Loads a workspace from a source font path or imports a local
-  UFO/designspace bundle into the workspace with the built-in import
-  button. It also shows an inline specimen preview and a dropdown of
-  existing workspace slots. `ufo/designspace` is the default path;
-  Glyphs and glyphspackage are supported as alternate source kinds
-  when needed.
-
 `Runebender`
-: Opens the editor widget for the active `FONT` workspace. It passes
-  the reference through unchanged and exposes the current glyph SVG as
-  a secondary string output for side-channel inspection.
+: Loads a workspace from a source font path, imports a local
+  UFO/designspace bundle into the workspace, or links a disk source for
+  save-back. It opens the editor widget for the active `FONT`
+  workspace, passes the reference through unchanged, and exposes the
+  current glyph SVG as a secondary string output for side-channel
+  inspection.
 
 `Compile Font`
 : Rebuilds a compiled artifact for the workspace when `fontc` is
@@ -63,8 +57,14 @@ Load Font -> Runebender -> Compile Font -> Font Preview
    pnpm build
    ```
 3. Restart ComfyUI.
-4. Load a font with `Load Font`, edit it in `Runebender`, then send
-   the same `FONT` wire into `Compile Font` and `Font Preview`.
+4. Load `example_workflows/runebender-linked-source-smoke.json` for a
+   one-node smoke graph, or add a `Runebender` node manually.
+5. Load a font with `Runebender`, edit it, then send the same `FONT`
+   wire into `Compile Font` and `Font Preview`. For source files you
+   want to edit on disk, either click `Link Source Path...` or paste an
+   absolute/relative `.designspace` or `.ufo` path into `source_path`
+   and click `Edit`; Runebender will link the source before opening the
+   editor.
 
 For a bundled smoke test, use
 `samples/virtua-grotesk/VirtuaGrotesk.designspace` as the source path.
@@ -74,6 +74,15 @@ the `demo` workspace alias resolves to it automatically.
 ## Notes
 
 - UFO/designspace is the default editable path.
+- `Import Folder...` copies a source into the local workspace cache.
+- `Link Source Path...` creates a workspace cache that mirrors saved
+  UFO/designspace edits back to the original disk source.
+- If `Link Source Path...` reports `404` or `405`, the browser has a
+  newer bundle than the running Python backend. Fully stop and restart
+  ComfyUI, then hard-refresh the browser.
+- The grid sidebar includes a raw Designspace XML panel for
+  designspace-backed workspaces. Its edits are dirty-tracked and saved
+  by the same Save button as glyph, groups, and kerning edits.
 - Glyphs imports normalize into UFO/designspace when `glyphsLib` is
   installed.
 - `fontc` is optional but required for the compile/preview branch.

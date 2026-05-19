@@ -9,7 +9,7 @@ import { createApp, ref } from "vue";
 
 import Runebender from "./Runebender.vue";
 
-const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-18-close-in-toolbar";
+const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-19-source-workflows-2";
 console.info(`[runebender-comfy] loaded ${RUNEBENDER_BUNDLE_FINGERPRINT}`);
 
 // ComfyUI auto-loads .js from WEB_DIRECTORY but not sibling .css. Vite's
@@ -34,6 +34,188 @@ function injectRunebenderStyles() {
 injectRunebenderStyles();
 
 declare const window: any;
+
+function looksLikeFontSourcePath(value: string): boolean {
+  const trimmed = value.trim();
+  return (
+    trimmed.startsWith("/") ||
+    trimmed.startsWith("~") ||
+    trimmed.startsWith("./") ||
+    trimmed.startsWith("../") ||
+    /\.(designspace|ufo|glyphs|glyphspackage)(?:\/)?$/i.test(trimmed)
+  );
+}
+
+async function chooseSourcePath(mode: "file" | "folder"): Promise<string | null> {
+  if (mode === "folder" && typeof window.electronAPI?.showDirectoryPicker === "function") {
+    const path = await window.electronAPI.showDirectoryPicker();
+    return String(path ?? "").trim() || null;
+  }
+
+  const body = new FormData();
+  body.append("mode", mode);
+  const response = await fetch("/runebender/choose_source", {
+    method: "POST",
+    body,
+  });
+  const data = (await response.json().catch(() => ({}))) as {
+    path?: string;
+    error?: string;
+    cancelled?: boolean;
+  };
+  if (data.cancelled) return null;
+  if (!response.ok) {
+    throw new Error(data.error || `${response.status} ${response.statusText}`);
+  }
+  return String(data.path ?? "").trim() || null;
+}
+
+function requestSourcePath(defaultValue: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const backdrop = document.createElement("div");
+    backdrop.style.position = "fixed";
+    backdrop.style.inset = "0";
+    backdrop.style.zIndex = "2147483647";
+    backdrop.style.display = "grid";
+    backdrop.style.placeItems = "center";
+    backdrop.style.background = "rgba(0, 0, 0, 0.45)";
+
+    const panel = document.createElement("form");
+    panel.style.width = "min(720px, calc(100vw - 48px))";
+    panel.style.padding = "20px";
+    panel.style.border = "1px solid rgba(255, 255, 255, 0.18)";
+    panel.style.borderRadius = "12px";
+    panel.style.background = "#202124";
+    panel.style.boxShadow = "0 18px 60px rgba(0, 0, 0, 0.5)";
+    panel.style.color = "#f1f3f4";
+    panel.style.font = "13px system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+
+    const title = document.createElement("div");
+    title.textContent = "Link source path";
+    title.style.fontSize = "16px";
+    title.style.fontWeight = "700";
+    title.style.marginBottom = "8px";
+
+    const help = document.createElement("div");
+    help.textContent = "Enter a .designspace, .ufo, or folder path. Saves will mirror supported edits back to this source.";
+    help.style.color = "#b8bcc2";
+    help.style.marginBottom = "12px";
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = defaultValue;
+    input.placeholder = "/path/to/font/VirtuaGrotesk.designspace";
+    input.style.boxSizing = "border-box";
+    input.style.width = "100%";
+    input.style.padding = "10px 12px";
+    input.style.border = "1px solid rgba(255, 255, 255, 0.22)";
+    input.style.borderRadius = "8px";
+    input.style.background = "#111315";
+    input.style.color = "#ffffff";
+    input.style.font = "13px ui-monospace, SFMono-Regular, Menlo, monospace";
+    input.style.outline = "none";
+
+    const pickerActions = document.createElement("div");
+    pickerActions.style.display = "flex";
+    pickerActions.style.justifyContent = "flex-start";
+    pickerActions.style.gap = "8px";
+    pickerActions.style.marginTop = "10px";
+
+    const filePicker = document.createElement("button");
+    filePicker.type = "button";
+    filePicker.textContent = "Choose File...";
+    filePicker.style.padding = "8px 12px";
+    filePicker.style.border = "1px solid rgba(255, 255, 255, 0.18)";
+    filePicker.style.borderRadius = "8px";
+    filePicker.style.background = "#2a2d31";
+    filePicker.style.color = "#f1f3f4";
+
+    const folderPicker = document.createElement("button");
+    folderPicker.type = "button";
+    folderPicker.textContent = "Choose Folder...";
+    folderPicker.style.padding = "8px 12px";
+    folderPicker.style.border = "1px solid rgba(255, 255, 255, 0.18)";
+    folderPicker.style.borderRadius = "8px";
+    folderPicker.style.background = "#2a2d31";
+    folderPicker.style.color = "#f1f3f4";
+
+    pickerActions.append(filePicker, folderPicker);
+
+    const actions = document.createElement("div");
+    actions.style.display = "flex";
+    actions.style.justifyContent = "flex-end";
+    actions.style.gap = "8px";
+    actions.style.marginTop = "14px";
+
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    cancel.style.padding = "8px 14px";
+    cancel.style.border = "1px solid rgba(255, 255, 255, 0.18)";
+    cancel.style.borderRadius = "8px";
+    cancel.style.background = "#2a2d31";
+    cancel.style.color = "#f1f3f4";
+
+    const submit = document.createElement("button");
+    submit.type = "submit";
+    submit.textContent = "Link";
+    submit.style.padding = "8px 14px";
+    submit.style.border = "1px solid #66ee88";
+    submit.style.borderRadius = "8px";
+    submit.style.background = "#1f6f3d";
+    submit.style.color = "#ffffff";
+    submit.style.fontWeight = "700";
+
+    actions.append(cancel, submit);
+    panel.append(title, help, input, pickerActions, actions);
+    backdrop.append(panel);
+    document.body.append(backdrop);
+
+    const close = (value: string | null) => {
+      backdrop.remove();
+      resolve(value);
+    };
+
+    cancel.addEventListener("click", () => close(null));
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) close(null);
+    });
+    const browse = async (mode: "file" | "folder") => {
+      filePicker.disabled = true;
+      folderPicker.disabled = true;
+      try {
+        const path = await chooseSourcePath(mode);
+        if (path) input.value = path;
+      } catch (error) {
+        alert(`Runebender source picker failed: ${error}`);
+        console.error("[runebender-comfy] source picker failed:", error);
+      } finally {
+        filePicker.disabled = false;
+        folderPicker.disabled = false;
+        input.focus();
+      }
+    };
+    filePicker.addEventListener("click", () => {
+      void browse("file");
+    });
+    folderPicker.addEventListener("click", () => {
+      void browse("folder");
+    });
+    panel.addEventListener("submit", (event) => {
+      event.preventDefault();
+      close(input.value.trim() || null);
+    });
+    panel.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close(null);
+      }
+    });
+
+    input.focus();
+    input.select();
+  });
+}
 
 function installGlobalLinkTrace() {
   if (window.__runebenderGlobalLinkTraceInstalled) return;
@@ -593,13 +775,98 @@ app.registerExtension({
         this.setDirtyCanvas(true, true);
       });
 
-      const importFolderButton = this.addWidget("button", "Import Folder...", null, () => {
-        folderInput.click();
+      const linkSourcePath = async (initialPath?: string) => {
+        const sourcePath = initialPath ?? await requestSourcePath(String(sourceWidget?.value ?? ""));
+        if (!sourcePath) return;
+        const body = new FormData();
+        body.append("source_path", sourcePath);
+        body.append("source_kind", String(sourceKindWidget?.value ?? "auto"));
+        body.append("workspace_name", String(workspaceNameWidget?.value ?? ""));
+        const response = await fetch("/runebender/link_source", {
+          method: "POST",
+          body,
+        });
+        const data = (await response.json().catch(() => ({}))) as { slot?: string; error?: string };
+        if (!response.ok) {
+          const routeHint = response.status === 404 || response.status === 405
+            ? " The browser has the new Runebender bundle, but ComfyUI has not registered the linked-source backend route. Fully restart ComfyUI, then hard-refresh the browser."
+            : "";
+          throw new Error(data.error || `${response.status} ${response.statusText}.${routeHint}`);
+        }
+        const slot = String(data.slot ?? "");
+        if (sourceWidget && slot) {
+          sourceWidget.value = slot;
+          sourceWidget.callback?.(slot);
+        }
+        await refreshChoices();
+        workspaceSelect.value = slot || workspaceSelect.value;
+        syncPreview();
+        this.setDirtyCanvas(true, true);
+        return slot;
+      };
+
+      const importSourcePath = async (mode: "file" | "folder") => {
+        const sourcePath = await chooseSourcePath(mode);
+        if (!sourcePath) return null;
+        const body = new FormData();
+        body.append("source_path", sourcePath);
+        body.append("source_kind", String(sourceKindWidget?.value ?? "auto"));
+        body.append("workspace_name", String(workspaceNameWidget?.value ?? ""));
+        const response = await fetch("/runebender/import_source_path", {
+          method: "POST",
+          body,
+        });
+        const data = (await response.json().catch(() => ({}))) as { slot?: string; error?: string };
+        if (!response.ok) {
+          const routeHint = response.status === 404 || response.status === 405
+            ? " The browser has the new Runebender bundle, but ComfyUI has not registered the source import backend route. Fully restart ComfyUI, then hard-refresh the browser."
+            : "";
+          throw new Error(data.error || `${response.status} ${response.statusText}.${routeHint}`);
+        }
+        const slot = String(data.slot ?? "");
+        if (sourceWidget && slot) {
+          sourceWidget.value = slot;
+          sourceWidget.callback?.(slot);
+        }
+        await refreshChoices();
+        workspaceSelect.value = slot || workspaceSelect.value;
+        syncPreview();
+        this.setDirtyCanvas(true, true);
+        return slot;
+      };
+
+      const ensureEditableWorkspace = async (value: string) => {
+        if (!value || value.startsWith("workspace://")) return value;
+        const values = Array.isArray(workspaceSelect.options?.values)
+          ? workspaceSelect.options.values.map((entry: unknown) => String(entry))
+          : [];
+        if (values.includes(value)) return value;
+        if (value === "demo" || value === "ufo/designspace") return value;
+        if (!looksLikeFontSourcePath(value)) return value;
+        return (await linkSourcePath(value)) || value;
+      };
+
+      const importFolderButton = this.addWidget("button", "Import Copy Folder...", null, () => {
+        void importSourcePath("folder").catch((error) => {
+          console.warn("[runebender-comfy] local folder import failed; falling back to browser upload:", error);
+          folderInput.click();
+        });
       }, {});
       importFolderButton.serialize = false;
 
-      const importFileButton = this.addWidget("button", "Import File...", null, () => {
-        fileInput.click();
+      const linkSourceButton = this.addWidget("button", "Link Source Path...", null, () => {
+        void linkSourcePath().catch((error) => {
+          alert(`Runebender source link failed: ${error}`);
+          console.error("[runebender-comfy] source link failed:", error);
+        });
+      }, {});
+      linkSourceButton.serialize = false;
+
+      const importFileButton = this.addWidget("button", "Import Copy File...", null, () => {
+        void importSourcePath("file").catch((error) => {
+          console.warn("[runebender-comfy] local file import failed; falling back to browser upload:", error);
+          fileInput.click();
+        });
       }, {});
       importFileButton.serialize = false;
 
@@ -620,13 +887,14 @@ app.registerExtension({
       workspaceSelect.serialize = false;
 
       const editButton = this.addWidget("button", "Edit", null, () => {
-        try {
+        void (async () => {
           const currentFont = currentSourceValue();
           if (!currentFont) {
             alert("Runebender: pick a workspace first (the Edit button needs a loaded font).");
             return;
           }
-          const fontPath = ref(currentFont);
+          const editableFont = await ensureEditableWorkspace(currentFont);
+          const fontPath = ref(editableFont);
           openRunebenderOverlay({
             nodeId: String(this.id),
             fontPathRef: fontPath,
@@ -635,13 +903,13 @@ app.registerExtension({
               this.properties.glyph_data = value;
             },
           });
-        } catch (err) {
+        })().catch((err) => {
           const message = err instanceof Error
             ? `${err.name}: ${err.message}\n\n${err.stack ?? ""}`
             : String(err);
           alert(`Runebender Edit click threw:\n\n${message}`);
           console.error("[runebender-comfy] Edit click threw:", err);
-        }
+        });
       }, {});
       editButton.serialize = false;
 

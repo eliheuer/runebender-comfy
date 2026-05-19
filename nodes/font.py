@@ -9,6 +9,8 @@ format.
 
 from __future__ import annotations
 
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -72,6 +74,106 @@ async def import_font(request):
                 "source_root": str(source_root.relative_to(staging_root.resolve())),
             }
         )
+
+
+@routes.post("/runebender/link_source")
+async def link_source(request):
+    data = await request.post()
+    source_path = str(data.get("source_path", "")).strip()
+    workspace_name = str(data.get("workspace_name", "")).strip()
+    source_kind = str(data.get("source_kind", "auto")).strip().lower()
+    if not source_path:
+        raise web.HTTPBadRequest(reason="source_path required")
+
+    candidate = Path(source_path).expanduser()
+    if candidate.exists() and candidate.is_dir():
+        located = locate_source_root(candidate)
+        if located is not None:
+            candidate = located
+
+    slot = create_slot_from_path(
+        str(candidate),
+        workspace_name or None,
+        source_kind=None if source_kind in {"", "auto"} else source_kind,
+        linked=True,
+    )
+    try:
+        compile_slot(slot)
+    except Exception:
+        pass
+    slot_info = slot_from_name(slot)
+    return web.json_response(
+        {
+            "success": True,
+            "slot": slot,
+            "source_root": str(candidate),
+            "source_kind": slot_info.source_kind if slot_info else "ufo/designspace",
+        }
+    )
+
+
+@routes.post("/runebender/import_source_path")
+async def import_source_path(request):
+    data = await request.post()
+    source_path = str(data.get("source_path", "")).strip()
+    workspace_name = str(data.get("workspace_name", "")).strip()
+    source_kind = str(data.get("source_kind", "auto")).strip().lower()
+    if not source_path:
+        raise web.HTTPBadRequest(reason="source_path required")
+
+    candidate = Path(source_path).expanduser()
+    if candidate.exists() and candidate.is_dir():
+        located = locate_source_root(candidate)
+        if located is not None:
+            candidate = located
+
+    slot = create_slot_from_path(
+        str(candidate),
+        workspace_name or None,
+        source_kind=None if source_kind in {"", "auto"} else source_kind,
+        linked=False,
+    )
+    try:
+        compile_slot(slot)
+    except Exception:
+        pass
+    slot_info = slot_from_name(slot)
+    return web.json_response(
+        {
+            "success": True,
+            "slot": slot,
+            "source_root": str(candidate),
+            "source_kind": slot_info.source_kind if slot_info else "ufo/designspace",
+            "linked_source": False,
+        }
+    )
+
+
+@routes.post("/runebender/choose_source")
+async def choose_source(request):
+    data = await request.post()
+    mode = str(data.get("mode", "file")).strip().lower()
+    if mode not in {"file", "folder"}:
+        raise web.HTTPBadRequest(reason="mode must be 'file' or 'folder'")
+    if sys.platform != "darwin":
+        raise web.HTTPBadRequest(reason="native source picker is currently available only on macOS")
+
+    if mode == "folder":
+        script = 'POSIX path of (choose folder with prompt "Choose a folder containing a font source")'
+    else:
+        script = 'POSIX path of (choose file with prompt "Choose a .designspace, .glyphs, or font source file")'
+    result = subprocess.run(
+        ["osascript", "-e", script],
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        if "User canceled" in detail or "(-128)" in detail:
+            return web.json_response({"success": False, "cancelled": True, "path": ""})
+        raise web.HTTPBadRequest(reason=detail or "source picker failed")
+
+    return web.json_response({"success": True, "path": result.stdout.strip()})
 
 
 @routes.get("/runebender/workspaces")

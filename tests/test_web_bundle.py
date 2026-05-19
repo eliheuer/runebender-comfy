@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import json
 import sys
 import types
 import unittest
@@ -79,13 +80,27 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn('from "/scripts/app.js"', bundle)
         self.assertIn("registerExtension", bundle)
         self.assertIn("runebender-comfy.Runebender", bundle)
-        self.assertIn("Import Folder...", bundle)
-        self.assertIn("Import File...", bundle)
+        self.assertIn("Import Copy Folder...", bundle)
+        self.assertIn("Link Source Path...", bundle)
+        self.assertIn("Import Copy File...", bundle)
         self.assertIn("Refresh Workspaces", bundle)
         self.assertIn("Close editor", bundle)
         self.assertIn("font input disconnect requested", bundle)
+        self.assertIn("runebender/link_source", bundle)
         self.assertIn("workspace/invalidate", bundle)
-        self.assertIn("rb-bundle-2026-05-18-close-in-toolbar", bundle)
+        self.assertIn("rb-bundle-2026-05-19-source-workflows-2", bundle)
+        self.assertIn("Link source path", bundle)
+        self.assertIn("Save workspace as", bundle)
+        self.assertIn("Managed copy (workspace cache)", bundle)
+        self.assertIn("runebender/workspace/save_as", bundle)
+        self.assertIn("Choose File...", bundle)
+        self.assertIn("Choose Folder...", bundle)
+        self.assertIn("runebender/choose_source", bundle)
+        self.assertIn("runebender/import_source_path", bundle)
+        self.assertIn("showDirectoryPicker", bundle)
+        self.assertNotIn("window.prompt", bundle)
+        self.assertIn("Designspace", bundle)
+        self.assertIn("Fully restart ComfyUI", bundle)
         self.assertIn("console.info(`[runebender-comfy] loaded", bundle)
         self.assertIn("JSON.stringify(", bundle)
         self.assertIn("glyph_data", bundle)
@@ -94,6 +109,17 @@ class WebBundleTests(unittest.TestCase):
 
         dist_files = sorted(p.name for p in (ROOT / "web" / "dist").iterdir() if p.is_file())
         self.assertEqual(dist_files, ["runebender-comfy.js", "style.css"])
+
+    def test_linked_source_smoke_workflow_loads_runebender(self) -> None:
+        workflow_path = ROOT / "example_workflows" / "runebender-linked-source-smoke.json"
+        workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(workflow["id"], "runebender-linked-source-smoke")
+        self.assertEqual(len(workflow["nodes"]), 1)
+        node = workflow["nodes"][0]
+        self.assertEqual(node["type"], "Runebender")
+        self.assertEqual(node["widgets_values"], ["demo", "auto", ""])
+        self.assertEqual([output["type"] for output in node["outputs"]], ["FONT", "STRING"])
 
 
 if __name__ == "__main__":

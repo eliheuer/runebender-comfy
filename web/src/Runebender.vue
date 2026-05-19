@@ -28,6 +28,7 @@ import EditModeToolbar from "./components/EditModeToolbar.vue";
 import { type ToolId } from "./components/toolIds";
 import ShapesToolbar from "./components/ShapesToolbar.vue";
 import type { ShapeKind } from "./components/ShapesToolbar.vue";
+import SystemToolbar from "./components/SystemToolbar.vue";
 import TextDirectionToolbar from "./components/TextDirectionToolbar.vue";
 import type { TextDirection } from "./components/TextDirectionToolbar.vue";
 import GlyphAnatomyPanel from "./components/GlyphAnatomyPanel.vue";
@@ -120,6 +121,12 @@ const backgroundImageInput = ref<HTMLInputElement | null>(null);
 const fontDirectoryInput = ref<HTMLInputElement | null>(null);
 const status = ref<string>("initializing");
 const lastSavedDisplay = ref<string | null>(null);
+const mirroredSaveWrites = ref<number>(0);
+const sourceSaveLabel = ref<string | null>(null);
+const designspacePath = ref<string | null>(null);
+const designspaceText = ref<string>("");
+const designspaceFileHandle = ref<FileSystemFileHandle | null>(null);
+const designspaceDirty = ref<boolean>(false);
 const selectionCount = ref<number>(0);
 const selectedContourCount = ref<number>(0);
 const dragHover = ref<boolean>(false);
@@ -405,8 +412,22 @@ const hasDirtyChanges = computed(
   () =>
     dirtyGlyphCount.value > 0 ||
     dirtyKerningMasters.value.size > 0 ||
-    dirtyGroupsMasters.value.size > 0,
+    dirtyGroupsMasters.value.size > 0 ||
+    designspaceDirty.value,
 );
+const designspaceSummary = computed(() => {
+  if (!designspaceText.value) return "";
+  try {
+    const doc = new DOMParser().parseFromString(designspaceText.value, "application/xml");
+    const parserError = doc.querySelector("parsererror");
+    if (parserError) return "Invalid XML";
+    const sources = doc.querySelectorAll("source").length;
+    const axes = doc.querySelectorAll("axis").length;
+    return `${sources} source${sources === 1 ? "" : "s"} · ${axes} axis${axes === 1 ? "" : "es"}`;
+  } catch {
+    return "Invalid XML";
+  }
+});
 
 // Names filtered by the active category. The grid renders this list
 // instead of glyphNames directly.
@@ -679,6 +700,10 @@ type SaveFilePickerOptions = {
 
 type SaveFilePicker = (options?: SaveFilePickerOptions) => Promise<FileSystemFileHandle>;
 type DirectoryPicker = () => Promise<FileSystemDirectoryHandle>;
+type SaveAsDestination = {
+  destination: string;
+  relink: boolean;
+};
 
 let editor: Editor | null = null;
 let raf = 0;
@@ -2608,6 +2633,11 @@ async function loadGlifFiles(
   dirtyKerningMasters.value = new Set();
   dirtyGroupsMasters.value = new Set();
   lastSavedDisplay.value = null;
+  sourceSaveLabel.value = null;
+  designspacePath.value = null;
+  designspaceText.value = "";
+  designspaceFileHandle.value = null;
+  designspaceDirty.value = false;
 
   const dsFile = files.find((f) => /\.designspace$/i.test(f.name));
   if (dsFile) {
@@ -2626,6 +2656,10 @@ async function loadDesignspace(
 ) {
   status.value = "parsing designspace…";
   const xml = await dsFile.text();
+  designspacePath.value = relPath(dsFile);
+  designspaceText.value = xml;
+  designspaceFileHandle.value = fileHandles.get(designspacePath.value) ?? null;
+  designspaceDirty.value = false;
   const sources = parseDesignspace(xml);
   if (sources.length === 0) {
     status.value = "designspace has no <source> entries";
@@ -2706,6 +2740,9 @@ async function loadWorkspaceSlot(slot: string) {
   const data = (await res.json()) as {
     slot: string;
     files: Array<{ path: string; text: string }>;
+    linked_source?: boolean;
+    origin_root?: string;
+    origin_source?: string;
   };
   const files = data.files.map((entry) => {
     const name = entry.path.split("/").pop() ?? entry.path;
@@ -2720,6 +2757,9 @@ async function loadWorkspaceSlot(slot: string) {
   });
   await loadGlifFiles(files);
   fontLabel.value = slot;
+  sourceSaveLabel.value = data.linked_source
+    ? `Linked ${data.origin_source || data.origin_root || "source"}`
+    : "Managed copy (workspace cache)";
 }
 
 async function loadSingleUfo(
@@ -3406,15 +3446,16 @@ function handleZoomShortcut(key: string): boolean {
   return false;
 }
 
-async function onSave() {
+async function onSave(): Promise<boolean> {
   const data = activeMasterData.value;
-  if (!data || !activeMasterName.value) return;
+  if ((!data || !activeMasterName.value) && !designspaceDirty.value) return true;
 
   try {
     status.value = "saving…";
+    mirroredSaveWrites.value = 0;
     if (currentGlyph.value && editor && !syncCurrentGlyphBytesFromEditor()) {
       status.value = "save failed";
-      return;
+      return false;
     }
 
     let savedGlyphs = 0;
@@ -3445,27 +3486,31 @@ async function onSave() {
 
     const unsavedGroups = await persistDirtyGroups();
     const unsavedKerning = await persistDirtyKerning();
-    if (unsavedGlyphs.length === 0 && unsavedGroups.length === 0 && unsavedKerning.length === 0) {
+    const designspaceSaved = await persistDirtyDesignspace();
+    if (unsavedGlyphs.length === 0 && unsavedGroups.length === 0 && unsavedKerning.length === 0 && designspaceSaved) {
       lastSavedDisplay.value = formatLastSavedDisplay();
     }
 
-    const suffix = saveWarningSuffix(unsavedGroups.length === 0, unsavedKerning.length === 0);
+    const suffix = saveWarningSuffix(unsavedGroups.length === 0, unsavedKerning.length === 0, designspaceSaved);
+    const sourceSuffix = mirroredSaveWrites.value > 0 ? " to source" : "";
     if (unsavedGlyphs.length > 0) {
-      status.value = `saved ${savedGlyphs} glyph${savedGlyphs === 1 ? "" : "s"}; ${unsavedGlyphs.length} glyph${unsavedGlyphs.length === 1 ? "" : "s"} not saved (${formatUnsavedGlyphs(unsavedGlyphs)})${suffix}`;
-      return;
+      status.value = `saved ${savedGlyphs} glyph${savedGlyphs === 1 ? "" : "s"}${sourceSuffix}; ${unsavedGlyphs.length} glyph${unsavedGlyphs.length === 1 ? "" : "s"} not saved (${formatUnsavedGlyphs(unsavedGlyphs)})${suffix}`;
+      return false;
     }
 
     if (savedGlyphs > 0) {
-      status.value = `saved ${savedGlyphs} glyph${savedGlyphs === 1 ? "" : "s"}${suffix}`;
-    } else if (unsavedGroups.length === 0 && unsavedKerning.length === 0) {
-      status.value = `saved metadata${suffix}`;
+      status.value = `saved ${savedGlyphs} glyph${savedGlyphs === 1 ? "" : "s"}${sourceSuffix}${suffix}`;
+    } else if (unsavedGroups.length === 0 && unsavedKerning.length === 0 && designspaceSaved) {
+      status.value = `saved metadata${sourceSuffix}${suffix}`;
     } else {
       status.value = `save incomplete${suffix}`;
     }
     queueComfyStateSync(true);
+    return unsavedGroups.length === 0 && unsavedKerning.length === 0 && designspaceSaved;
   } catch (e) {
     console.warn("save failed:", e);
     status.value = `save failed: ${e}`;
+    return false;
   }
 }
 
@@ -3482,6 +3527,7 @@ async function persistGlyphData(data: MasterData, glyphName: string): Promise<bo
       method: "POST",
       body,
     });
+    await recordWorkspaceWriteResult(res);
     return res.ok;
   }
 
@@ -3579,6 +3625,217 @@ async function exportTextFile(
   return true;
 }
 
+async function chooseDestinationFolder(): Promise<string | null> {
+  const electronApi = (window as Window & {
+    electronAPI?: { showDirectoryPicker?: () => Promise<string> };
+  }).electronAPI;
+  if (typeof electronApi?.showDirectoryPicker === "function") {
+    const path = await electronApi.showDirectoryPicker();
+    return String(path ?? "").trim() || null;
+  }
+
+  const body = new FormData();
+  body.append("mode", "folder");
+  const response = await fetch("/runebender/choose_source", {
+    method: "POST",
+    body,
+  });
+  const data = (await response.json().catch(() => ({}))) as {
+    path?: string;
+    error?: string;
+    cancelled?: boolean;
+  };
+  if (data.cancelled) return null;
+  if (!response.ok) {
+    throw new Error(data.error || `${response.status} ${response.statusText}`);
+  }
+  return String(data.path ?? "").trim() || null;
+}
+
+function requestSaveAsDestination(defaultValue: string): Promise<SaveAsDestination | null> {
+  return new Promise((resolve) => {
+    const backdrop = document.createElement("div");
+    backdrop.style.position = "fixed";
+    backdrop.style.inset = "0";
+    backdrop.style.zIndex = "2147483647";
+    backdrop.style.display = "grid";
+    backdrop.style.placeItems = "center";
+    backdrop.style.background = "rgba(0, 0, 0, 0.45)";
+
+    const panel = document.createElement("form");
+    panel.style.width = "min(720px, calc(100vw - 48px))";
+    panel.style.padding = "20px";
+    panel.style.border = "1px solid rgba(255, 255, 255, 0.18)";
+    panel.style.borderRadius = "12px";
+    panel.style.background = "#202124";
+    panel.style.boxShadow = "0 18px 60px rgba(0, 0, 0, 0.5)";
+    panel.style.color = "#f1f3f4";
+    panel.style.font = "13px system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+
+    const title = document.createElement("div");
+    title.textContent = "Save workspace as";
+    title.style.fontSize = "16px";
+    title.style.fontWeight = "700";
+    title.style.marginBottom = "8px";
+
+    const help = document.createElement("div");
+    help.textContent = "Choose a destination folder for the current designspace/UFO source copy.";
+    help.style.color = "#b8bcc2";
+    help.style.marginBottom = "12px";
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = defaultValue;
+    input.placeholder = "/path/to/exported/font-source";
+    input.style.boxSizing = "border-box";
+    input.style.width = "100%";
+    input.style.padding = "10px 12px";
+    input.style.border = "1px solid rgba(255, 255, 255, 0.22)";
+    input.style.borderRadius = "8px";
+    input.style.background = "#111315";
+    input.style.color = "#ffffff";
+    input.style.font = "13px ui-monospace, SFMono-Regular, Menlo, monospace";
+    input.style.outline = "none";
+
+    const relinkRow = document.createElement("label");
+    relinkRow.style.display = "flex";
+    relinkRow.style.alignItems = "center";
+    relinkRow.style.gap = "8px";
+    relinkRow.style.marginTop = "12px";
+    relinkRow.style.color = "#d7dadf";
+
+    const relink = document.createElement("input");
+    relink.type = "checkbox";
+    relink.checked = true;
+    relinkRow.append(relink, document.createTextNode("Use this folder as the linked source after saving"));
+
+    const pickerActions = document.createElement("div");
+    pickerActions.style.display = "flex";
+    pickerActions.style.justifyContent = "flex-start";
+    pickerActions.style.marginTop = "10px";
+
+    const folderPicker = document.createElement("button");
+    folderPicker.type = "button";
+    folderPicker.textContent = "Choose Folder...";
+    folderPicker.style.padding = "8px 12px";
+    folderPicker.style.border = "1px solid rgba(255, 255, 255, 0.18)";
+    folderPicker.style.borderRadius = "8px";
+    folderPicker.style.background = "#2a2d31";
+    folderPicker.style.color = "#f1f3f4";
+    pickerActions.append(folderPicker);
+
+    const actions = document.createElement("div");
+    actions.style.display = "flex";
+    actions.style.justifyContent = "flex-end";
+    actions.style.gap = "8px";
+    actions.style.marginTop = "14px";
+
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    cancel.style.padding = "8px 14px";
+    cancel.style.border = "1px solid rgba(255, 255, 255, 0.18)";
+    cancel.style.borderRadius = "8px";
+    cancel.style.background = "#2a2d31";
+    cancel.style.color = "#f1f3f4";
+
+    const submit = document.createElement("button");
+    submit.type = "submit";
+    submit.textContent = "Save As";
+    submit.style.padding = "8px 14px";
+    submit.style.border = "1px solid #66ee88";
+    submit.style.borderRadius = "8px";
+    submit.style.background = "#1f6f3d";
+    submit.style.color = "#ffffff";
+    submit.style.fontWeight = "700";
+
+    actions.append(cancel, submit);
+    panel.append(title, help, input, pickerActions, relinkRow, actions);
+    backdrop.append(panel);
+    document.body.append(backdrop);
+
+    const close = (value: SaveAsDestination | null) => {
+      backdrop.remove();
+      resolve(value);
+    };
+
+    cancel.addEventListener("click", () => close(null));
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) close(null);
+    });
+    folderPicker.addEventListener("click", async () => {
+      folderPicker.disabled = true;
+      try {
+        const path = await chooseDestinationFolder();
+        if (path) input.value = path;
+      } catch (error) {
+        window.alert(`Runebender destination picker failed: ${error}`);
+      } finally {
+        folderPicker.disabled = false;
+        input.focus();
+      }
+    });
+    panel.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const destination = input.value.trim();
+      close(destination ? { destination, relink: relink.checked } : null);
+    });
+    panel.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close(null);
+      }
+    });
+
+    input.focus();
+    input.select();
+  });
+}
+
+async function onSaveAs() {
+  if (!currentFontPath.value) return;
+  try {
+    if (hasDirtyChanges.value) {
+      const saved = await onSave();
+      if (!saved) {
+        status.value = "save as cancelled; resolve unsaved changes first";
+        return;
+      }
+    }
+    const chosen = await requestSaveAsDestination("");
+    if (!chosen) return;
+    status.value = "saving workspace copy…";
+    const body = new FormData();
+    body.append("slot", currentFontPath.value);
+    body.append("destination", chosen.destination);
+    body.append("relink", chosen.relink ? "true" : "false");
+    const response = await fetch("/runebender/workspace/save_as", {
+      method: "POST",
+      body,
+    });
+    const data = (await response.json().catch(() => ({}))) as {
+      destination?: string;
+      linked_source?: boolean;
+      origin_root?: string;
+      origin_source?: string;
+      error?: string;
+    };
+    if (!response.ok) {
+      throw new Error(data.error || `${response.status} ${response.statusText}`);
+    }
+    sourceSaveLabel.value = data.linked_source
+      ? `Linked ${data.origin_source || data.origin_root || "source"}`
+      : `Exported ${data.destination || chosen.destination}`;
+    lastSavedDisplay.value = formatLastSavedDisplay();
+    status.value = data.linked_source
+      ? `saved as linked source at ${data.destination || chosen.destination}`
+      : `saved copy to ${data.destination || chosen.destination}`;
+  } catch (error) {
+    console.warn("save as failed:", error);
+    status.value = `save as failed: ${error}`;
+  }
+}
+
 async function invalidateCompiledWorkspacePath(path: string | null): Promise<void> {
   if (!path || !currentFontPath.value) return;
   try {
@@ -3595,15 +3852,26 @@ async function invalidateCompiledWorkspacePath(path: string | null): Promise<voi
   }
 }
 
+async function recordWorkspaceWriteResult(res: Response): Promise<void> {
+  if (!res.ok) return;
+  const data = (await res.clone().json().catch(() => null)) as {
+    saved_to_source?: boolean;
+  } | null;
+  if (data?.saved_to_source) {
+    mirroredSaveWrites.value += 1;
+  }
+}
+
 function filenameFromPath(path: string | null, fallback: string): string {
   if (!path) return fallback;
   return path.split("/").filter(Boolean).pop() ?? fallback;
 }
 
-function saveWarningSuffix(groupsSaved: boolean, kerningSaved: boolean): string {
+function saveWarningSuffix(groupsSaved: boolean, kerningSaved: boolean, designspaceSaved: boolean): string {
   const missing = [];
   if (!groupsSaved) missing.push("groups");
   if (!kerningSaved) missing.push("kerning");
+  if (!designspaceSaved) missing.push("designspace");
   return missing.length ? `; ${missing.join(" and ")} not saved` : "";
 }
 
@@ -3652,6 +3920,7 @@ async function persistGroupsData(data: MasterData, masterName = activeMasterName
       method: "POST",
       body,
     });
+    await recordWorkspaceWriteResult(res);
     return res.ok;
   }
 
@@ -3688,6 +3957,47 @@ async function persistDirtyKerning(): Promise<string[]> {
   return unsaved;
 }
 
+async function persistDirtyDesignspace(): Promise<boolean> {
+  if (!designspaceDirty.value) {
+    return true;
+  }
+  if (!designspaceText.value || !designspacePath.value) {
+    return false;
+  }
+
+  if (currentFontPath.value) {
+    const body = new FormData();
+    body.append("path", designspacePath.value);
+    body.append("text", designspaceText.value);
+    const res = await fetch("/runebender/workspace/write", {
+      method: "POST",
+      body,
+    });
+    await recordWorkspaceWriteResult(res);
+    if (!res.ok) return false;
+    designspaceDirty.value = false;
+    return true;
+  }
+
+  if (designspaceFileHandle.value) {
+    const writable = await designspaceFileHandle.value.createWritable();
+    await writable.write(new TextEncoder().encode(designspaceText.value));
+    await writable.close();
+    await invalidateCompiledWorkspacePath(designspacePath.value);
+    designspaceDirty.value = false;
+    return true;
+  }
+
+  const saved = await exportTextFile(
+    designspaceText.value,
+    filenameFromPath(designspacePath.value, "font.designspace"),
+    "Designspace",
+    [".designspace"],
+  );
+  if (saved) designspaceDirty.value = false;
+  return saved;
+}
+
 async function persistKerningData(data: MasterData, masterName = activeMasterName.value): Promise<boolean> {
   if (!dirtyKerningMasters.value.has(masterName)) {
     return true;
@@ -3703,6 +4013,7 @@ async function persistKerningData(data: MasterData, masterName = activeMasterNam
       method: "POST",
       body,
     });
+    await recordWorkspaceWriteResult(res);
     return res.ok;
   }
 
@@ -3815,6 +4126,13 @@ function clearGlyphDirty(glyphName: string, masterName = activeMasterName.value)
     next.set(masterName, glyphs);
   }
   dirtyGlyphsByMaster.value = next;
+}
+
+function onDesignspaceTextInput(event: Event) {
+  const value = (event.target as HTMLTextAreaElement).value;
+  if (value === designspaceText.value) return;
+  designspaceText.value = value;
+  designspaceDirty.value = true;
 }
 
 async function filesFromDirectoryHandle(
@@ -4372,13 +4690,16 @@ onBeforeUnmount(() => {
       :font-label="fontLabel"
       :unsaved="hasDirtyChanges"
       :last-saved="lastSavedDisplay"
+      :source-label="sourceSaveLabel"
       :masters="masters"
       :active-master="activeMasterIndex"
       :master-previews="masterPreviewSvgs"
       :save-enabled="glyphNames.length > 0"
+      :save-as-enabled="!!currentFontPath && glyphNames.length > 0"
       :close-enabled="!!props.onCloseRequested"
       @select-master="onSelectMaster"
       @save="onSave"
+      @save-as="onSaveAs"
       @close="props.onCloseRequested?.()"
     />
 
@@ -4480,6 +4801,14 @@ onBeforeUnmount(() => {
             @select-master="onSelectMaster"
           />
           <WorkspaceToolbar @glyph-grid="backToGrid" />
+          <SystemToolbar
+            :save-enabled="glyphNames.length > 0"
+            :save-as-enabled="!!currentFontPath && glyphNames.length > 0"
+            :close-enabled="!!props.onCloseRequested"
+            @save="onSave"
+            @save-as="onSaveAs"
+            @close="props.onCloseRequested?.()"
+          />
         </div>
 
         <WelcomePanel
@@ -4807,6 +5136,29 @@ onBeforeUnmount(() => {
           :name="selectedGlyph"
           :svg="selectedAnatomySvg"
         />
+        <section
+          v-if="designspacePath"
+          class="designspace-panel"
+        >
+          <div class="designspace-header">
+            <div class="designspace-title">Designspace</div>
+            <div class="designspace-status">
+              {{ designspaceDirty ? "Modified" : "Saved" }}
+            </div>
+          </div>
+          <div class="designspace-path" :title="designspacePath">
+            {{ designspacePath }}
+          </div>
+          <div class="designspace-summary">
+            {{ designspaceSummary }}
+          </div>
+          <textarea
+            class="designspace-editor"
+            spellcheck="false"
+            :value="designspaceText"
+            @input="onDesignspaceTextInput"
+          />
+        </section>
       </div>
     </div>
   </div>
@@ -4864,11 +5216,70 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 6px;
   flex-shrink: 0;
-  width: 220px;
+  width: 320px;
 }
 .right-col > :deep(.info-sidebar) {
   width: auto;
   flex-shrink: 0;
+}
+
+.designspace-panel {
+  background: var(--rb-panel-background, #1c1c1c);
+  border: 1.5px solid var(--rb-panel-outline, #606060);
+  border-radius: 6px;
+  padding: 10px;
+  min-height: 220px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.designspace-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.designspace-title {
+  color: var(--rb-primary-text, #909090);
+  font: 13px ui-sans-serif, system-ui, sans-serif;
+}
+
+.designspace-status {
+  color: var(--rb-muted-text, #808080);
+  font: 12px ui-sans-serif, system-ui, sans-serif;
+}
+
+.designspace-path,
+.designspace-summary {
+  color: var(--rb-secondary-text, #707070);
+  font: 12px ui-sans-serif, system-ui, sans-serif;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.designspace-editor {
+  flex: 1;
+  min-height: 140px;
+  width: 100%;
+  resize: none;
+  box-sizing: border-box;
+  border: 1.5px solid var(--rb-panel-outline, #606060);
+  border-radius: 4px;
+  background: var(--rb-app-background, #101010);
+  color: var(--rb-primary-text, #909090);
+  padding: 8px;
+  font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.35;
+  outline: none;
+}
+
+.designspace-editor:focus {
+  border-color: var(--rb-accent, #66ee88);
 }
 
 /* Stage = the area inside .content where canvas + grid live,
