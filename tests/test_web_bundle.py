@@ -80,7 +80,13 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn('from "/scripts/app.js"', bundle)
         self.assertIn("registerExtension", bundle)
         self.assertIn("runebender-comfy.Runebender", bundle)
-        self.assertIn("Open Font Source", bundle)
+        # New widget labels: combo first showing what's loaded, then
+        # import + edit buttons. Matches the comfyfont-style UX the
+        # user requested.
+        self.assertIn("Font Source", bundle)
+        self.assertIn("Import Font Source", bundle)
+        self.assertIn("Edit Font Source", bundle)
+        self.assertNotIn("Open Font Source", bundle)
         self.assertNotIn("Import Copy Folder...", bundle)
         self.assertNotIn("Link Source Path...", bundle)
         self.assertNotIn("Import Copy File...", bundle)
@@ -89,18 +95,26 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn("font input disconnect requested", bundle)
         self.assertIn("runebender/link_source", bundle)
         self.assertIn("workspace/invalidate", bundle)
-        self.assertIn("rb-bundle-2026-05-19-source-workflows-11", bundle)
-        self.assertIn('"source", "workspace", "font", "source_path"', bundle)
+        self.assertIn("rb-bundle-2026-05-20-dom-preview-17", bundle)
+        # Specimen preview must mount as a DOM widget (<img> via
+        # addDOMWidget), v1's actually-supported way to put HTML
+        # inside a node body. Canvas-paint approaches do NOT work on
+        # custom nodes in v1.
+        self.assertIn("addDOMWidget", bundle)
+        self.assertIn("Font specimen", bundle)
         self.assertIn("onConfigure", bundle)
         self.assertIn("preview request", bundle)
-        self.assertIn("preview loaded", bundle)
-        self.assertIn("Retrying preview", bundle)
-        self.assertIn("preview stale load ignored", bundle)
-        self.assertIn("setDirty", bundle)
         self.assertIn("visible:", bundle)
         self.assertIn("stored:", bundle)
         self.assertIn("upstream:", bundle)
-        self.assertIn("runebender_preview", bundle)
+        self.assertIn("Link source path", bundle)
+        self.assertIn("Save workspace as", bundle)
+        self.assertIn("Managed copy (workspace cache)", bundle)
+        self.assertIn("runebender/workspace/save_as", bundle)
+        self.assertIn("Choose File...", bundle)
+        self.assertIn("Choose Folder...", bundle)
+        self.assertIn("runebender/choose_source", bundle)
+        self.assertIn("showDirectoryPicker", bundle)
         self.assertIn("Link source path", bundle)
         self.assertIn("Save workspace as", bundle)
         self.assertIn("Managed copy (workspace cache)", bundle)

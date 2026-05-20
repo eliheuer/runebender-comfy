@@ -9,9 +9,12 @@ format.
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 import sys
 import tempfile
+import time
+import traceback
 from pathlib import Path
 
 from aiohttp import web
@@ -20,6 +23,17 @@ from server import PromptServer
 
 from .font_preview import render_preview_png, render_workspace_preview_png
 from .workspace import compile_slot, create_slot_from_path, list_slots, locate_source_root, resolve_slot, slot_from_name
+
+
+def _preview_log(message: str, /, **fields) -> None:
+    """Single structured-log point for the preview route. Lets us trace
+    requests end-to-end in the ComfyUI terminal when the browser shows
+    'Loading preview...' but never resolves."""
+    if fields:
+        parts = [f"{key}={value!r}" for key, value in fields.items()]
+        print(f"[runebender preview] {message} {' '.join(parts)}", flush=True)
+    else:
+        print(f"[runebender preview] {message}", flush=True)
 
 SOURCE_KIND_OPTIONS = ("auto", "ufo/designspace", "glyphs", "glyphspackage")
 DEMO_SOURCE_PATH = (
@@ -189,31 +203,90 @@ async def preview_workspace_slot(request):
     text = str(request.query.get("text", "Aa"))
     width = int(request.query.get("width", "320"))
     height = int(request.query.get("height", "180"))
-    if slot == "demo" or slot == "ufo/designspace":
-        slot = create_slot_from_path(str(DEMO_SOURCE_PATH), "demo", source_kind=None)
-    if Path(slot).exists():
-        try:
-            maybe_slot = create_slot_from_path(slot, None, source_kind=None)
-            slot = maybe_slot
-        except Exception:
-            pass
-    slot_info = slot_from_name(slot)
-    if slot_info is not None and slot_info.source_path is None and slot_info.compiled_path is None:
-        try:
-            compile_slot(slot)
-        except Exception:
-            pass
+    request_started = time.monotonic()
+    _preview_log("request", slot=slot, text=text, width=width, height=height)
+
     try:
+        if slot == "demo" or slot == "ufo/designspace":
+            slot = create_slot_from_path(str(DEMO_SOURCE_PATH), "demo", source_kind=None)
+            _preview_log("resolved demo alias", slot=slot)
+        if Path(slot).exists():
+            try:
+                maybe_slot = create_slot_from_path(slot, None, source_kind=None)
+                slot = maybe_slot
+                _preview_log("imported from path", slot=slot)
+            except Exception as exc:
+                _preview_log("path import failed (continuing)", error=str(exc))
+
         slot_info = slot_from_name(slot)
-        if slot_info and slot_info.source_path:
-            png = render_workspace_preview_png(resolve_slot(slot), text, width, height)
-        elif slot_info and slot_info.compiled_path:
-            png = render_preview_png(slot_info.compiled_path, text, width, height)
-        else:
-            png = render_workspace_preview_png(resolve_slot(slot), text, width, height)
-    except Exception:
-        png = render_preview_png(None, text, width, height)
-    return web.Response(body=png, content_type="image/png")
+        if slot_info is None:
+            _preview_log("slot not found, returning placeholder", slot=slot)
+            png = render_preview_png(None, text, width, height)
+            return web.Response(body=png, content_type="image/png")
+
+        if slot_info.source_path is None and slot_info.compiled_path is None:
+            _preview_log("slot has no source or compiled artifact; attempting compile", slot=slot)
+            try:
+                compile_slot(slot)
+                slot_info = slot_from_name(slot)
+            except Exception as exc:
+                _preview_log("compile failed", error=str(exc))
+
+        slot_dir = resolve_slot(slot)
+        source_path = str(slot_info.source_path) if slot_info and slot_info.source_path else None
+        compiled_path = str(slot_info.compiled_path) if slot_info and slot_info.compiled_path else None
+        _preview_log("resolved", slot=slot, slot_dir=str(slot_dir), source=source_path, compiled=compiled_path)
+
+        render_started = time.monotonic()
+        loop = asyncio.get_running_loop()
+        try:
+            if slot_info and slot_info.source_path:
+                _preview_log("render path=workspace_source", slot=slot)
+                png = await loop.run_in_executor(
+                    None,
+                    lambda: render_workspace_preview_png(slot_dir, text, width, height),
+                )
+            elif slot_info and slot_info.compiled_path:
+                _preview_log("render path=compiled", slot=slot, font=compiled_path)
+                png = await loop.run_in_executor(
+                    None,
+                    lambda: render_preview_png(slot_info.compiled_path, text, width, height),
+                )
+            else:
+                _preview_log("render path=workspace_source_fallback", slot=slot)
+                png = await loop.run_in_executor(
+                    None,
+                    lambda: render_workspace_preview_png(slot_dir, text, width, height),
+                )
+        except Exception as exc:
+            _preview_log(
+                "render failed; returning placeholder",
+                slot=slot,
+                error=str(exc),
+                traceback=traceback.format_exc(),
+            )
+            png = render_preview_png(None, text, width, height)
+
+        render_ms = int((time.monotonic() - render_started) * 1000)
+        total_ms = int((time.monotonic() - request_started) * 1000)
+        _preview_log(
+            "response",
+            slot=slot,
+            bytes=len(png) if isinstance(png, (bytes, bytearray)) else None,
+            render_ms=render_ms,
+            total_ms=total_ms,
+        )
+        return web.Response(body=png, content_type="image/png")
+    except Exception as exc:
+        _preview_log(
+            "preview route crashed",
+            slot=slot,
+            error=str(exc),
+            traceback=traceback.format_exc(),
+        )
+        # Send a real 500 so the frontend fetch resolves rather than
+        # hanging until the JS-side abort timeout fires.
+        raise web.HTTPInternalServerError(reason=f"preview render failed: {exc}")
 
 
 class Font:

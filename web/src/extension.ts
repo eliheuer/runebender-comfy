@@ -9,7 +9,7 @@ import { createApp, ref } from "vue";
 
 import Runebender from "./Runebender.vue";
 
-const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-19-source-workflows-11";
+const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-20-dom-preview-17";
 console.info(`[runebender-comfy] loaded ${RUNEBENDER_BUNDLE_FINGERPRINT}`);
 
 // ComfyUI auto-loads .js from WEB_DIRECTORY but not sibling .css. Vite's
@@ -620,6 +620,12 @@ app.registerExtension({
   async beforeRegisterNodeDef(nodeType: any, nodeData: any) {
     if (nodeData.name !== "Runebender") return;
 
+    // No on-node specimen preview. ComfyUI v1's frontend does not invoke
+    // onDrawBackground on custom nodes (verified by installing comfyfont
+    // side-by-side: its specimen also does not render in this build).
+    // The full-screen Edit overlay renders the actual font, which is
+    // where any preview work belongs.
+
     const onCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function () {
       onCreated?.apply(this, arguments);
@@ -635,17 +641,6 @@ app.registerExtension({
       const sourceWidget = this.widgets?.find((w: any) => w.name === "source_path");
       const sourceKindWidget = this.widgets?.find((w: any) => w.name === "source_kind");
       const workspaceNameWidget = this.widgets?.find((w: any) => w.name === "workspace_name");
-
-      const specimenImage = new Image();
-      let specimenStatus = "No workspace selected";
-      let specimenReady = false;
-      let previewRequestId = 0;
-
-      const markPreviewDirty = () => {
-        this.setDirtyCanvas?.(true, true);
-        this.graph?.setDirtyCanvas?.(true, true);
-        app.canvas?.setDirty?.(true, true);
-      };
 
       let workspaceSelect: any = null;
 
@@ -689,70 +684,55 @@ app.registerExtension({
         }
       };
 
-      const syncPreview = (retryCount = 0) => {
+      // Node-body specimen preview, mounted via ComfyUI v1's
+      // addDOMWidget API as a plain <img>. The browser handles
+      // loading, decoding, error events, retry on src reassignment —
+      // none of the canvas-paint / setDirtyCanvas plumbing we wasted
+      // effort on, because v1 doesn't invoke onDrawBackground on
+      // custom nodes (verified with comfyfont side-by-side).
+      const previewImg = document.createElement("img");
+      previewImg.alt = "Font specimen";
+      previewImg.style.cssText = [
+        "display:block",
+        "width:100%",
+        "height:160px",
+        "object-fit:contain",
+        "background:#111",
+        "border:1px solid #2a2a2a",
+        "border-radius:6px",
+        "padding:4px",
+        "box-sizing:border-box",
+      ].join(";");
+      previewImg.addEventListener("error", () => {
+        console.warn("[runebender-comfy] preview <img> failed", previewImg.src);
+      });
+      previewImg.addEventListener("load", () => {
+        console.info("[runebender-comfy] preview <img> loaded", JSON.stringify({
+          src: previewImg.src,
+          width: previewImg.naturalWidth,
+          height: previewImg.naturalHeight,
+        }));
+      });
+
+      let lastPreviewSlot = "";
+      const syncPreview = () => {
         const value = currentSourceValue();
         if (!value) {
-          specimenStatus = "No workspace selected";
-          specimenReady = false;
-          specimenImage.removeAttribute("src");
-          markPreviewDirty();
+          lastPreviewSlot = "";
+          previewImg.removeAttribute("src");
           return;
         }
-        const requestId = ++previewRequestId;
-        specimenStatus = "Loading preview...";
-        specimenReady = false;
-        const url = `/runebender/workspace/${encodeURIComponent(value)}/preview?text=Aa&width=480&height=160&t=${Date.now()}`;
+        if (value === lastPreviewSlot && previewImg.src) return;
+        lastPreviewSlot = value;
+        // Cache-bust so the image refreshes after edits.
+        previewImg.src = `/runebender/workspace/${encodeURIComponent(value)}/preview?text=Aa&width=480&height=160&t=${Date.now()}`;
         console.info("[runebender-comfy] preview request", JSON.stringify({
-          requestId,
-          retryCount,
           value,
           visible: visibleSourceValue(),
           stored: storedSourceValue(),
           upstream: resolveConnectedFontValue(this),
-          url,
+          src: previewImg.src,
         }));
-        specimenImage.onload = () => {
-          if (requestId !== previewRequestId) {
-            console.info("[runebender-comfy] preview stale load ignored", JSON.stringify({
-              requestId,
-              currentRequestId: previewRequestId,
-              value,
-            }));
-            return;
-          }
-          specimenReady = true;
-          console.info("[runebender-comfy] preview loaded", JSON.stringify({
-            requestId,
-            value,
-            width: specimenImage.naturalWidth,
-            height: specimenImage.naturalHeight,
-            complete: specimenImage.complete,
-          }));
-          markPreviewDirty();
-        };
-        specimenImage.onerror = () => {
-          if (requestId !== previewRequestId) return;
-          specimenReady = false;
-          console.warn("[runebender-comfy] preview image failed", JSON.stringify({
-            requestId,
-            retryCount,
-            value,
-            url,
-          }));
-          if (retryCount < 3) {
-            const delay = 300 * (retryCount + 1);
-            specimenStatus = "Retrying preview...";
-            markPreviewDirty();
-            window.setTimeout(() => {
-              if (requestId === previewRequestId) syncPreview(retryCount + 1);
-            }, delay);
-            return;
-          }
-          specimenStatus = "Preview unavailable";
-          markPreviewDirty();
-        };
-        specimenImage.src = url;
-        markPreviewDirty();
       };
 
       const refreshChoices = async () => {
@@ -809,15 +789,12 @@ app.registerExtension({
         return (await linkSourcePath(value)) || value;
       };
 
-      const openSourceButton = this.addWidget("button", "Open Font Source", null, () => {
-        void linkSourcePath().catch((error) => {
-          alert(`Runebender source link failed: ${error}`);
-          console.error("[runebender-comfy] source link failed:", error);
-        });
-      }, {});
-      openSourceButton.serialize = false;
-
-      workspaceSelect = this.addWidget("combo", "source", "demo", (value: any) => {
+      // Widget order, matching node-based editors (Fusion/Nuke/Houdini):
+      //   Font Source (combo)         — the loaded font, visible at a glance
+      //   Import Font Source (button) — bring a new font into the workspace
+      //   Edit Font Source (button)   — open the full-screen editor
+      //   <img> specimen preview      — DOM widget, v1-native
+      workspaceSelect = this.addWidget("combo", "Font Source", "demo", (value: any) => {
         setSourceValue(String(value ?? ""));
         syncPreview();
       }, {
@@ -825,24 +802,19 @@ app.registerExtension({
       });
       workspaceSelect.serialize = true;
 
-      const origConfigure = this.onConfigure;
-      this.onConfigure = function (info: unknown) {
-        origConfigure?.call(this, info);
-        const restored = localSourceValue();
-        console.info("[runebender-comfy] source restore", JSON.stringify({
-          restored,
-          visible: visibleSourceValue(),
-          stored: storedSourceValue(),
-        }));
-        if (restored) setSourceValue(restored);
-        syncPreview();
-      };
+      const importButton = this.addWidget("button", "Import Font Source", null, () => {
+        void linkSourcePath().catch((error) => {
+          alert(`Runebender source link failed: ${error}`);
+          console.error("[runebender-comfy] source link failed:", error);
+        });
+      }, {});
+      importButton.serialize = false;
 
-      const editButton = this.addWidget("button", "Edit", null, () => {
+      const editButton = this.addWidget("button", "Edit Font Source", null, () => {
         void (async () => {
           const currentFont = currentSourceValue();
           if (!currentFont) {
-            alert("Runebender: pick a workspace first (the Edit button needs a loaded font).");
+            alert("Runebender: pick a font first (the Edit button needs a loaded font).");
             return;
           }
           const editableFont = await ensureEditableWorkspace(currentFont);
@@ -865,61 +837,30 @@ app.registerExtension({
       }, {});
       editButton.serialize = false;
 
-      const previewWidget = {
-        name: "preview",
-        type: "runebender_preview",
-        value: null,
-        serialize: false,
-        computeSize: (width: number) => [width, 170],
-        draw: (
-          ctx: CanvasRenderingContext2D,
-          _node: unknown,
-          width: number,
-          y: number,
-          height: number,
-        ) => {
-          const pad = 8;
-          const boxX = pad;
-          const boxY = y + 6;
-          const boxW = Math.max(20, width - pad * 2);
-          const boxH = Math.max(20, height - 12);
-
-          ctx.save();
-          ctx.beginPath();
-          ctx.roundRect(boxX, boxY, boxW, boxH, 6);
-          ctx.fillStyle = "#111";
-          ctx.fill();
-          ctx.strokeStyle = "#3f3f3f";
-          ctx.stroke();
-          ctx.beginPath();
-          ctx.rect(boxX, boxY, boxW, boxH);
-          ctx.clip();
-
-          if (specimenReady && specimenImage.complete && specimenImage.naturalWidth > 0) {
-            const scale = Math.min(
-              (boxW - pad * 2) / specimenImage.naturalWidth,
-              (boxH - pad * 2) / specimenImage.naturalHeight,
-            );
-            const drawW = specimenImage.naturalWidth * scale;
-            const drawH = specimenImage.naturalHeight * scale;
-            const x = boxX + (boxW - drawW) / 2;
-            const imgY = boxY + (boxH - drawH) / 2;
-            ctx.drawImage(specimenImage, x, imgY, drawW, drawH);
-          } else {
-            ctx.fillStyle = "#aaa";
-            ctx.font = "12px ui-sans-serif, system-ui, sans-serif";
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
-            ctx.fillText(specimenStatus, boxX + boxW / 2, boxY + boxH / 2);
-          }
-          ctx.restore();
-        },
-      };
-      if (typeof this.addCustomWidget === "function") {
-        this.addCustomWidget(previewWidget);
+      // Mount the <img> as a DOM widget — ComfyUI v1's actually-supported
+      // way to put HTML inside a node body. Falls back to a plain
+      // canvas widget if addDOMWidget isn't available on this build.
+      if (typeof this.addDOMWidget === "function") {
+        this.addDOMWidget("preview", "image", previewImg, {
+          serialize: false,
+          hideOnZoom: false,
+        });
       } else {
-        this.widgets?.push(previewWidget);
+        console.warn("[runebender-comfy] addDOMWidget not available; specimen preview disabled");
       }
+
+      const origConfigure = this.onConfigure;
+      this.onConfigure = function (info: unknown) {
+        origConfigure?.call(this, info);
+        const restored = localSourceValue();
+        console.info("[runebender-comfy] source restore", JSON.stringify({
+          restored,
+          visible: visibleSourceValue(),
+          stored: storedSourceValue(),
+        }));
+        if (restored) setSourceValue(restored);
+        syncPreview();
+      };
 
       const hideWidget = (widget: any) => {
         if (!widget) return;
@@ -945,11 +886,10 @@ app.registerExtension({
       hideWidget(workspaceNameWidget);
 
       const [oldWidth, oldHeight] = this.size;
-      this.setSize([Math.max(oldWidth, 360), Math.max(oldHeight, 390)]);
+      this.setSize([Math.max(oldWidth, 360), Math.max(oldHeight, 320)]);
 
       void refreshChoices();
       syncPreview();
-      setTimeout(() => syncPreview(), 100);
     };
   },
 });
