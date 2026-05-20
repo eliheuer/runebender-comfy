@@ -95,7 +95,18 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn("font input disconnect requested", bundle)
         self.assertIn("runebender/link_source", bundle)
         self.assertIn("workspace/invalidate", bundle)
-        self.assertIn("rb-bundle-2026-05-20-dom-preview-17", bundle)
+        self.assertIn("rb-bundle-2026-05-20-batch-svgs-24", bundle)
+        # Grid thumbnail SVGs must come from one batched WASM call
+        # (glifMapToSvgs) not 600+ per-glyph crossings.
+        self.assertIn("glifMapToSvgs", bundle)
+        # Console mirror posts [runebender...] messages to /runebender/log
+        # so they show up in the ComfyUI terminal too.
+        self.assertIn("/runebender/log", bundle)
+        # Latin specimen: uppercase + lowercase + numerals as one
+        # string. Backend auto-wraps to maximize per-glyph scale.
+        self.assertIn("ABCDEFGHIJKLMNOPQRSTUVWXYZ", bundle)
+        self.assertIn("abcdefghijklmnopqrstuvwxyz", bundle)
+        self.assertIn("0123456789", bundle)
         # Specimen preview must mount as a DOM widget (<img> via
         # addDOMWidget), v1's actually-supported way to put HTML
         # inside a node body. Canvas-paint approaches do NOT work on

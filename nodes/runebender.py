@@ -16,6 +16,7 @@ from server import PromptServer
 from .font import DEMO_SOURCE_PATH, SOURCE_KIND_OPTIONS, resolve_font_source
 from .workspace import (
     FONTS_DIR,
+    compile_slot,
     create_slot_from_path,
     export_slot_to_directory,
     export_slot_text_files,
@@ -53,11 +54,39 @@ def _ensure_demo_workspace_fresh() -> None:
         # Non-fatal: workspace may still be usable in its previous state.
         # Log and move on so the editor at least opens.
         print(f"[runebender] failed to refresh demo workspace: {exc}")
+        return
+    # Compile to TTF immediately so the drawbot-skia specimen preview
+    # has something to render against on first request. Best-effort —
+    # if fontc isn't installed or compilation fails, previews fall
+    # back to direct-skia from UFO.
+    try:
+        compile_slot("demo")
+    except Exception as exc:
+        print(f"[runebender] eager demo compile failed: {exc}", flush=True)
 
 
 RUNEBENDER_STATE: dict[str, dict[str, str]] = {}
 
 routes = PromptServer.instance.routes
+
+
+@routes.post("/runebender/log")
+async def forward_browser_log(request):
+    """Mirror browser-side runebender console messages into ComfyUI's
+    terminal output. Saves the user from constantly opening DevTools
+    when they're tracing edit-time loading, preview rendering, etc.
+    Only [runebender...]-prefixed messages reach this route (the JS
+    side filters before posting), so this won't drown the terminal in
+    unrelated browser noise.
+    """
+    data = await request.post()
+    level = str(data.get("level", "info")).lower()
+    message = str(data.get("message", ""))
+    if not message:
+        return web.json_response({"ok": True})
+    tag = f"browser {level}"
+    print(f"[{tag}] {message}", flush=True)
+    return web.json_response({"ok": True})
 
 
 @routes.post("/runebender/set_state")

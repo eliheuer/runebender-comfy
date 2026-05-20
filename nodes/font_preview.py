@@ -8,6 +8,8 @@ pipeline lands.
 
 from __future__ import annotations
 
+import tempfile
+import threading
 from io import BytesIO
 import os
 from pathlib import Path
@@ -15,6 +17,13 @@ import plistlib
 import xml.etree.ElementTree as ET
 
 from .workspace import compiled_path
+
+# drawbot-skia uses module-level global state for the active canvas.
+# Serialize render calls so two concurrent preview requests can't
+# corrupt each other. The aiohttp default thread-pool executor is
+# single-threaded so this is usually a no-op, but if the caller ever
+# bumps the executor's worker count we're still safe.
+_DRAWBOT_LOCK = threading.Lock()
 
 
 def _image_stack():
@@ -67,17 +76,153 @@ def render_preview_png(font_path, text: str, width: int, height: int) -> bytes:
     return bio.getvalue()
 
 
-def render_workspace_preview_png(slot_dir: Path, text: str, width: int, height: int) -> bytes:
-    """Render a lightweight specimen directly from UFO GLIF sources.
+def render_workspace_preview_png(
+    slot_dir: Path,
+    text: str,
+    width: int,
+    height: int,
+    ttf_path: Path | None = None,
+) -> bytes:
+    """Render a specimen for a workspace.
 
-    The graph-node preview should work before the user runs Compile Font.
-    Prefer a real outline renderer so counters, curves, and antialiasing match
-    the editor/browser preview closely enough for a graph node specimen.
+    Preference order (each falls through to the next on failure):
+      1. drawbot-skia + compiled TTF, if a TTF path is provided.
+         Matches the rendering pipeline used by the DrawBot script nodes
+         so previews and pipeline outputs come from the same engine.
+      2. Direct skia-python + raw UFO. Works without a compiled TTF.
+      3. PIL polygon fallback for environments without skia.
     """
+    if ttf_path is not None and Path(ttf_path).exists():
+        try:
+            return _render_workspace_preview_png_drawbot(Path(ttf_path), text, width, height)
+        except Exception:
+            pass
     try:
         return _render_workspace_preview_png_skia(slot_dir, text, width, height)
     except Exception:
         return _render_workspace_preview_png_polygon(slot_dir, text, width, height)
+
+
+def _render_workspace_preview_png_drawbot(
+    ttf_path: Path,
+    text: str,
+    width: int,
+    height: int,
+) -> bytes:
+    """Render the specimen via drawbot-skia from a compiled TTF.
+
+    Single-string input is auto-wrapped: tries 1..8 lines and picks the
+    line count that yields the largest font size while still fitting
+    both the canvas width and height.
+    """
+    import drawbot_skia.drawbot as db
+
+    glyphs = text.replace("\n", "")
+    if not glyphs:
+        return render_preview_png(None, text, width, height)
+
+    margin = min(width, height) * 0.04
+    avail_w = max(1.0, width - margin * 2)
+    avail_h = max(1.0, height - margin * 2)
+    LINE_SPACING = 1.1
+
+    with _DRAWBOT_LOCK:
+        db.newDrawing()
+        try:
+            db.newPage(width, height)
+            db.fill(16 / 255)
+            db.rect(0, 0, width, height)
+
+            db.font(str(ttf_path))
+
+            REF_SIZE = 100.0
+            db.fontSize(REF_SIZE)
+            total = len(glyphs)
+
+            # Measure each glyph's width once at REF_SIZE. We use these
+            # to pack glyphs into n lines such that every line ends up
+            # roughly the same pixel width — without this width-balanced
+            # packing, fixed N-chars-per-line means a single wide letter
+            # (W/M/m) pins max_w and the other lines have huge slack on
+            # the sides.
+            char_widths = [db.textSize(c)[0] for c in glyphs]
+            total_char_width = sum(char_widths)
+
+            def balanced_lines(n_lines: int) -> list[str]:
+                if n_lines <= 1 or n_lines >= total:
+                    return [glyphs]
+                target = total_char_width / n_lines
+                lines_out: list[list[str]] = [[]]
+                cur_w = 0.0
+                for i, ch in enumerate(glyphs):
+                    w = char_widths[i]
+                    remaining_chars = total - i
+                    remaining_lines = n_lines - len(lines_out)
+                    # Start a new line when the current line has reached
+                    # the target width AND we still need to open more
+                    # lines AND we have enough chars left to fill them
+                    # (at least one per remaining line).
+                    if (
+                        cur_w >= target
+                        and remaining_lines > 0
+                        and remaining_chars > remaining_lines
+                    ):
+                        lines_out.append([])
+                        cur_w = 0.0
+                    lines_out[-1].append(ch)
+                    cur_w += w
+                return ["".join(line) for line in lines_out]
+
+            def scale_for(lines: list[str]) -> float:
+                if not lines:
+                    return 0.0
+                # Measure the actual rendered width (includes kerning) for
+                # the final pick rather than the additive estimate.
+                max_w = max((db.textSize(line)[0] for line in lines), default=1.0)
+                ref_line_h = REF_SIZE * LINE_SPACING
+                return min(
+                    avail_w / max(1.0, max_w),
+                    avail_h / max(1.0, len(lines) * ref_line_h),
+                )
+
+            best_lines = balanced_lines(1)
+            best_scale = scale_for(best_lines)
+            for n in range(2, 9):
+                if n > total:
+                    break
+                cand = balanced_lines(n)
+                s = scale_for(cand)
+                if s > best_scale:
+                    best_scale = s
+                    best_lines = cand
+
+            target_size = REF_SIZE * best_scale
+            db.fontSize(target_size)
+            line_h = target_size * LINE_SPACING
+            n_lines = len(best_lines)
+            block_h = n_lines * line_h
+            # In drawbot-skia y goes up from the bottom; db.text(s, (x, y))
+            # draws at the baseline. Approximate the ascender as 0.8 * size
+            # so the visible block of N lines is centered vertically.
+            ascender_approx = target_size * 0.8
+            first_baseline_y = (height + block_h) / 2 - ascender_approx
+
+            db.fill(220 / 255)
+            for i, line in enumerate(best_lines):
+                line_w, _ = db.textSize(line)
+                x = (width - line_w) / 2
+                y = first_baseline_y - i * line_h
+                db.text(line, (x, y))
+
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+                png_path = Path(f.name)
+            try:
+                db.saveImage(str(png_path))
+                return png_path.read_bytes()
+            finally:
+                png_path.unlink(missing_ok=True)
+        finally:
+            db.endDrawing()
 
 
 def _render_workspace_preview_png_skia(slot_dir: Path, text: str, width: int, height: int) -> bytes:
@@ -91,7 +236,8 @@ def _render_workspace_preview_png_skia(slot_dir: Path, text: str, width: int, he
 
     font = ufoLib2.Font.open(ufo_dir)
     glyphs_by_char = _ufo_glyphs_by_char(font)
-    entries = []
+    has_explicit_newlines = "\n" in text
+    entries: list[object | None] = []
     for char in text:
         if char == "\n":
             entries.append(None)
@@ -105,11 +251,21 @@ def _render_workspace_preview_png_skia(slot_dir: Path, text: str, width: int, he
 
     units_per_em, ascender, descender = _font_metrics(font)
     line_height = max(1, ascender - descender)
-    lines = _preview_lines(entries)
+    margin = min(width, height) * 0.06
+    avail_w = max(1.0, width - margin * 2)
+    avail_h = max(1.0, height - margin * 2)
+    if has_explicit_newlines:
+        # Respect the caller's explicit line breaks.
+        lines = _preview_lines(entries)
+    else:
+        # Auto-wrap the glyph run into the line count that produces the
+        # largest per-glyph scale given the canvas aspect ratio. The
+        # user gets the biggest glyphs that still fit all of them.
+        flat_glyphs = [g for g in entries if g is not None]
+        lines = _auto_wrap_glyphs(flat_glyphs, line_height, avail_w, avail_h)
     max_line_width = max((_line_width(line) for line in lines), default=1)
-    margin = min(width, height) * 0.12
     total_height = len(lines) * line_height
-    scale = min((width - margin * 2) / max(1, max_line_width), (height - margin * 2) / max(1, total_height))
+    scale = min(avail_w / max(1, max_line_width), avail_h / max(1, total_height))
     scale = max(0.01, scale)
 
     surface = skia.Surface(width, height)
@@ -221,6 +377,58 @@ def _preview_lines(entries: list[object | None]) -> list[list[object]]:
 
 def _line_width(line: list[object]) -> float:
     return sum(float(getattr(glyph, "width", None) or 600) for glyph in line)
+
+
+def _auto_wrap_glyphs(
+    glyphs: list[object],
+    line_height: float,
+    avail_w: float,
+    avail_h: float,
+) -> list[list[object]]:
+    """Wrap a flat glyph run into the line count that gives the biggest
+    per-glyph scale on the available canvas.
+
+    Tries 1..8 lines and picks whichever maximizes the limiting scale
+    (min of width-fit and height-fit). This lets a long single-string
+    specimen flow across multiple lines so the glyphs fill the box
+    instead of being pinned by the widest line.
+    """
+    if not glyphs:
+        return []
+    advances = [float(getattr(g, "width", None) or 600) for g in glyphs]
+    total = len(glyphs)
+
+    def lines_for(n_lines: int) -> list[list[object]]:
+        per_line = max(1, (total + n_lines - 1) // n_lines)
+        out: list[list[object]] = []
+        for i in range(0, total, per_line):
+            out.append(glyphs[i : i + per_line])
+        return out
+
+    def scale_for(lines: list[list[object]]) -> float:
+        if not lines:
+            return 0.0
+        offsets = [0]
+        for line in lines:
+            offsets.append(offsets[-1] + len(line))
+        widths = [
+            sum(advances[offsets[i] : offsets[i + 1]]) for i in range(len(lines))
+        ]
+        max_w = max(widths) if widths else 1.0
+        total_h = len(lines) * line_height
+        return min(avail_w / max(1.0, max_w), avail_h / max(1.0, total_h))
+
+    best_lines = [glyphs]
+    best_scale = scale_for(best_lines)
+    for n in range(2, 9):
+        if n > total:
+            break
+        candidate = lines_for(n)
+        candidate_scale = scale_for(candidate)
+        if candidate_scale > best_scale:
+            best_scale = candidate_scale
+            best_lines = candidate
+    return best_lines
 
 
 def _glyph_to_skia_path(font, glyph, pen_cls, skia):

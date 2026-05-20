@@ -77,10 +77,11 @@ async def import_font(request):
             workspace_name or None,
             source_kind=None if source_kind in {"", "auto"} else source_kind,
         )
+        loop = asyncio.get_running_loop()
         try:
-            compile_slot(slot)
-        except Exception:
-            pass
+            await loop.run_in_executor(None, lambda: compile_slot(slot))
+        except Exception as exc:
+            print(f"[runebender] eager compile failed for slot {slot!r}: {exc}", flush=True)
         return web.json_response(
             {
                 "success": True,
@@ -111,10 +112,11 @@ async def link_source(request):
         source_kind=None if source_kind in {"", "auto"} else source_kind,
         linked=True,
     )
+    loop = asyncio.get_running_loop()
     try:
-        compile_slot(slot)
-    except Exception:
-        pass
+        await loop.run_in_executor(None, lambda: compile_slot(slot))
+    except Exception as exc:
+        print(f"[runebender] eager compile failed for slot {slot!r}: {exc}", flush=True)
     slot_info = slot_from_name(slot)
     return web.json_response(
         {
@@ -147,10 +149,11 @@ async def import_source_path(request):
         source_kind=None if source_kind in {"", "auto"} else source_kind,
         linked=False,
     )
+    loop = asyncio.get_running_loop()
     try:
-        compile_slot(slot)
-    except Exception:
-        pass
+        await loop.run_in_executor(None, lambda: compile_slot(slot))
+    except Exception as exc:
+        print(f"[runebender] eager compile failed for slot {slot!r}: {exc}", flush=True)
     slot_info = slot_from_name(slot)
     return web.json_response(
         {
@@ -224,33 +227,56 @@ async def preview_workspace_slot(request):
             png = render_preview_png(None, text, width, height)
             return web.Response(body=png, content_type="image/png")
 
-        if slot_info.source_path is None and slot_info.compiled_path is None:
+        loop = asyncio.get_running_loop()
+
+        # Eager compile: if the slot has source files but no TTF yet,
+        # build one via fontc so drawbot-skia can render. Skipped when
+        # the TTF already exists (compile_slot is itself idempotent
+        # when not forced).
+        if slot_info.compiled_path is None and slot_info.source_path is not None:
+            _preview_log("compiling for drawbot-skia preview", slot=slot)
+            try:
+                await loop.run_in_executor(None, lambda: compile_slot(slot))
+                slot_info = slot_from_name(slot)
+            except Exception as exc:
+                _preview_log("compile failed (will fall back to direct skia)", slot=slot, error=str(exc))
+        elif slot_info.source_path is None and slot_info.compiled_path is None:
             _preview_log("slot has no source or compiled artifact; attempting compile", slot=slot)
             try:
-                compile_slot(slot)
+                await loop.run_in_executor(None, lambda: compile_slot(slot))
                 slot_info = slot_from_name(slot)
             except Exception as exc:
                 _preview_log("compile failed", error=str(exc))
 
         slot_dir = resolve_slot(slot)
         source_path = str(slot_info.source_path) if slot_info and slot_info.source_path else None
-        compiled_path = str(slot_info.compiled_path) if slot_info and slot_info.compiled_path else None
-        _preview_log("resolved", slot=slot, slot_dir=str(slot_dir), source=source_path, compiled=compiled_path)
+        compiled_path = (
+            str(slot_info.compiled_path) if slot_info and slot_info.compiled_path else None
+        )
+        _preview_log(
+            "resolved",
+            slot=slot,
+            slot_dir=str(slot_dir),
+            source=source_path,
+            compiled=compiled_path,
+        )
 
         render_started = time.monotonic()
-        loop = asyncio.get_running_loop()
         try:
-            if slot_info and slot_info.source_path:
-                _preview_log("render path=workspace_source", slot=slot)
+            if slot_info and slot_info.compiled_path:
+                _preview_log("render path=drawbot+ttf", slot=slot, font=compiled_path)
+                ttf = slot_info.compiled_path
+                png = await loop.run_in_executor(
+                    None,
+                    lambda: render_workspace_preview_png(
+                        slot_dir, text, width, height, ttf_path=ttf
+                    ),
+                )
+            elif slot_info and slot_info.source_path:
+                _preview_log("render path=direct_skia_from_ufo", slot=slot)
                 png = await loop.run_in_executor(
                     None,
                     lambda: render_workspace_preview_png(slot_dir, text, width, height),
-                )
-            elif slot_info and slot_info.compiled_path:
-                _preview_log("render path=compiled", slot=slot, font=compiled_path)
-                png = await loop.run_in_executor(
-                    None,
-                    lambda: render_preview_png(slot_info.compiled_path, text, width, height),
                 )
             else:
                 _preview_log("render path=workspace_source_fallback", slot=slot)
@@ -362,4 +388,14 @@ def resolve_font_source(source_path: str, source_kind: str = "auto", workspace_n
     if source_kind in {"", "auto"}:
         source_kind = None
     workspace_name = (workspace_name or "").strip()
-    return create_slot_from_path(source_path, workspace_name or None, source_kind=source_kind)
+    slot = create_slot_from_path(source_path, workspace_name or None, source_kind=source_kind)
+    # Eagerly produce the TTF via fontc so the drawbot-skia preview
+    # and any downstream FONT consumer can find it immediately.
+    # Best-effort: a compile failure leaves the workspace usable (the
+    # editor opens fine on the raw UFO; the preview falls back to
+    # direct-skia rendering from the UFO).
+    try:
+        compile_slot(slot)
+    except Exception as exc:
+        print(f"[runebender] eager compile failed for slot {slot!r}: {exc}", flush=True)
+    return slot

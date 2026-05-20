@@ -9,7 +9,56 @@ import { createApp, ref } from "vue";
 
 import Runebender from "./Runebender.vue";
 
-const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-20-dom-preview-17";
+const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-20-batch-svgs-24";
+
+// Mirror our own console output to the ComfyUI terminal via the
+// /runebender/log backend route. Filters to messages prefixed with
+// "[runebender" so we don't push unrelated browser noise through.
+// Installed BEFORE the first console.info so the "loaded ..." line
+// shows up in the terminal too.
+function installRunebenderLogMirror() {
+  const original = {
+    log: console.log.bind(console),
+    info: console.info.bind(console),
+    warn: console.warn.bind(console),
+    error: console.error.bind(console),
+  };
+  const isRunebenderMessage = (args: any[]) => {
+    if (!args.length) return false;
+    const first = args[0];
+    return typeof first === "string" && first.includes("[runebender");
+  };
+  const formatArgs = (args: any[]) =>
+    args
+      .map((a) => {
+        if (typeof a === "string") return a;
+        try {
+          return JSON.stringify(a);
+        } catch {
+          return String(a);
+        }
+      })
+      .join(" ");
+  const forward = (level: string, args: any[]) => {
+    try {
+      const body = new FormData();
+      body.append("level", level);
+      body.append("message", formatArgs(args));
+      // keepalive lets the request survive even if the page is
+      // navigating; void-discard so we don't await network on every
+      // console call.
+      void fetch("/runebender/log", { method: "POST", body, keepalive: true }).catch(() => {});
+    } catch {}
+  };
+  for (const level of ["log", "info", "warn", "error"] as const) {
+    (console as any)[level] = (...args: any[]) => {
+      original[level](...args);
+      if (isRunebenderMessage(args)) forward(level, args);
+    };
+  }
+}
+installRunebenderLogMirror();
+
 console.info(`[runebender-comfy] loaded ${RUNEBENDER_BUNDLE_FINGERPRINT}`);
 
 // ComfyUI auto-loads .js from WEB_DIRECTORY but not sibling .css. Vite's
@@ -695,7 +744,9 @@ app.registerExtension({
       previewImg.style.cssText = [
         "display:block",
         "width:100%",
-        "height:160px",
+        // 1:1 aspect ratio so the displayed box matches the 1024x1024
+        // backing image — no letterboxing, no wasted space.
+        "aspect-ratio:1 / 1",
         "object-fit:contain",
         "background:#111",
         "border:1px solid #2a2a2a",
@@ -703,6 +754,22 @@ app.registerExtension({
         "padding:4px",
         "box-sizing:border-box",
       ].join(";");
+
+      // Latin specimen sent as a single string. The backend picks the
+      // line count (1..8) that maximizes per-glyph scale on the canvas,
+      // so the glyphs fill the preview box instead of being pinned by
+      // a 26-letter line. TODO: language-specific default character
+      // sets for Arabic, Hebrew, CJK, etc. once Latin lands cleanly.
+      const SPECIMEN_TEXT =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ" +
+        "abcdefghijklmnopqrstuvwxyz" +
+        "0123456789";
+      // Square 1024x1024 backing image. The browser downsamples to the
+      // displayed widget size; the square aspect ratio matches what
+      // node-based editor previews typically use and gives the
+      // auto-wrap algorithm balanced width vs height to work with.
+      const SPECIMEN_WIDTH = 1024;
+      const SPECIMEN_HEIGHT = 1024;
       previewImg.addEventListener("error", () => {
         console.warn("[runebender-comfy] preview <img> failed", previewImg.src);
       });
@@ -724,8 +791,14 @@ app.registerExtension({
         }
         if (value === lastPreviewSlot && previewImg.src) return;
         lastPreviewSlot = value;
-        // Cache-bust so the image refreshes after edits.
-        previewImg.src = `/runebender/workspace/${encodeURIComponent(value)}/preview?text=Aa&width=480&height=160&t=${Date.now()}`;
+        const params = new URLSearchParams({
+          text: SPECIMEN_TEXT,
+          width: String(SPECIMEN_WIDTH),
+          height: String(SPECIMEN_HEIGHT),
+          // Cache-bust so the image refreshes after edits.
+          t: String(Date.now()),
+        });
+        previewImg.src = `/runebender/workspace/${encodeURIComponent(value)}/preview?${params.toString()}`;
         console.info("[runebender-comfy] preview request", JSON.stringify({
           value,
           visible: visibleSourceValue(),
