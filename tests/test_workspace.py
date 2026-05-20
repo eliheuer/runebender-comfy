@@ -42,6 +42,7 @@ sys.modules.setdefault(
 from nodes.runebender import RUNEBENDER_STATE, Runebender
 from nodes.font import Font
 from nodes.compile_font import CompileFont
+from nodes import font_preview
 from nodes.font_preview import FontPreview
 from nodes.font_specimen import FontSpecimen
 from nodes.fork_font import ForkFont
@@ -1260,6 +1261,33 @@ class FontPreviewNodeTests(unittest.TestCase):
 
         self.assertEqual(input_types["required"]["font"], ("FONT",))
         self.assertEqual(FontPreview.RETURN_TYPES, ("IMAGE",))
+
+    def test_glif_source_preview_parser_extracts_unicode_outline_and_width(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            glif = Path(tmp) / "A_.glif"
+            glif.write_text(
+                """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<glyph name=\"A\" format=\"2\">
+  <unicode hex=\"0041\"/>
+  <advance width=\"600\"/>
+  <outline>
+    <contour>
+      <point x=\"0\" y=\"0\" type=\"move\"/>
+      <point x=\"300\" y=\"700\" type=\"line\"/>
+      <point x=\"600\" y=\"0\" type=\"line\"/>
+    </contour>
+  </outline>
+</glyph>
+""",
+                encoding="utf-8",
+            )
+
+            parsed = font_preview._parse_glif(glif)  # type: ignore[attr-defined]
+
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["advance"], 600)
+        self.assertIn("0041", parsed["unicodes"])
+        self.assertEqual(len(parsed["polygons"]), 1)
 
 
 class FontSpecimenNodeTests(unittest.TestCase):

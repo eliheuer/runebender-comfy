@@ -62,11 +62,15 @@ mode solves safe Comfy-managed editing. Save As bridges the two.
 
 ## Intended UX
 
-- `Import Copy...`: create a Comfy-managed copy.
-- `Link Source...`: edit a real source folder on disk.
+- The graph node should start simple: `Open Source...`, source chooser, and
+  `Edit`.
+- `Open Source...`: edit a real source folder on disk.
 - `Save`: write to the current backing store.
 - `Save As...`: write the current workspace to a chosen disk folder.
 - After `Save As...`, offer to treat the destination as the new linked source.
+- Imported/managed-copy workflows stay supported in the backend and tests, but
+  should not be front-and-center on the node until the user actually needs that
+  complexity.
 
 ## Actionable Todo List
 
@@ -106,7 +110,7 @@ mode solves safe Comfy-managed editing. Save As bridges the two.
 - 2026-05-19: automated verification passed with
   `python3 -m unittest tests.test_workspace tests.test_web_bundle`.
 - 2026-05-19: frontend bundle rebuilt with `pnpm build`; live bundle
-  fingerprint for this phase is `rb-bundle-2026-05-19-source-workflows-2`.
+  fingerprint for this phase is `rb-bundle-2026-05-19-source-workflows-9`.
 - 2026-05-19: local `git diff --check` passed.
 - 2026-05-19: `Save As...` now aborts if the preliminary save cannot
   flush dirty edits, so exported folders should not silently receive stale
@@ -115,10 +119,36 @@ mode solves safe Comfy-managed editing. Save As bridges the two.
   scenarios: imported edits do not touch the original disk source, and
   imported copy -> `Save As...` with relink writes subsequent edits to the
   exported folder.
-- 2026-05-19: restarted live ComfyUI and verified the current served bundle
-  contains `rb-bundle-2026-05-19-source-workflows`, `Import Copy Folder...`,
-  `Import Copy File...`, `Managed copy (workspace cache)`, and
-  `Save workspace as`.
+- 2026-05-19: restarted live ComfyUI and verified the source-workflow bundle,
+  managed-copy label, and `Save workspace as` dialog were live.
+- 2026-05-19: after user feedback, simplified the graph-node visible controls
+  to `Open Source...`, a `source` chooser, and `Edit`. The managed-copy and
+  local import routes remain available internally, but the default node no
+  longer asks users to choose among import/link/copy concepts up front.
+- 2026-05-19: restored the graph-node specimen preview as a real custom widget
+  below the simplified controls instead of drawing it in `onDrawBackground`.
+- 2026-05-19: replaced the temporary polygon source-preview fallback with a
+  real UFO outline renderer using `ufoLib2` + `skia-python`, matching
+  comfyfont's outline-first/nonzero-fill approach closely enough for readable
+  node previews before compile.
+- 2026-05-19: fixed preview source selection so the node prefers the visible
+  `source` chooser unless an actual upstream FONT wire is connected. This
+  prevents hidden/default `font` widget state from forcing the preview back to
+  `demo`.
+- 2026-05-19: tightened source/preview state restore so ComfyUI workflow
+  restore cannot leave the visible `source` chooser and hidden `source_path`
+  widget split. Preview now also prefers source UFO/designspace outlines over
+  compiled artifacts whenever editable sources are present.
+- 2026-05-19: added explicit frontend preview diagnostics for request slot,
+  visible/stored source values, load success, and image failure. Use these logs
+  to verify whether the graph node requests the selected source or falls back
+  to `demo`.
+- 2026-05-19: preview diagnostics now print JSON strings instead of collapsed
+  console objects. Preview image loads are request-id guarded so stale requests
+  cannot win, and image load now forces both the node and LiteGraph canvas dirty.
+- 2026-05-19: made the visible `source` combo serializable. ComfyUI now saves
+  and restores the user-facing source selection directly, then mirrors it into
+  hidden `source_path` for Python execution.
 - 2026-05-19: live ComfyUI route checks passed for all three source
   workflows. Linked `~/GH/repos/virtua-grotesk`, wrote a one-width GLIF edit
   through `/runebender/workspace/write`, observed a git diff for `k.glif`,

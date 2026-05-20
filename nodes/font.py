@@ -18,8 +18,8 @@ from aiohttp import web
 
 from server import PromptServer
 
-from .font_preview import render_preview_png
-from .workspace import compile_slot, create_slot_from_path, list_slots, locate_source_root, slot_from_name
+from .font_preview import render_preview_png, render_workspace_preview_png
+from .workspace import compile_slot, create_slot_from_path, list_slots, locate_source_root, resolve_slot, slot_from_name
 
 SOURCE_KIND_OPTIONS = ("auto", "ufo/designspace", "glyphs", "glyphspackage")
 DEMO_SOURCE_PATH = (
@@ -198,13 +198,19 @@ async def preview_workspace_slot(request):
         except Exception:
             pass
     slot_info = slot_from_name(slot)
-    if slot_info is not None and slot_info.compiled_path is None:
+    if slot_info is not None and slot_info.source_path is None and slot_info.compiled_path is None:
         try:
             compile_slot(slot)
         except Exception:
             pass
     try:
-        png = render_preview_png(slot_from_name(slot).compiled_path if slot_from_name(slot) else None, text, width, height)
+        slot_info = slot_from_name(slot)
+        if slot_info and slot_info.source_path:
+            png = render_workspace_preview_png(resolve_slot(slot), text, width, height)
+        elif slot_info and slot_info.compiled_path:
+            png = render_preview_png(slot_info.compiled_path, text, width, height)
+        else:
+            png = render_workspace_preview_png(resolve_slot(slot), text, width, height)
     except Exception:
         png = render_preview_png(None, text, width, height)
     return web.Response(body=png, content_type="image/png")

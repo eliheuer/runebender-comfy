@@ -9,7 +9,7 @@ import { createApp, ref } from "vue";
 
 import Runebender from "./Runebender.vue";
 
-const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-19-source-workflows-2";
+const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-19-source-workflows-11";
 console.info(`[runebender-comfy] loaded ${RUNEBENDER_BUNDLE_FINGERPRINT}`);
 
 // ComfyUI auto-loads .js from WEB_DIRECTORY but not sibling .css. Vite's
@@ -353,48 +353,21 @@ function logNodeSockets(node: any, label: string) {
   console.info(`[runebender-comfy] ${label} ${JSON.stringify(payload)}`);
 }
 
-function createHiddenFileInput(
-  onChange: () => Promise<void>,
-  options: { directory?: boolean } = {},
-) {
-  const input = document.createElement("input");
-  input.type = "file";
-  input.multiple = true;
-  input.accept = ".designspace,.ufo,.glyphs,.glyphspackage";
-  if (options.directory) {
-    input.webkitdirectory = true;
-  }
-  input.style.display = "none";
-
-  input.addEventListener("change", async () => {
-    if (!input.files || input.files.length === 0) return;
-    try {
-      await onChange();
-    } catch (error) {
-      console.warn("font import failed:", error);
-    } finally {
-      input.value = "";
-    }
-  });
-
-  return input;
-}
-
-function resolveNodeFontValue(node: any): string {
+function resolveConnectedFontValue(node: any): string {
   const inputIndex = node.inputs?.findIndex((slot: any) => slot.name === "font") ?? -1;
   if (inputIndex >= 0) {
+    const input = node.inputs?.[inputIndex];
+    if (input?.link == null) return "";
     const upstream = node.getInputNode?.(inputIndex);
     if (upstream) {
-      for (const candidate of ["workspace", "font", "source_path"]) {
+      for (const candidate of ["source", "workspace", "font", "source_path"]) {
         const widget = upstream.widgets?.find((w: any) => w.name === candidate);
         const value = String(widget?.value ?? "").trim();
         if (value) return value;
       }
     }
   }
-
-  const directWidget = node.widgets?.find((w: any) => w.name === "font");
-  return String(directWidget?.value ?? "").trim();
+  return "";
 }
 
 function traceFontInputDisconnects(node: any, label: string) {
@@ -666,36 +639,120 @@ app.registerExtension({
       const specimenImage = new Image();
       let specimenStatus = "No workspace selected";
       let specimenReady = false;
-      specimenImage.onload = () => {
-        specimenReady = true;
-        this.setDirtyCanvas(true, true);
+      let previewRequestId = 0;
+
+      const markPreviewDirty = () => {
+        this.setDirtyCanvas?.(true, true);
+        this.graph?.setDirtyCanvas?.(true, true);
+        app.canvas?.setDirty?.(true, true);
       };
-      specimenImage.onerror = () => {
-        specimenReady = false;
-        this.setDirtyCanvas(true, true);
+
+      let workspaceSelect: any = null;
+
+      const visibleSourceValue = () => String(workspaceSelect?.value ?? "").trim();
+      const storedSourceValue = () => String(sourceWidget?.value ?? "").trim();
+      const localSourceValue = () => {
+        const visible = visibleSourceValue();
+        const stored = storedSourceValue();
+        if (stored && stored !== "demo") return stored;
+        if (visible && visible !== "demo") return visible;
+        return stored || visible || "demo";
       };
 
       const currentSourceValue = () => {
-        const upstream = resolveNodeFontValue(this);
+        const upstream = resolveConnectedFontValue(this);
         if (upstream) return upstream;
-        return String(sourceWidget?.value ?? "").trim();
+        return localSourceValue();
       };
 
-      const syncPreview = () => {
+      const setWorkspaceChoices = (slots: string[], pinnedValue?: string) => {
+        if (!workspaceSelect) return;
+        const pinned = String(pinnedValue ?? "").trim();
+        workspaceSelect.options.values = Array.from(new Set(
+          ["demo", ...(pinned ? [pinned] : []), ...slots.filter(Boolean)],
+        ));
+      };
+
+      const setSourceValue = (value: string) => {
+        const source = String(value ?? "").trim() || "demo";
+        setWorkspaceChoices(
+          Array.isArray(workspaceSelect?.options?.values)
+            ? workspaceSelect.options.values.map((entry: unknown) => String(entry))
+            : [],
+          source,
+        );
+        if (workspaceSelect) {
+          workspaceSelect.value = source;
+        }
+        if (sourceWidget && String(sourceWidget.value ?? "") !== source) {
+          sourceWidget.value = source;
+        }
+      };
+
+      const syncPreview = (retryCount = 0) => {
         const value = currentSourceValue();
         if (!value) {
           specimenStatus = "No workspace selected";
           specimenReady = false;
           specimenImage.removeAttribute("src");
-          this.setDirtyCanvas(true, true);
+          markPreviewDirty();
           return;
         }
-        specimenStatus = value.startsWith("workspace://")
-          ? value.slice("workspace://".length)
-          : value;
+        const requestId = ++previewRequestId;
+        specimenStatus = "Loading preview...";
         specimenReady = false;
-        specimenImage.src = `/runebender/workspace/${encodeURIComponent(value)}/preview?text=Aa&width=480&height=160&t=${Date.now()}`;
-        this.setDirtyCanvas(true, true);
+        const url = `/runebender/workspace/${encodeURIComponent(value)}/preview?text=Aa&width=480&height=160&t=${Date.now()}`;
+        console.info("[runebender-comfy] preview request", JSON.stringify({
+          requestId,
+          retryCount,
+          value,
+          visible: visibleSourceValue(),
+          stored: storedSourceValue(),
+          upstream: resolveConnectedFontValue(this),
+          url,
+        }));
+        specimenImage.onload = () => {
+          if (requestId !== previewRequestId) {
+            console.info("[runebender-comfy] preview stale load ignored", JSON.stringify({
+              requestId,
+              currentRequestId: previewRequestId,
+              value,
+            }));
+            return;
+          }
+          specimenReady = true;
+          console.info("[runebender-comfy] preview loaded", JSON.stringify({
+            requestId,
+            value,
+            width: specimenImage.naturalWidth,
+            height: specimenImage.naturalHeight,
+            complete: specimenImage.complete,
+          }));
+          markPreviewDirty();
+        };
+        specimenImage.onerror = () => {
+          if (requestId !== previewRequestId) return;
+          specimenReady = false;
+          console.warn("[runebender-comfy] preview image failed", JSON.stringify({
+            requestId,
+            retryCount,
+            value,
+            url,
+          }));
+          if (retryCount < 3) {
+            const delay = 300 * (retryCount + 1);
+            specimenStatus = "Retrying preview...";
+            markPreviewDirty();
+            window.setTimeout(() => {
+              if (requestId === previewRequestId) syncPreview(retryCount + 1);
+            }, delay);
+            return;
+          }
+          specimenStatus = "Preview unavailable";
+          markPreviewDirty();
+        };
+        specimenImage.src = url;
+        markPreviewDirty();
       };
 
       const refreshChoices = async () => {
@@ -703,77 +760,14 @@ app.registerExtension({
           const response = await fetch("/runebender/workspaces");
           if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
           const data = (await response.json()) as { slots?: string[] };
-          const slots = Array.from(new Set(["demo", ...(data.slots ?? [])]));
-          workspaceSelect.options.values = slots;
-          const current = String(sourceWidget?.value ?? "demo");
-          const next = slots.includes(current) ? current : "demo";
-          workspaceSelect.value = next;
-          if (sourceWidget) {
-            sourceWidget.value = next;
-            sourceWidget.callback?.(next);
-          }
+          const current = localSourceValue();
+          setWorkspaceChoices(data.slots ?? [], current);
+          setSourceValue(current || "demo");
           syncPreview();
         } catch (error) {
           console.warn("workspace list failed:", error);
         }
       };
-
-      const folderInput = createHiddenFileInput(async () => {
-        const files = Array.from(folderInput.files ?? []);
-        if (files.length === 0) return;
-        const body = new FormData();
-        for (const file of files) {
-          const relPath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
-          body.append("file", file, relPath);
-        }
-        body.append("source_kind", String(sourceKindWidget?.value ?? "auto"));
-        body.append("workspace_name", String(workspaceNameWidget?.value ?? ""));
-        const response = await fetch("/runebender/import_font", {
-          method: "POST",
-          body,
-        });
-        if (!response.ok) {
-          throw new Error(`${response.status} ${response.statusText}`);
-        }
-        const data = (await response.json()) as { slot?: string };
-        const slot = String(data.slot ?? "");
-        if (sourceWidget && slot) {
-          sourceWidget.value = slot;
-          sourceWidget.callback?.(slot);
-        }
-        await refreshChoices();
-        workspaceSelect.value = slot || workspaceSelect.value;
-        syncPreview();
-        this.setDirtyCanvas(true, true);
-      }, { directory: true });
-
-      const fileInput = createHiddenFileInput(async () => {
-        const files = Array.from(fileInput.files ?? []);
-        if (files.length === 0) return;
-        const body = new FormData();
-        for (const file of files) {
-          body.append("file", file, file.name);
-        }
-        body.append("source_kind", String(sourceKindWidget?.value ?? "auto"));
-        body.append("workspace_name", String(workspaceNameWidget?.value ?? ""));
-        const response = await fetch("/runebender/import_font", {
-          method: "POST",
-          body,
-        });
-        if (!response.ok) {
-          throw new Error(`${response.status} ${response.statusText}`);
-        }
-        const data = (await response.json()) as { slot?: string };
-        const slot = String(data.slot ?? "");
-        if (sourceWidget && slot) {
-          sourceWidget.value = slot;
-          sourceWidget.callback?.(slot);
-        }
-        await refreshChoices();
-        workspaceSelect.value = slot || workspaceSelect.value;
-        syncPreview();
-        this.setDirtyCanvas(true, true);
-      });
 
       const linkSourcePath = async (initialPath?: string) => {
         const sourcePath = initialPath ?? await requestSourcePath(String(sourceWidget?.value ?? ""));
@@ -794,42 +788,11 @@ app.registerExtension({
           throw new Error(data.error || `${response.status} ${response.statusText}.${routeHint}`);
         }
         const slot = String(data.slot ?? "");
-        if (sourceWidget && slot) {
-          sourceWidget.value = slot;
-          sourceWidget.callback?.(slot);
+        if (slot) {
+          setSourceValue(slot);
         }
         await refreshChoices();
-        workspaceSelect.value = slot || workspaceSelect.value;
-        syncPreview();
-        this.setDirtyCanvas(true, true);
-        return slot;
-      };
-
-      const importSourcePath = async (mode: "file" | "folder") => {
-        const sourcePath = await chooseSourcePath(mode);
-        if (!sourcePath) return null;
-        const body = new FormData();
-        body.append("source_path", sourcePath);
-        body.append("source_kind", String(sourceKindWidget?.value ?? "auto"));
-        body.append("workspace_name", String(workspaceNameWidget?.value ?? ""));
-        const response = await fetch("/runebender/import_source_path", {
-          method: "POST",
-          body,
-        });
-        const data = (await response.json().catch(() => ({}))) as { slot?: string; error?: string };
-        if (!response.ok) {
-          const routeHint = response.status === 404 || response.status === 405
-            ? " The browser has the new Runebender bundle, but ComfyUI has not registered the source import backend route. Fully restart ComfyUI, then hard-refresh the browser."
-            : "";
-          throw new Error(data.error || `${response.status} ${response.statusText}.${routeHint}`);
-        }
-        const slot = String(data.slot ?? "");
-        if (sourceWidget && slot) {
-          sourceWidget.value = slot;
-          sourceWidget.callback?.(slot);
-        }
-        await refreshChoices();
-        workspaceSelect.value = slot || workspaceSelect.value;
+        if (slot) setSourceValue(slot);
         syncPreview();
         this.setDirtyCanvas(true, true);
         return slot;
@@ -846,45 +809,34 @@ app.registerExtension({
         return (await linkSourcePath(value)) || value;
       };
 
-      const importFolderButton = this.addWidget("button", "Import Copy Folder...", null, () => {
-        void importSourcePath("folder").catch((error) => {
-          console.warn("[runebender-comfy] local folder import failed; falling back to browser upload:", error);
-          folderInput.click();
-        });
-      }, {});
-      importFolderButton.serialize = false;
-
-      const linkSourceButton = this.addWidget("button", "Link Source Path...", null, () => {
+      const openSourceButton = this.addWidget("button", "Open Font Source", null, () => {
         void linkSourcePath().catch((error) => {
           alert(`Runebender source link failed: ${error}`);
           console.error("[runebender-comfy] source link failed:", error);
         });
       }, {});
-      linkSourceButton.serialize = false;
+      openSourceButton.serialize = false;
 
-      const importFileButton = this.addWidget("button", "Import Copy File...", null, () => {
-        void importSourcePath("file").catch((error) => {
-          console.warn("[runebender-comfy] local file import failed; falling back to browser upload:", error);
-          fileInput.click();
-        });
-      }, {});
-      importFileButton.serialize = false;
-
-      const refreshButton = this.addWidget("button", "Refresh Workspaces", null, () => {
-        void refreshChoices();
-      }, {});
-      refreshButton.serialize = false;
-
-      const workspaceSelect = this.addWidget("combo", "workspace", "demo", (value: any) => {
-        if (sourceWidget) {
-          sourceWidget.value = String(value ?? "");
-          sourceWidget.callback?.(sourceWidget.value);
-        }
+      workspaceSelect = this.addWidget("combo", "source", "demo", (value: any) => {
+        setSourceValue(String(value ?? ""));
         syncPreview();
       }, {
         values: ["demo"],
       });
-      workspaceSelect.serialize = false;
+      workspaceSelect.serialize = true;
+
+      const origConfigure = this.onConfigure;
+      this.onConfigure = function (info: unknown) {
+        origConfigure?.call(this, info);
+        const restored = localSourceValue();
+        console.info("[runebender-comfy] source restore", JSON.stringify({
+          restored,
+          visible: visibleSourceValue(),
+          stored: storedSourceValue(),
+        }));
+        if (restored) setSourceValue(restored);
+        syncPreview();
+      };
 
       const editButton = this.addWidget("button", "Edit", null, () => {
         void (async () => {
@@ -913,6 +865,62 @@ app.registerExtension({
       }, {});
       editButton.serialize = false;
 
+      const previewWidget = {
+        name: "preview",
+        type: "runebender_preview",
+        value: null,
+        serialize: false,
+        computeSize: (width: number) => [width, 170],
+        draw: (
+          ctx: CanvasRenderingContext2D,
+          _node: unknown,
+          width: number,
+          y: number,
+          height: number,
+        ) => {
+          const pad = 8;
+          const boxX = pad;
+          const boxY = y + 6;
+          const boxW = Math.max(20, width - pad * 2);
+          const boxH = Math.max(20, height - 12);
+
+          ctx.save();
+          ctx.beginPath();
+          ctx.roundRect(boxX, boxY, boxW, boxH, 6);
+          ctx.fillStyle = "#111";
+          ctx.fill();
+          ctx.strokeStyle = "#3f3f3f";
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.rect(boxX, boxY, boxW, boxH);
+          ctx.clip();
+
+          if (specimenReady && specimenImage.complete && specimenImage.naturalWidth > 0) {
+            const scale = Math.min(
+              (boxW - pad * 2) / specimenImage.naturalWidth,
+              (boxH - pad * 2) / specimenImage.naturalHeight,
+            );
+            const drawW = specimenImage.naturalWidth * scale;
+            const drawH = specimenImage.naturalHeight * scale;
+            const x = boxX + (boxW - drawW) / 2;
+            const imgY = boxY + (boxH - drawH) / 2;
+            ctx.drawImage(specimenImage, x, imgY, drawW, drawH);
+          } else {
+            ctx.fillStyle = "#aaa";
+            ctx.font = "12px ui-sans-serif, system-ui, sans-serif";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(specimenStatus, boxX + boxW / 2, boxY + boxH / 2);
+          }
+          ctx.restore();
+        },
+      };
+      if (typeof this.addCustomWidget === "function") {
+        this.addCustomWidget(previewWidget);
+      } else {
+        this.widgets?.push(previewWidget);
+      }
+
       const hideWidget = (widget: any) => {
         if (!widget) return;
         widget.hidden = true;
@@ -925,6 +933,10 @@ app.registerExtension({
         const origCallback = sourceWidget.callback;
         sourceWidget.callback = (...args: any[]) => {
           origCallback?.(...args);
+          const source = String(sourceWidget.value ?? "").trim();
+          if (source && workspaceSelect && visibleSourceValue() !== source) {
+            workspaceSelect.value = source;
+          }
           syncPreview();
         };
         hideWidget(sourceWidget);
@@ -933,52 +945,11 @@ app.registerExtension({
       hideWidget(workspaceNameWidget);
 
       const [oldWidth, oldHeight] = this.size;
-      this.setSize([Math.max(oldWidth, 360), Math.max(oldHeight, 220)]);
+      this.setSize([Math.max(oldWidth, 360), Math.max(oldHeight, 390)]);
 
       void refreshChoices();
       syncPreview();
-
-      const origDrawBackground = this.onDrawBackground;
-      this.onDrawBackground = function (ctx: CanvasRenderingContext2D) {
-        origDrawBackground?.apply(this, arguments as any);
-        const pad = 8;
-        const widgets = this.widgets ?? [];
-        const lastWidget = widgets[widgets.length - 1];
-        const imgY = lastWidget?.last_y != null ? lastWidget.last_y + 26 : widgets.length * 24 + 10;
-        const availW = this.size[0] - pad * 2;
-        const availH = this.size[1] - imgY - pad;
-        if (availW < 20 || availH < 20) return;
-
-        ctx.save();
-        ctx.beginPath();
-        ctx.roundRect(pad, imgY, availW, availH, 4);
-        ctx.fillStyle = "#111";
-        ctx.fill();
-        ctx.strokeStyle = "#444";
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.rect(pad, imgY, availW, availH);
-        ctx.clip();
-
-        if (specimenReady && specimenImage.complete && specimenImage.naturalWidth > 0) {
-          const scale = Math.min(
-            availW / specimenImage.naturalWidth,
-            availH / specimenImage.naturalHeight,
-          );
-          const drawW = specimenImage.naturalWidth * scale;
-          const drawH = specimenImage.naturalHeight * scale;
-          const x = pad + (availW - drawW) / 2;
-          const y = imgY + (availH - drawH) / 2;
-          ctx.drawImage(specimenImage, x, y, drawW, drawH);
-        } else {
-          ctx.fillStyle = "#bbb";
-          ctx.font = "12px ui-sans-serif, system-ui, sans-serif";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          ctx.fillText(specimenStatus, pad + availW / 2, imgY + availH / 2);
-        }
-        ctx.restore();
-      };
+      setTimeout(() => syncPreview(), 100);
     };
   },
 });
