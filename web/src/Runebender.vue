@@ -5227,22 +5227,59 @@ onBeforeUnmount(() => {
 
 <style scoped>
 /*
- * Colors mirror runebender-xilem/src/theme.rs verbatim:
+ * Color palette — the editor inherits from ComfyUI's CSS variables
+ * so it tracks the user's active ComfyUI theme (dark/light/custom).
+ * Each fallback hex preserves the runebender-xilem reference theme,
+ * so the editor still looks coherent on a ComfyUI build that doesn't
+ * ship one of these variables, or when running outside ComfyUI.
+ *
+ * Original xilem palette (preserved as fallbacks below):
  *   APP_BACKGROUND       #101010 (BASE_A)
  *   PANEL_BACKGROUND     #1C1C1C
- *   PANEL_OUTLINE / BASE_F  #606060
- *   PRIMARY_UI_TEXT / BASE_I  #909090
- *   SECONDARY_UI_TEXT / BASE_G  #707070
- *   GRID_CELL_TEXT / BASE_H  #808080
- *   GRID_GLYPH_COLOR / BASE_J  #a0a0a0
- *   GRID_CELL_SELECTED_OUTLINE / METRICS_GUIDE  #66EE88
- *   SELECTION_RECT_STROKE / TOOL_PREVIEW  #ffaa33
+ *   PANEL_OUTLINE        #606060 (BASE_F)
+ *   PRIMARY_UI_TEXT      #909090 (BASE_I)
+ *   SECONDARY_UI_TEXT    #707070 (BASE_G)
+ *   GRID_CELL_TEXT       #808080 (BASE_H)
+ *   GRID_GLYPH_COLOR     #a0a0a0 (BASE_J)
+ *   ACCENT (METRICS_GUIDE / SELECTED_OUTLINE)  #66EE88
+ *   SELECTION_RECT_STROKE / TOOL_PREVIEW       #ffaa33
+ *
+ * ComfyUI v1 exposes both generic colors (--bg-color, --fg-color,
+ * --border-color, --content-bg, etc.) and PrimeVue tokens (--p-*).
+ * We map them onto the existing --rb-* convention so individual
+ * component stylesheets don't have to know about either upstream
+ * namespace.
  */
 
 .runebender-host {
+  /* Surfaces */
+  --rb-app-background:     var(--bg-color, #101010);
+  --rb-panel-background:   var(--comfy-menu-bg, #1c1c1c);
+  --rb-control-background: var(--comfy-input-bg, #111315);
+
+  /* Borders / outlines */
+  --rb-panel-outline:      var(--border-color, #606060);
+
+  /* Text */
+  --rb-primary-text:       var(--fg-color, #909090);
+  --rb-secondary-text:     color-mix(in srgb, var(--rb-primary-text) 78%, transparent);
+  --rb-muted-text:         color-mix(in srgb, var(--rb-primary-text) 60%, transparent);
+  --rb-subdued-text:       color-mix(in srgb, var(--rb-primary-text) 35%, transparent);
+  --rb-overlay-text:       var(--content-fg, #d0d0d0);
+  --rb-glyph-preview:      var(--fg-color, #a0a0a0);
+
+  /* Accents / state */
+  --rb-accent:                     var(--p-primary-color, #66ee88);
+  --rb-warning:                    #ffdd33;
+  --rb-danger:                     var(--p-red-500, #f43f5e);
+  --rb-danger-text:                var(--p-button-text-danger-color, #ffe0e0);
+  --rb-mark-hover-ring:            color-mix(in srgb, var(--rb-accent) 55%, transparent);
+  --rb-mark-selected-ring:         var(--rb-accent);
+  --rb-background-image-selection: var(--rb-accent);
+
   width: 100%;
   height: 100%;
-  background: var(--rb-app-background, #101010);
+  background: var(--rb-app-background);
   padding: 6px;
   display: flex;
   flex-direction: column;

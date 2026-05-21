@@ -57,6 +57,52 @@ The Rust core deliberately skips Xilem — for an embedded canvas inside
 an existing JS host (ComfyUI's Vue frontend), Vello + Kurbo via
 `wasm-bindgen` is the right layer.
 
+## Theming
+
+The editor's Vue chrome (panels, toolbars, sidebars, grid view) inherits
+from ComfyUI's CSS variables so it tracks the user's active ComfyUI
+theme (dark, light, or custom). The runebender-xilem reference theme is
+preserved as fallback for any variable ComfyUI doesn't expose and for
+running outside ComfyUI.
+
+Implementation lives on the editor overlay root (`.runebender-host`) in
+`web/src/Runebender.vue`. Each component's scoped CSS consumes the
+palette via `var(--rb-*, #fallback)` so individual components don't
+need to know about either upstream namespace.
+
+### Palette mapping
+
+| `--rb-*` | ComfyUI / PrimeVue source | Fallback (xilem reference) |
+|---|---|---|
+| `--rb-app-background` | `--bg-color` | `#101010` |
+| `--rb-panel-background` | `--comfy-menu-bg` | `#1c1c1c` |
+| `--rb-control-background` | `--comfy-input-bg` | `#111315` |
+| `--rb-panel-outline` | `--border-color` | `#606060` |
+| `--rb-primary-text` | `--fg-color` | `#909090` |
+| `--rb-secondary-text` | `color-mix(--rb-primary-text 78%)` | `#707070` |
+| `--rb-muted-text` | `color-mix(--rb-primary-text 60%)` | `#808080` |
+| `--rb-subdued-text` | `color-mix(--rb-primary-text 35%)` | — |
+| `--rb-overlay-text` | `--content-fg` | `#d0d0d0` |
+| `--rb-glyph-preview` | `--fg-color` | `#a0a0a0` |
+| `--rb-accent` | `--p-primary-color` | `#66ee88` |
+| `--rb-warning` | (static; no ComfyUI analog) | `#ffdd33` |
+| `--rb-danger` | `--p-red-500` | `#f43f5e` |
+| `--rb-danger-text` | `--p-button-text-danger-color` | `#ffe0e0` |
+| `--rb-mark-hover-ring` | derived from `--rb-accent` | — |
+| `--rb-mark-selected-ring` | `--rb-accent` | — |
+| `--rb-background-image-selection` | `--rb-accent` | — |
+
+### What this does and doesn't cover
+
+- **Covered**: every Vue component (toolbars, sidebars, panels, the
+  grid view, the welcome screen). All scoped styles consume the
+  palette; switching ComfyUI's theme propagates automatically.
+- **Not yet covered**: the editor canvas itself. Glyph outlines,
+  points, handles, the design grid, and metric guides are painted in
+  Rust (`rust-core/src/renderer.rs`) from constants currently sourced
+  from `runebender-core`. Plumbing the palette into Rust as a runtime
+  `Theme` struct settable from JS is a follow-up.
+
 ## Install And Use
 
 ### Comfy Cloud
