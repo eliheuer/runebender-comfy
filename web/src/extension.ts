@@ -9,7 +9,7 @@ import { createApp, ref } from "vue";
 
 import Runebender from "./Runebender.vue";
 
-const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-20-batch-svgs-24";
+const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-21-ux-pass-26";
 
 // Mirror our own console output to the ComfyUI terminal via the
 // /runebender/log backend route. Filters to messages prefixed with
@@ -482,22 +482,48 @@ function measureComfyChromeInsets(): {
   right: number;
   bottom: number;
 } {
-  const pick = (selectors: string[], dimension: "h" | "w"): number => {
-    for (const sel of selectors) {
-      const el = document.querySelector(sel) as HTMLElement | null;
-      if (!el) continue;
-      const rect = el.getBoundingClientRect();
-      const value = dimension === "h" ? rect.height : rect.width;
-      if (value > 0) return Math.round(value);
-    }
-    return 0;
+  // Use the chrome elements' actual EDGE positions, not their sizes.
+  // The overlay is positioned by distance-from-viewport-edge, so what
+  // matters is where each chrome region ends, not how tall/wide it is.
+  // (Using height assumed the top chrome starts at y=0, which adds a
+  // few px of extra top margin if it doesn't.)
+  // The visible ComfyUI chrome that the editor must sit below/right of:
+  //   top  = .workflow-tabs-container (the workflow tab strip)
+  //   left = .side-tool-bar-container (the icon rail)
+  // The #comfyui-body-* elements are zero-size grid markers, and
+  // #graph-canvas is full-viewport (the rails float over it), so
+  // neither is usable for insets.
+  //
+  // Each measurement is gated on a sane range so a surprising rect can
+  // never blow the layout up the way the full-viewport graph-canvas
+  // anchor did — out-of-range values fall back to the known-good
+  // constants (which keep every panel visible, just a slightly large
+  // top margin).
+  const DEFAULT_TOP = 40;
+  const DEFAULT_LEFT = 56;
+  const measureEdge = (
+    selector: string,
+    edge: "bottom" | "right",
+    fallback: number,
+    maxSane: number,
+  ): number => {
+    const el = document.querySelector(selector) as HTMLElement | null;
+    if (!el) return fallback;
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return fallback;
+    const value = edge === "bottom" ? r.bottom : r.right;
+    if (value <= 0 || value > maxSane) return fallback;
+    return Math.round(value);
   };
-  return {
-    top: pick([".comfyui-body-top", ".comfy-menu", "header.app-header"], "h") || 40,
-    left: pick([".comfyui-body-left", ".side-bar-panel.left"], "w") || 56,
-    right: pick([".comfyui-body-right", ".side-bar-panel.right"], "w") || 0,
-    bottom: pick([".comfyui-body-bottom"], "h") || 0,
+
+  const insets = {
+    top: measureEdge(".workflow-tabs-container", "bottom", DEFAULT_TOP, 200),
+    left: measureEdge(".side-tool-bar-container", "right", DEFAULT_LEFT, 300),
+    right: 0,
+    bottom: 0,
   };
+  console.info("[runebender-comfy] chrome insets", JSON.stringify(insets));
+  return insets;
 }
 
 function openRunebenderOverlay(options: {
@@ -529,11 +555,14 @@ function openRunebenderOverlay(options: {
     // transparent, which made an unmounted overlay look indistinguishable
     // from the editor never opening at all.
     "background:#181818",
-    // Subtle border + shadow so the editor reads as a distinct surface
-    // sitting on top of ComfyUI rather than replacing it.
-    "border:1px solid #2a2a2a",
-    "border-radius:6px",
-    "box-shadow:0 8px 32px rgba(0,0,0,0.5)",
+    // Flush plain rectangle — no border / radius / shadow. The earlier
+    // "floating panel" framing produced a double line under ComfyUI's
+    // tab bar (ComfyUI's bottom border + our top border) and rounded
+    // top corners. The editor should read as a plain background filling
+    // the area under the chrome.
+    "border:none",
+    "border-radius:0",
+    "box-shadow:none",
     "overflow:hidden",
   ].join(";");
 

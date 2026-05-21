@@ -5197,29 +5197,10 @@ onBeforeUnmount(() => {
           :name="selectedGlyph"
           :svg="selectedAnatomySvg"
         />
-        <section
-          v-if="designspacePath"
-          class="designspace-panel"
-        >
-          <div class="designspace-header">
-            <div class="designspace-title">Designspace</div>
-            <div class="designspace-status">
-              {{ designspaceDirty ? "Modified" : "Saved" }}
-            </div>
-          </div>
-          <div class="designspace-path" :title="designspacePath">
-            {{ designspacePath }}
-          </div>
-          <div class="designspace-summary">
-            {{ designspaceSummary }}
-          </div>
-          <textarea
-            class="designspace-editor"
-            spellcheck="false"
-            :value="designspaceText"
-            @input="onDesignspaceTextInput"
-          />
-        </section>
+        <!-- Designspace XML panel hidden for now — not needed yet. The
+             state and save plumbing (designspaceText, onDesignspaceTextInput,
+             persistDesignspace) are left intact so it can be re-enabled
+             by restoring this <section>. -->
       </div>
     </div>
   </div>
@@ -5285,6 +5266,12 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 6px;
   box-sizing: border-box;
+
+  /* Firefox slim track-less scrollbars (inherited by all descendants).
+   * WebKit equivalent is the ::-webkit-scrollbar block at the bottom
+   * of this stylesheet. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--rb-panel-outline, #606060) transparent;
 }
 
 .hidden-file-input {
@@ -5297,7 +5284,13 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   display: flex;
-  gap: 6px;
+  /* No flex gap: it would add space on the sidebar side of the grid's
+   * scrollbar but not the grid-content side, making the scrollbar look
+   * off-center in the gutter. Instead the left-col carries its own
+   * right margin, and the stage↔sidebar boundary is gutter-free so the
+   * grid scrollbar track is the only thing between them (symmetric
+   * margins around the thumb). */
+  gap: 0;
 }
 
 /* Left column: categories stretch, mark colors fixed at the bottom. */
@@ -5306,6 +5299,14 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 6px;
   flex-shrink: 0;
+  margin-right: 6px;
+}
+/* Categories panel grows to fill the column height, pushing the
+   mark-color picker to the very bottom (like xilem). The mark-color
+   panel keeps its natural size. */
+.left-col > :deep(.category-sidebar) {
+  flex: 1;
+  min-height: 0;
 }
 
 /* Right column: info on top, anatomy fills remaining height. */
@@ -5818,5 +5819,42 @@ onBeforeUnmount(() => {
   grid-auto-rows: 192px;
   gap: 6px;
   background: var(--rb-app-background, #101010);
+}
+
+/* ----- Scrollbars -----
+ * WebKit (the editor runs in a Chrome app window) draws a chunky grey
+ * track by default, which shows up as ugly background strips next to
+ * the glyph grid and the designspace panel. Strip the track, narrow
+ * the bar, and color the thumb from the palette. :deep() so the rule
+ * reaches scroll areas inside child components (sidebars, panels) too.
+ * Firefox uses the inherited scrollbar-width / scrollbar-color set on
+ * the host below. */
+.runebender-host :deep(::-webkit-scrollbar) {
+  width: 12px;
+  height: 12px;
+}
+.runebender-host :deep(::-webkit-scrollbar-track) {
+  background: transparent;
+}
+.runebender-host :deep(::-webkit-scrollbar-thumb) {
+  /* Transparent border + padding-box clip insets the visible thumb
+   * equally on all sides within the 12px track, so it reads as a
+   * slim 6px pill with symmetric 3px margins. With the stage↔sidebar
+   * flex gap removed (see .content), this track is the only gutter
+   * between the grid and the sidebar, so those 3px margins are the
+   * actual visual margins on both sides of the thumb. */
+  background: var(--rb-panel-outline, #606060);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  min-height: 32px;
+}
+.runebender-host :deep(::-webkit-scrollbar-thumb:hover) {
+  background: var(--rb-primary-text, #909090);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+.runebender-host :deep(::-webkit-scrollbar-corner) {
+  background: transparent;
 }
 </style>
