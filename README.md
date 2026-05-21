@@ -103,6 +103,29 @@ need to know about either upstream namespace.
   from `runebender-core`. Plumbing the palette into Rust as a runtime
   `Theme` struct settable from JS is a follow-up.
 
+### Bundled development theme
+
+`themes/runebender-dark.json` is a ComfyUI color palette that recreates
+the runebender-xilem reference palette (`#101010` app background,
+`#1c1c1c` panels, `#606060` outlines, `#909090` text, `#66ee88`
+accent). Importing it gives you a ComfyUI theme that drives the
+editor's `--rb-*` palette to match what runebender-xilem looks like
+standalone — useful while doing a UI/UX pass on the editor without
+constantly switching test fixtures.
+
+To install:
+
+1. Open ComfyUI → ⚙ (Settings) → search "color palette".
+2. Under **Custom Color Palettes**, click the **Import** action.
+3. Paste the contents of `themes/runebender-dark.json` (or point at
+   the file).
+4. Set the active palette to **"Runebender Dark"**.
+
+To edit the theme while iterating: change values in
+`themes/runebender-dark.json`, re-import in ComfyUI. The
+`comfy_base.*` keys map directly onto the CSS variables the
+`--rb-*` palette inherits from (see the mapping table above).
+
 ## Install And Use
 
 ### Comfy Cloud
