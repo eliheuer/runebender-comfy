@@ -9,7 +9,7 @@ import { createApp, ref } from "vue";
 
 import Runebender from "./Runebender.vue";
 
-const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-21-ux-pass-26";
+const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-21-grid-uniform-scale-27";
 
 // Mirror our own console output to the ComfyUI terminal via the
 // /runebender/log backend route. Filters to messages prefixed with

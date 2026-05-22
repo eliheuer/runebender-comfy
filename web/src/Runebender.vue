@@ -721,13 +721,8 @@ onMounted(async () => {
     return;
   }
 
-  const tMount = performance.now();
-  console.info("[runebender] editor mount start");
-
   try {
-    const tInit0 = performance.now();
     await init();
-    console.info("[runebender] wasm init", Math.round(performance.now() - tInit0), "ms");
 
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.value.getBoundingClientRect();
@@ -736,9 +731,7 @@ onMounted(async () => {
     canvas.value.width = width;
     canvas.value.height = height;
 
-    const tEditor0 = performance.now();
     editor = (await GlyphEditor.new(canvas.value, width, height)) as unknown as Editor;
-    console.info("[runebender] GlyphEditor.new", Math.round(performance.now() - tEditor0), "ms");
 
     status.value = "ready";
 
@@ -757,13 +750,10 @@ onMounted(async () => {
     window.addEventListener("drop", onWindowDrop, { capture: true });
 
     if (currentFontPath.value) {
-      const tLoad0 = performance.now();
       await loadWorkspaceSlot(currentFontPath.value);
-      console.info("[runebender] loadWorkspaceSlot total", Math.round(performance.now() - tLoad0), "ms");
     } else {
       loadWelcomeDemoGlyph();
     }
-    console.info("[runebender] editor ready total", Math.round(performance.now() - tMount), "ms");
   } catch (e) {
     console.error(e);
     status.value = `failed: ${e}`;
@@ -2743,7 +2733,6 @@ function resolveUfoRoot(requested: string, roots: string[]): string | null {
 
 async function loadWorkspaceSlot(slot: string) {
   status.value = `loading workspace ${slot}…`;
-  const tFetch0 = performance.now();
   const res = await fetch(`/runebender/workspace/${encodeURIComponent(slot)}`);
   if (!res.ok) {
     status.value = `failed to load workspace ${slot}`;
@@ -2756,15 +2745,6 @@ async function loadWorkspaceSlot(slot: string) {
     origin_root?: string;
     origin_source?: string;
   };
-  const totalBytes = data.files.reduce((acc, f) => acc + f.text.length, 0);
-  console.info("[runebender] workspace fetch", JSON.stringify({
-    slot,
-    fileCount: data.files.length,
-    totalTextBytes: totalBytes,
-    fetchedMs: Math.round(performance.now() - tFetch0),
-  }));
-
-  const tWrap0 = performance.now();
   const files = data.files.map((entry) => {
     const name = entry.path.split("/").pop() ?? entry.path;
     const file = new File([entry.text], name, { type: "text/plain" });
@@ -2776,11 +2756,8 @@ async function loadWorkspaceSlot(slot: string) {
     } catch {}
     return file;
   });
-  console.info("[runebender] File-wrap", Math.round(performance.now() - tWrap0), "ms");
 
-  const tGlif0 = performance.now();
   await loadGlifFiles(files);
-  console.info("[runebender] loadGlifFiles", Math.round(performance.now() - tGlif0), "ms");
 
   fontLabel.value = slot;
   sourceSaveLabel.value = data.linked_source
@@ -2829,11 +2806,9 @@ async function buildMasterData(
   ufoFiles: File[],
   fileHandles: Map<string, FileSystemFileHandle>,
 ): Promise<MasterData> {
-  const tBuild0 = performance.now();
   const glifs = ufoFiles.filter(
     (f) => /\.glif$/i.test(f.name) && /\/glyphs\//.test(relPath(f)),
   );
-  const tParse0 = performance.now();
   const loaded = await Promise.all(
     glifs.map(async (f) => {
       const bytes = new Uint8Array(await f.arrayBuffer());
@@ -2846,10 +2821,6 @@ async function buildMasterData(
       }
     }),
   );
-  console.info("[runebender] parseGlyphInfo", JSON.stringify({
-    glyphCount: glifs.length,
-    parseMs: Math.round(performance.now() - tParse0),
-  }));
 
   const glyphBytes = new Map<string, Uint8Array>();
   const glyphPaths = new Map<string, string>();
@@ -2878,12 +2849,19 @@ async function buildMasterData(
     }
   }
 
-  const tSvg0 = performance.now();
-  const glyphSvgs = await buildGridSvgsForMap(glyphBytes);
-  console.info("[runebender] buildGridSvgsForMap", JSON.stringify({
-    glyphCount: glyphBytes.size,
-    svgMs: Math.round(performance.now() - tSvg0),
-  }));
+  // Read unitsPerEm before building grid thumbnails: the grid SVGs use
+  // a constant em-based viewBox so every glyph shares one scale/baseline
+  // (matching runebender-xilem). Without the correct UPM the thumbnails
+  // would be scaled against a 1000-unit default and look slightly off.
+  const fontInfoFile = ufoFiles.find((f) =>
+    /\/fontinfo\.plist$/i.test(relPath(f)),
+  );
+  const fontInfoBytes = fontInfoFile
+    ? new Uint8Array(await fontInfoFile.arrayBuffer())
+    : null;
+  const unitsPerEm = fontInfoBytes ? extractUnitsPerEm(fontInfoBytes) : 1000;
+
+  const glyphSvgs = await buildGridSvgsForMap(glyphBytes, unitsPerEm);
 
   const groupsFile = ufoFiles.find((f) =>
     /\/groups\.plist$/i.test(relPath(f)),
@@ -2903,15 +2881,6 @@ async function buildMasterData(
     ? parseKerningPlist(new Uint8Array(await kerningFile.arrayBuffer()))
     : new Map<string, Map<string, number>>();
 
-  const fontInfoFile = ufoFiles.find((f) =>
-    /\/fontinfo\.plist$/i.test(relPath(f)),
-  );
-  const fontInfoBytes = fontInfoFile
-    ? new Uint8Array(await fontInfoFile.arrayBuffer())
-    : null;
-  const unitsPerEm = fontInfoBytes ? extractUnitsPerEm(fontInfoBytes) : 1000;
-
-  console.info("[runebender] buildMasterData total", Math.round(performance.now() - tBuild0), "ms");
   return {
     glyphBytes,
     glyphPaths,
@@ -2935,6 +2904,7 @@ async function buildMasterData(
 
 async function buildGridSvgsForMap(
   glyphBytes: Map<string, Uint8Array>,
+  unitsPerEm: number,
 ): Promise<Map<string, string>> {
   // Single WASM call processes the entire master in Rust. Previous
   // version called glifToSvgWithComponents 600+ times per master from
@@ -2944,7 +2914,7 @@ async function buildGridSvgsForMap(
   const names = Array.from(glyphBytes.keys()).sort();
   const glyphXmlByName = glyphXmlMapJson(glyphBytes, names);
   try {
-    const out = glifMapToSvgs(glyphXmlByName);
+    const out = glifMapToSvgs(glyphXmlByName, unitsPerEm);
     const parsed = JSON.parse(out) as Record<string, string>;
     const svgs = new Map<string, string>();
     for (const name of names) {

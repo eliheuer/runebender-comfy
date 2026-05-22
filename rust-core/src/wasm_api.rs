@@ -286,7 +286,7 @@ pub fn glif_to_svg_with_components(
 /// per-call wrapper's behavior so a single malformed .glif can't sink
 /// the whole grid.
 #[wasm_bindgen(js_name = glifMapToSvgs)]
-pub fn glif_map_to_svgs(glyph_xml_by_name: &str) -> Result<String, JsValue> {
+pub fn glif_map_to_svgs(glyph_xml_by_name: &str, units_per_em: f64) -> Result<String, JsValue> {
     let xml_by_name: GlifXmlMap = serde_json::from_str(glyph_xml_by_name)
         .map_err(|e| JsValue::from_str(&format!("parse glyph XML map: {e}")))?;
 
@@ -298,11 +298,12 @@ pub fn glif_map_to_svgs(glyph_xml_by_name: &str) -> Result<String, JsValue> {
         }
     }
 
+    let upm = if units_per_em > 0.0 { units_per_em } else { 1000.0 };
     let mut svgs: HashMap<String, String> = HashMap::with_capacity(glyphs.len());
     for (name, glyph) in &glyphs {
         let mut bez = norad_glyph_to_bezpath(glyph);
         append_norad_components_to_bezpath(&mut bez, glyph, &glyphs, Affine::IDENTITY, 0);
-        if let Ok(svg) = svg_from_bezpath(&bez) {
+        if let Ok(svg) = svg_from_bezpath_em(&bez, upm) {
             if !svg.is_empty() {
                 svgs.insert(name.clone(), svg);
             }
@@ -311,6 +312,42 @@ pub fn glif_map_to_svgs(glyph_xml_by_name: &str) -> Result<String, JsValue> {
 
     serde_json::to_string(&svgs)
         .map_err(|e| JsValue::from_str(&format!("serialize svgs: {e}")))
+}
+
+/// Grid-thumbnail SVG with a CONSTANT em-based vertical viewBox, so
+/// every glyph in a master renders at the same scale and shares one
+/// baseline — a period stays a small dot, an M stays tall. Mirrors
+/// runebender-xilem's glyph_cell `paint_glyph`:
+///   scale  = preview_height / UPM * 0.65   (em fills 65% of the box)
+///   baseline at 20% from the bottom of the preview area
+///
+/// Expressed as a viewBox (path stays in font units, y-flipped by the
+/// transform): the vertical extent is constant (UPM / 0.65) and the
+/// horizontal extent is the glyph's own bbox (so the SVG's intrinsic
+/// width reflects the glyph and it can be centered in the cell with
+/// height:100%; width:auto). Contrast svg_from_bezpath, which uses the
+/// per-glyph bbox for BOTH axes — that makes every glyph fill its cell
+/// (wrong for a grid) and is kept only for single-glyph previews that
+/// should fill their panel.
+fn svg_from_bezpath_em(bez: &BezPath, upm: f64) -> Result<String, JsValue> {
+    if bez.elements().is_empty() {
+        return Ok(String::new());
+    }
+    let bbox = bez.bounding_box();
+    // Vertical preview box in font units: em occupies 65% of it.
+    let vb_height = upm / 0.65;
+    // Baseline 20% up from the bottom. In flipped (svg y-down) space the
+    // top of the box is at -(0.80 * vb_height) and it extends vb_height
+    // downward, putting the baseline (y=0) 80% down = 20% from bottom.
+    let vb_min_y = -0.80 * vb_height;
+    Ok(format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="{} {} {} {}" preserveAspectRatio="xMidYMid meet"><path d="{}" fill="currentColor" fill-rule="nonzero" transform="scale(1 -1)"/></svg>"#,
+        bbox.x0,
+        vb_min_y,
+        bbox.width(),
+        vb_height,
+        bez.to_svg(),
+    ))
 }
 
 fn parse_glif_xml_map(glyph_xml_by_name: &str) -> Result<HashMap<String, norad::Glyph>, JsValue> {

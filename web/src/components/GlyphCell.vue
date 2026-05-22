@@ -103,9 +103,16 @@ const cellStyle = computed(() => {
 .cell.marked:not(.selected):not(:hover) .cell-glyph {
   color: var(--mark-color);
 }
+/* The grid SVG carries a constant em-based viewBox (same vertical
+   extent for every glyph) and a per-glyph horizontal extent. Scaling
+   to a fixed HEIGHT therefore renders every glyph at the same scale —
+   a period stays a small dot, an M stays tall — and lets the width
+   vary so each glyph is centered on its own advance. max-width guards
+   against unusually wide glyphs overflowing the cell. */
 .cell-glyph :deep(svg) {
+  height: 100%;
+  width: auto;
   max-width: 100%;
-  max-height: 100%;
   display: block;
 }
 
