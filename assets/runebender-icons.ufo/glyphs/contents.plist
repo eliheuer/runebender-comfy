@@ -1,0 +1,22 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>hyperpen</key>
+    <string>hyperpen.glif</string>
+    <key>knife</key>
+    <string>knife.glif</string>
+    <key>measure</key>
+    <string>measure.glif</string>
+    <key>pen</key>
+    <string>pen.glif</string>
+    <key>preview</key>
+    <string>preview.glif</string>
+    <key>select</key>
+    <string>select.glif</string>
+    <key>shapes</key>
+    <string>shapes.glif</string>
+    <key>text</key>
+    <string>text.glif</string>
+  </dict>
+</plist>

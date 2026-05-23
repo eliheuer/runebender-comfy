@@ -54,9 +54,9 @@ const shapes = [
   border-radius: 6px;
   padding: 8px;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   gap: 6px;
-  width: 64px;
+  width: fit-content;
   flex-shrink: 0;
 }
 

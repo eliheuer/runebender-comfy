@@ -167,11 +167,18 @@ function runAction(
   background: var(--rb-panel-background, #1c1c1c);
   border: 1.5px solid var(--rb-panel-outline, #606060);
   border-radius: 6px;
-  color: var(--rb-accent, #66ee88);
+  /* Neutral gray by default, green only on hover — same as the tool
+     palette and xilem's transform buttons. Enabled buttons should not
+     glow green just for being usable. */
+  color: var(--rb-panel-outline, #606060);
   padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+.action-btn:not(.disabled):hover {
+  color: var(--rb-accent, #66ee88);
+  border-color: var(--rb-accent, #66ee88);
 }
 .action-btn.disabled {
   color: var(--rb-panel-outline, #606060);

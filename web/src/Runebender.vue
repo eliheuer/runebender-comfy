@@ -5037,6 +5037,7 @@ onBeforeUnmount(() => {
               type="text"
               :value="displayKerningGroup(activeGlyphKerningGroups?.left, 'public.kern1.')"
               aria-label="Left kerning group"
+              placeholder="Group"
               @change="updateGlyphKerningGroup('left', ($event.target as HTMLInputElement).value)"
               @keydown.enter.prevent="updateGlyphKerningGroup('left', ($event.target as HTMLInputElement).value)"
             />
@@ -5051,6 +5052,7 @@ onBeforeUnmount(() => {
               type="text"
               :value="displayKerningGroup(activeGlyphKerningGroups?.right, 'public.kern2.')"
               aria-label="Right kerning group"
+              placeholder="Group"
               @change="updateGlyphKerningGroup('right', ($event.target as HTMLInputElement).value)"
               @keydown.enter.prevent="updateGlyphKerningGroup('right', ($event.target as HTMLInputElement).value)"
             />
@@ -5382,7 +5384,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 0;
+  gap: 6px;
   pointer-events: auto;
 }
 
@@ -5575,7 +5577,10 @@ onBeforeUnmount(() => {
 .glyph-preview-shape {
   width: 100%;
   height: 100%;
-  color: var(--rb-primary-text, #909090);
+  /* Warm yellow, matching runebender-xilem's panel::GLYPH_PREVIEW
+     (MARK_YELLOW #ffdd33) — the bottom-left preview reads as the
+     "current glyph" highlight rather than another gray panel. */
+  color: #ffdd33;
   display: flex;
   align-items: center;
   justify-content: center;

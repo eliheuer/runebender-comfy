@@ -95,7 +95,7 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn("font input disconnect requested", bundle)
         self.assertIn("runebender/link_source", bundle)
         self.assertIn("workspace/invalidate", bundle)
-        self.assertIn("rb-bundle-2026-05-21-grid-uniform-scale-27", bundle)
+        self.assertIn("rb-bundle-2026-05-22-icons-from-ufo-31", bundle)
         # Grid thumbnail SVGs must come from one batched WASM call
         # (glifMapToSvgs) not 600+ per-glyph crossings.
         self.assertIn("glifMapToSvgs", bundle)

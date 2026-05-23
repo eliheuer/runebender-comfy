@@ -39,7 +39,7 @@ const fn with_alpha(color: theme::ColorRgba, alpha: u8) -> Srgb {
 }
 
 const BG: Srgb = srgb(theme::app::BACKGROUND);
-const GLYPH_FILL: Srgb = srgb(theme::path::FILL);
+const PATH_STROKE: Srgb = srgb(theme::path::STROKE);
 const PREVIEW_FILL: Srgb = srgb(theme::path::PREVIEW_FILL);
 const COMPONENT_FILL: Srgb = srgb(theme::component::FILL);
 const COMPONENT_SELECTED_FILL: Srgb = srgb(theme::component::SELECTED_FILL);
@@ -81,6 +81,7 @@ const START_NODE_HALF_PX: f64 = 5.5;
 const START_NODE_SELECTED_HALF_PX: f64 = 6.5;
 const START_NODE_OFFSET_PX: f64 = 8.0;
 const POINT_OUTLINE_PX: f64 = 1.0 * STROKE_SCALE;
+const PATH_STROKE_PX: f64 = 1.0 * STROKE_SCALE;
 const HANDLE_LINE_PX: f64 = 1.0 * STROKE_SCALE;
 const MARQUEE_STROKE_PX: f64 = 1.0 * STROKE_SCALE;
 const METRIC_LINE_PX: f64 = 1.0 * STROKE_SCALE;
@@ -281,8 +282,19 @@ impl Renderer {
             return;
         }
         if !combined.elements().is_empty() {
-            self.scene
-                .fill(Fill::NonZero, glyph_view, GLYPH_FILL, None, &combined);
+            // Edit mode: STROKE the outline at a constant screen-pixel
+            // width and leave the interior empty, matching
+            // runebender-xilem's paint_glyph_edit_mode. Transform the
+            // path into screen space first so the stroke width doesn't
+            // scale with zoom. (Components below are still filled.)
+            let screen_path = glyph_view * &combined;
+            self.scene.stroke(
+                &Stroke::new(PATH_STROKE_PX),
+                Affine::IDENTITY,
+                PATH_STROKE,
+                None,
+                &screen_path,
+            );
         }
         for component in &state.component_previews {
             let transformed = component.transform * &component.path;

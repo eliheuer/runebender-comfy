@@ -519,24 +519,35 @@ impl EditorState {
     }
 
     /// Auto-zoom and center the glyph in a `width × height` canvas
-    /// (in screen-space pixels). Adds 10% margin around the bbox.
+    /// (in screen-space pixels). Mirrors runebender-xilem's
+    /// `initialize_viewport`: fit the font's vertical metrics
+    /// (ascender − descender) to 60% of the canvas height — NOT the
+    /// per-glyph ink bbox — so every glyph keeps a consistent scale
+    /// (a short "a" stays short, a tall "h" stays tall) with generous
+    /// margin. Center horizontally on the middle of the advance width.
     pub fn fit_to_canvas(&mut self, width: f64, height: f64) {
-        let Some(bbox) = self.glyph_bbox() else {
-            return;
-        };
-        let bw = bbox.width().max(1.0);
-        let bh = bbox.height().max(1.0);
-        let margin = 0.9;
-        let zoom_x = width * margin / bw;
-        let zoom_y = height * margin / bh;
-        let zoom = zoom_x.min(zoom_y).max(1e-3);
+        let ascender = self
+            .metrics
+            .as_ref()
+            .and_then(|m| m.ascender)
+            .unwrap_or(800.0);
+        let descender = self
+            .metrics
+            .as_ref()
+            .and_then(|m| m.descender)
+            .unwrap_or(-200.0);
+        let design_height = (ascender - descender).max(1.0);
+
+        // Leave 40% padding, matching xilem's `padding = 0.6`.
+        let zoom = (height * 0.6 / design_height).max(1e-3);
         self.viewport.zoom = zoom;
-        // Center bbox.center() in screen space. Screen y is flipped:
-        //   screen.y = -design.y * zoom + offset.y
-        let center = bbox.center();
+
+        let design_center_x = self.advance_width / 2.0;
+        let design_center_y = (ascender + descender) / 2.0;
+        // Screen y is flipped: screen.y = -design.y * zoom + offset.y
         self.viewport.offset = Vec2::new(
-            width / 2.0 - center.x * zoom,
-            height / 2.0 + center.y * zoom,
+            width / 2.0 - design_center_x * zoom,
+            height / 2.0 + design_center_y * zoom,
         );
     }
 
