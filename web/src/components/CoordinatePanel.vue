@@ -70,55 +70,46 @@ function blurOnEnter(event: KeyboardEvent) {
     </div>
 
     <div class="fields">
-      <div class="field-row">
-        <label>
-          <span>X</span>
-          <input
-            :value="displayNumber(value?.x)"
-            placeholder="X"
-            inputmode="decimal"
-            :readonly="selectionCount === 0"
-            @change="commitCoordinate('x', $event)"
-            @keydown.enter="blurOnEnter"
-          />
-        </label>
-        <label>
-          <span>Y</span>
-          <input
-            :value="displayNumber(value?.y)"
-            placeholder="Y"
-            inputmode="decimal"
-            :readonly="selectionCount === 0"
-            @change="commitCoordinate('y', $event)"
-            @keydown.enter="blurOnEnter"
-          />
-        </label>
-      </div>
-
-      <div class="field-row">
-        <label>
-          <span>W</span>
-          <input
-            :value="displayDimension(value?.width)"
-            placeholder="W"
-            inputmode="decimal"
-            :readonly="selectionCount <= 1"
-            @change="commitCoordinate('width', $event)"
-            @keydown.enter="blurOnEnter"
-          />
-        </label>
-        <label>
-          <span>H</span>
-          <input
-            :value="displayDimension(value?.height)"
-            placeholder="H"
-            inputmode="decimal"
-            :readonly="selectionCount <= 1"
-            @change="commitCoordinate('height', $event)"
-            @keydown.enter="blurOnEnter"
-          />
-        </label>
-      </div>
+      <input
+        class="coord-input"
+        :value="displayNumber(value?.x)"
+        placeholder="X"
+        aria-label="X"
+        inputmode="decimal"
+        :readonly="selectionCount === 0"
+        @change="commitCoordinate('x', $event)"
+        @keydown.enter="blurOnEnter"
+      />
+      <input
+        class="coord-input"
+        :value="displayNumber(value?.y)"
+        placeholder="Y"
+        aria-label="Y"
+        inputmode="decimal"
+        :readonly="selectionCount === 0"
+        @change="commitCoordinate('y', $event)"
+        @keydown.enter="blurOnEnter"
+      />
+      <input
+        class="coord-input"
+        :value="displayDimension(value?.width)"
+        placeholder="W"
+        aria-label="Width"
+        inputmode="decimal"
+        :readonly="selectionCount <= 1"
+        @change="commitCoordinate('width', $event)"
+        @keydown.enter="blurOnEnter"
+      />
+      <input
+        class="coord-input"
+        :value="displayDimension(value?.height)"
+        placeholder="H"
+        aria-label="Height"
+        inputmode="decimal"
+        :readonly="selectionCount <= 1"
+        @change="commitCoordinate('height', $event)"
+        @keydown.enter="blurOnEnter"
+      />
     </div>
   </section>
 </template>
@@ -148,9 +139,14 @@ function blurOnEnter(event: KeyboardEvent) {
   pointer-events: auto;
 }
 
+/* 64x64 box with a 2x2 cell grid (outer border + center cross) and a
+   dot at each of the 9 intersections. Each dot is positioned directly
+   at its intersection (0% / 50% / 100% of the box) and centered with a
+   translate, so the 3x3 grid stays even — the previous cell+::after
+   scheme pushed the middle column/row off-center. */
 .quadrant-picker {
-  width: 80px;
-  height: 80px;
+  width: 64px;
+  height: 64px;
   box-sizing: border-box;
   position: relative;
   border: 1px solid var(--rb-primary-text, #909090);
@@ -162,23 +158,16 @@ function blurOnEnter(event: KeyboardEvent) {
 .quadrant-dot {
   appearance: none;
   position: absolute;
-  width: 33.333%;
-  height: 33.333%;
-  background: transparent;
-  border: 0;
+  width: 14px;
+  height: 14px;
+  margin: 0;
   padding: 0;
-  cursor: pointer;
-}
-.quadrant-dot::after {
-  content: "";
-  position: absolute;
-  width: 16px;
-  height: 16px;
   transform: translate(-50%, -50%);
   border-radius: 50%;
   background: var(--rb-control-background, #303030);
   border: 1px solid var(--rb-primary-text, #909090);
   box-sizing: border-box;
+  cursor: pointer;
 }
 .quadrant-dot.tl,
 .quadrant-dot.cl,
@@ -193,7 +182,7 @@ function blurOnEnter(event: KeyboardEvent) {
 .quadrant-dot.tr,
 .quadrant-dot.cr,
 .quadrant-dot.br {
-  left: 66.667%;
+  left: 100%;
 }
 .quadrant-dot.tl,
 .quadrant-dot.tc,
@@ -208,70 +197,24 @@ function blurOnEnter(event: KeyboardEvent) {
 .quadrant-dot.bl,
 .quadrant-dot.bc,
 .quadrant-dot.br {
-  top: 66.667%;
-}
-.quadrant-dot.tl::after,
-.quadrant-dot.cl::after,
-.quadrant-dot.bl::after {
-  left: 0;
-}
-.quadrant-dot.tc::after,
-.quadrant-dot.cc::after,
-.quadrant-dot.bc::after {
-  left: 50%;
-}
-.quadrant-dot.tr::after,
-.quadrant-dot.cr::after,
-.quadrant-dot.br::after {
-  left: 100%;
-}
-.quadrant-dot.tl::after,
-.quadrant-dot.tc::after,
-.quadrant-dot.tr::after {
-  top: 0;
-}
-.quadrant-dot.cl::after,
-.quadrant-dot.cc::after,
-.quadrant-dot.cr::after {
-  top: 50%;
-}
-.quadrant-dot.bl::after,
-.quadrant-dot.bc::after,
-.quadrant-dot.br::after {
   top: 100%;
 }
-.quadrant-dot.active::after {
+.quadrant-dot.active {
   background: var(--rb-muted-text, #808080);
 }
-.quadrant-dot:hover::after {
+.quadrant-dot:hover {
   border-color: var(--rb-accent, #66ee88);
 }
 
 .fields {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
   gap: 8px;
 }
 
-.field-row {
-  display: flex;
-  gap: 4px;
-}
-
-label {
-  display: grid;
-  gap: 2px;
-}
-
-label span {
-  color: var(--rb-secondary-text, #707070);
-  font: 10px ui-sans-serif, system-ui, sans-serif;
-  text-align: center;
-}
-
-input {
-  width: 48px;
-  height: 28px;
+.coord-input {
+  width: 58px;
+  height: 34px;
   box-sizing: border-box;
   background: var(--rb-app-background, #101010);
   border: 1.5px solid var(--rb-panel-outline, #606060);
@@ -281,7 +224,7 @@ input {
   text-align: center;
   padding: 0 4px;
 }
-input::placeholder {
+.coord-input::placeholder {
   color: var(--rb-subdued-text, #505050);
 }
 </style>
