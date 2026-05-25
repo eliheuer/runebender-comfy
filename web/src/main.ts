@@ -3,6 +3,9 @@
 // production build (vite build) goes through extension.ts instead.
 
 import { createApp } from "vue";
+import { readDevTestFontFiles } from "./devTestFont";
 import Runebender from "./Runebender.vue";
 
-createApp(Runebender).mount("#app");
+createApp(Runebender, {
+  initialFiles: readDevTestFontFiles,
+}).mount("#app");

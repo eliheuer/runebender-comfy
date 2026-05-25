@@ -15,14 +15,25 @@
       /* Hairline scrollbars — no track, thin mid-gray thumb that
          blends into the dark panel background. Same pattern as
          ~/Notes/dashboard, tuned for the xilem grayscale palette. */
-      * {
-        scrollbar-width: thin;
-        scrollbar-color: #505050 transparent;
+      @supports (-moz-appearance: none) {
+        * {
+          scrollbar-width: thin;
+          scrollbar-color: #505050 transparent;
+        }
       }
-      ::-webkit-scrollbar { width: 4px; height: 4px; background: transparent; }
+      ::-webkit-scrollbar { width: 6px; height: 6px; background: transparent; }
       ::-webkit-scrollbar-track { background: transparent; }
-      ::-webkit-scrollbar-thumb { background: #505050; border-radius: 2px; }
-      ::-webkit-scrollbar-thumb:hover { background: #707070; }
+      ::-webkit-scrollbar-thumb {
+        background: #505050;
+        border-radius: 999px;
+        border: 1.5px solid transparent;
+        background-clip: padding-box;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #707070;
+        border: 1.5px solid transparent;
+        background-clip: padding-box;
+      }
       ::-webkit-scrollbar-corner { background: transparent; }
     </style>
   </head>

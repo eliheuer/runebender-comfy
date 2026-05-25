@@ -175,6 +175,12 @@ pub struct EditorState {
     /// compatible with xilem's Text tool migration.
     pub text_buffer: TextBuffer,
 
+    /// Whether the editor has an open Text session. This intentionally
+    /// differs from `text_buffer.is_empty()`: xilem keeps
+    /// `text_buffer: Some(...)` even after deleting every sort, so Text
+    /// mode, the split preview, and the insertion cursor still exist.
+    pub has_text_session: bool,
+
     /// Monotonic counter for geometric edits. The wasm boundary uses
     /// this to tell selection-only pointer gestures from glyph edits.
     pub edit_revision: u64,
@@ -201,6 +207,7 @@ impl Default for EditorState {
             last_transform: None,
             coord_quadrant: Quadrant::default(),
             text_buffer: TextBuffer::default(),
+            has_text_session: false,
             edit_revision: 0,
         }
     }
@@ -212,6 +219,13 @@ impl EditorState {
     }
 
     pub fn text_line_height(&self) -> f64 {
+        let (ascender, descender) = self.text_metric_bounds();
+        // Match runebender-xilem's rendered Text buffer path: line
+        // breaks advance by the visible metric box height.
+        (ascender - descender).max(1.0)
+    }
+
+    pub fn text_metric_bounds(&self) -> (f64, f64) {
         let ascender = self
             .metrics
             .as_ref()
@@ -222,7 +236,78 @@ impl EditorState {
             .as_ref()
             .and_then(|metrics| metrics.descender)
             .unwrap_or(-200.0);
-        (ascender - descender).max(1.0)
+        (ascender, descender)
+    }
+
+    pub fn insert_text_character(&mut self, char: char) -> bool {
+        let active_advance_width = self
+            .text_buffer
+            .active_sort()
+            .and_then(|index| self.text_buffer.sort(index))
+            .and_then(|sort| match &sort.kind {
+                crate::text::TextSortKind::Glyph { codepoint, .. } => *codepoint,
+                crate::text::TextSortKind::LineBreak => None,
+            })
+            .filter(|active_char| *active_char == char)
+            .map(|_| self.advance_width);
+        if !self
+            .text_buffer
+            .insert_character_with_active_advance(char, active_advance_width)
+        {
+            return false;
+        }
+        self.bump_edit_revision();
+        true
+    }
+
+    pub fn insert_inactive_text_glyph(
+        &mut self,
+        name: impl Into<String>,
+        codepoint: Option<char>,
+        advance_width: f64,
+    ) {
+        self.text_buffer
+            .insert_inactive_glyph(name, codepoint, advance_width);
+        self.bump_edit_revision();
+    }
+
+    pub fn insert_text_line_break(&mut self) {
+        self.text_buffer.insert_line_break();
+        self.bump_edit_revision();
+    }
+
+    pub fn delete_text_before_cursor(&mut self) -> bool {
+        if self.text_buffer.delete_before_cursor().is_none() {
+            if !self
+                .text_buffer
+                .shape_arabic_around_if_rtl(self.text_buffer.cursor())
+            {
+                return false;
+            }
+            self.bump_edit_revision();
+            return true;
+        }
+        self.text_buffer
+            .shape_arabic_around_if_rtl(self.text_buffer.cursor());
+        self.bump_edit_revision();
+        true
+    }
+
+    pub fn delete_text_after_cursor(&mut self) -> bool {
+        if self.text_buffer.delete_after_cursor().is_none() {
+            if !self
+                .text_buffer
+                .shape_arabic_around_if_rtl(self.text_buffer.cursor())
+            {
+                return false;
+            }
+            self.bump_edit_revision();
+            return true;
+        }
+        self.text_buffer
+            .shape_arabic_around_if_rtl(self.text_buffer.cursor());
+        self.bump_edit_revision();
+        true
     }
 
     /// Design-space position of the active Text sort.
@@ -333,6 +418,22 @@ impl EditorState {
             let ws_contour = convert_norad_contour(norad_contour);
             self.paths.push(Path::from_contour(&ws_contour));
         }
+    }
+
+    /// Reload editable glyph data inside an existing editor session.
+    ///
+    /// Text sort activation mirrors xilem by swapping the active sort's
+    /// contours into the same edit session. Unlike opening a new glyph from
+    /// the grid, this must not clear undo history, reset the edit revision, or
+    /// reset editor-session UI state such as the coordinate reference quadrant.
+    pub fn set_glyph_from_norad_preserving_history(&mut self, glyph: &norad::Glyph) {
+        let edit_revision = self.edit_revision;
+        let coord_quadrant = self.coord_quadrant;
+        let last_transform = self.last_transform;
+        self.set_glyph_from_norad(glyph);
+        self.edit_revision = edit_revision;
+        self.coord_quadrant = coord_quadrant;
+        self.last_transform = last_transform;
     }
 
     pub fn set_component_preview(&mut self, preview: BezPath) {
@@ -1732,7 +1833,7 @@ impl EditorState {
         self.selected_contour_indices().len()
     }
 
-    fn bump_edit_revision(&mut self) {
+    pub(crate) fn bump_edit_revision(&mut self) {
         self.edit_revision = self.edit_revision.wrapping_add(1);
     }
 
@@ -2476,6 +2577,7 @@ fn _suppress(_: workspace::Glyph) {}
 mod tests {
     use super::*;
     use crate::path::{PathPoints, QuadraticPath};
+    use crate::text::{TextDirection, TextSort};
 
     #[test]
     fn toggle_point_type_flips_selected_on_curve_points() {
@@ -3142,6 +3244,404 @@ mod tests {
         assert!(state.edit_revision() > before);
         assert!(!state.set_advance_width(720.0));
         assert!(!state.set_advance_width(-1.0));
+    }
+
+    #[test]
+    fn text_sort_glyph_reload_preserves_edit_revision() {
+        let glyph = norad::Glyph::parse_raw(
+            br#"<glyph name="A" format="2"><advance width="600"/></glyph>"#,
+        )
+        .expect("valid glyph");
+        let mut state = EditorState::default();
+        state.bump_edit_revision();
+        state.set_coord_quadrant(Quadrant::TopRight);
+        state.last_transform = Some(Affine::translate((10.0, 20.0)));
+        let before = state.edit_revision();
+        let last_transform = state.last_transform;
+
+        state.set_glyph_from_norad_preserving_history(&glyph);
+
+        assert_eq!(state.edit_revision(), before);
+        assert_eq!(state.coord_quadrant, Quadrant::TopRight);
+        assert_eq!(state.last_transform, last_transform);
+        assert_eq!(state.advance_width, 600.0);
+    }
+
+    #[test]
+    fn text_keyboard_insert_updates_revision() {
+        let mut state = EditorState::default();
+        state.text_buffer.set_glyph_inventory(
+            serde_json::from_str(
+                r#"{
+                    "unicode": { "65": "A" },
+                    "widths": { "A": 700 }
+                }"#,
+            )
+            .expect("valid glyph inventory"),
+        );
+        let before = state.edit_revision();
+
+        assert!(state.insert_text_character('A'));
+
+        assert_eq!(state.text_buffer.len(), 1);
+        assert!(state.edit_revision() > before);
+    }
+
+    #[test]
+    fn text_keyboard_insert_reuses_live_active_width_like_xilem() {
+        let mut state = EditorState {
+            advance_width: 900.0,
+            ..Default::default()
+        };
+        state.text_buffer.set_glyph_inventory(
+            serde_json::from_str(
+                r#"{
+                    "unicode": { "65": "A" },
+                    "widths": { "A": 700 }
+                }"#,
+            )
+            .expect("valid glyph inventory"),
+        );
+        state.text_buffer.insert_glyph("A", Some('A'), 700.0);
+
+        assert!(state.insert_text_character('A'));
+
+        let sort = state.text_buffer.sort(1).expect("inserted sort");
+        let crate::text::TextSortKind::Glyph { advance_width, .. } = &sort.kind else {
+            panic!("expected inserted glyph sort");
+        };
+        assert_eq!(*advance_width, 900.0);
+    }
+
+    #[test]
+    fn rtl_text_non_arabic_insert_reuses_live_active_width_like_xilem() {
+        let mut state = EditorState {
+            advance_width: 920.0,
+            ..Default::default()
+        };
+        state.text_buffer.set_direction(TextDirection::RightToLeft);
+        state.text_buffer.set_glyph_inventory(
+            serde_json::from_str(
+                r#"{
+                    "unicode": { "65": "A" },
+                    "widths": { "A": 700 }
+                }"#,
+            )
+            .expect("valid glyph inventory"),
+        );
+        state.text_buffer.insert_glyph("A", Some('A'), 700.0);
+
+        assert!(state.insert_text_character('A'));
+
+        let sort = state.text_buffer.sort(1).expect("inserted sort");
+        let crate::text::TextSortKind::Glyph { advance_width, .. } = &sort.kind else {
+            panic!("expected inserted glyph sort");
+        };
+        assert_eq!(*advance_width, 920.0);
+    }
+
+    #[test]
+    fn rtl_arabic_insert_keeps_shaped_inventory_width_like_xilem() {
+        let mut state = EditorState {
+            advance_width: 920.0,
+            ..Default::default()
+        };
+        state.text_buffer.set_direction(TextDirection::RightToLeft);
+        state.text_buffer.set_glyph_inventory(
+            serde_json::from_str(
+                r#"{
+                    "unicode": {
+                        "1576": "beh-ar",
+                        "1605": "meem-ar"
+                    },
+                    "widths": {
+                        "beh-ar": 500,
+                        "beh-ar.init": 480,
+                        "meem-ar": 520,
+                        "meem-ar.fina": 500
+                    }
+                }"#,
+            )
+            .expect("valid glyph inventory"),
+        );
+        state
+            .text_buffer
+            .insert_glyph("beh-ar", Some('\u{0628}'), 500.0);
+
+        assert!(state.insert_text_character('\u{0645}'));
+
+        let sort = state.text_buffer.sort(1).expect("inserted sort");
+        let crate::text::TextSortKind::Glyph {
+            name,
+            advance_width,
+            ..
+        } = &sort.kind
+        else {
+            panic!("expected inserted glyph sort");
+        };
+        assert_eq!(name, "meem-ar.fina");
+        assert_eq!(*advance_width, 500.0);
+    }
+
+    #[test]
+    fn inactive_text_glyph_insert_updates_revision() {
+        let mut state = EditorState::default();
+        state.text_buffer.insert_glyph("A", Some('A'), 700.0);
+        state.text_buffer.set_cursor(0);
+        let before = state.edit_revision();
+
+        state.insert_inactive_text_glyph("B", Some('B'), 710.0);
+
+        assert_eq!(state.text_buffer.len(), 2);
+        assert_eq!(
+            state.text_buffer.sort(0).and_then(TextSort::glyph_name),
+            Some("B")
+        );
+        assert_eq!(state.text_buffer.active_sort(), Some(1));
+        assert!(state.edit_revision() > before);
+    }
+
+    #[test]
+    fn text_keyboard_delete_updates_revision() {
+        let mut state = EditorState::default();
+        state.text_buffer.insert_glyph("A", Some('A'), 700.0);
+        state.text_buffer.insert_glyph("B", Some('B'), 700.0);
+        let before = state.edit_revision();
+
+        assert!(state.delete_text_before_cursor());
+
+        assert_eq!(state.text_buffer.len(), 1);
+        assert_eq!(
+            state.text_buffer.sort(0).and_then(TextSort::glyph_name),
+            Some("A")
+        );
+        assert!(state.edit_revision() > before);
+    }
+
+    #[test]
+    fn ltr_text_delete_preserves_existing_shaped_forms() {
+        let mut state = EditorState::default();
+        state.text_buffer.set_glyph_inventory(
+            serde_json::from_str(
+                r#"{
+                    "unicode": {
+                        "1576": "beh-ar",
+                        "1607": "heh-ar"
+                    },
+                    "widths": {
+                        "beh-ar": 500,
+                        "beh-ar.init": 480,
+                        "heh-ar": 510,
+                        "heh-ar.fina": 490
+                    }
+                }"#,
+            )
+            .expect("valid glyph inventory"),
+        );
+        state.text_buffer.set_direction(TextDirection::RightToLeft);
+        assert!(state.insert_text_character('\u{0628}'));
+        assert!(state.insert_text_character('\u{0647}'));
+        state.text_buffer.set_direction(TextDirection::LeftToRight);
+        state.text_buffer.insert_glyph("A", Some('A'), 700.0);
+
+        assert!(state.delete_text_before_cursor());
+
+        assert_eq!(
+            state.text_buffer.sort(0).and_then(TextSort::glyph_name),
+            Some("beh-ar.init")
+        );
+        assert_eq!(
+            state.text_buffer.sort(1).and_then(TextSort::glyph_name),
+            Some("heh-ar.fina")
+        );
+    }
+
+    #[test]
+    fn ltr_text_line_break_preserves_existing_shaped_forms() {
+        let mut state = EditorState::default();
+        state
+            .text_buffer
+            .insert_glyph("beh-ar.init", Some('\u{0628}'), 480.0);
+        state
+            .text_buffer
+            .insert_glyph("heh-ar.fina", Some('\u{0647}'), 490.0);
+        state.text_buffer.set_direction(TextDirection::LeftToRight);
+
+        state.insert_text_line_break();
+
+        assert_eq!(
+            state.text_buffer.sort(0).and_then(TextSort::glyph_name),
+            Some("beh-ar.init")
+        );
+        assert_eq!(
+            state.text_buffer.sort(1).and_then(TextSort::glyph_name),
+            Some("heh-ar.fina")
+        );
+    }
+
+    #[test]
+    fn rtl_text_line_break_matches_xilem_no_reshape_on_enter() {
+        let mut state = EditorState::default();
+        state.text_buffer.set_glyph_inventory(
+            serde_json::from_str(
+                r#"{
+                    "unicode": {
+                        "1576": "beh-ar",
+                        "1607": "heh-ar"
+                    },
+                    "widths": {
+                        "beh-ar": 500,
+                        "beh-ar.init": 480,
+                        "heh-ar": 510,
+                        "heh-ar.fina": 490
+                    }
+                }"#,
+            )
+            .expect("valid glyph inventory"),
+        );
+        state.text_buffer.set_direction(TextDirection::RightToLeft);
+        assert!(state.insert_text_character('\u{0628}'));
+        assert!(state.insert_text_character('\u{0647}'));
+        state.text_buffer.set_cursor(1);
+
+        state.insert_text_line_break();
+
+        assert_eq!(
+            state.text_buffer.sort(0).and_then(TextSort::glyph_name),
+            Some("beh-ar.init")
+        );
+        assert!(matches!(
+            state.text_buffer.sort(1).map(|sort| &sort.kind),
+            Some(crate::text::TextSortKind::LineBreak)
+        ));
+        assert_eq!(
+            state.text_buffer.sort(2).and_then(TextSort::glyph_name),
+            Some("heh-ar.fina")
+        );
+    }
+
+    #[test]
+    fn rtl_text_delete_repairs_neighboring_joining_forms() {
+        let mut state = EditorState::default();
+        state.text_buffer.set_glyph_inventory(
+            serde_json::from_str(
+                r#"{
+                    "unicode": {
+                        "1576": "beh-ar",
+                        "1607": "heh-ar"
+                    },
+                    "widths": {
+                        "beh-ar": 500,
+                        "beh-ar.init": 480,
+                        "beh-ar.fina": 470,
+                        "heh-ar": 510,
+                        "heh-ar.init": 500,
+                        "heh-ar.fina": 490
+                    }
+                }"#,
+            )
+            .expect("valid glyph inventory"),
+        );
+        state.text_buffer.set_direction(TextDirection::RightToLeft);
+        state
+            .text_buffer
+            .insert_glyph("beh-ar.init", Some('\u{0628}'), 480.0);
+        state
+            .text_buffer
+            .insert_glyph("heh-ar.fina", Some('\u{0647}'), 490.0);
+        state
+            .text_buffer
+            .insert_glyph("beh-ar.custom", Some('\u{0628}'), 470.0);
+        state.text_buffer.set_cursor(1);
+
+        assert!(state.delete_text_before_cursor());
+
+        assert_eq!(
+            state.text_buffer.sort(0).and_then(TextSort::glyph_name),
+            Some("heh-ar.init")
+        );
+        assert_eq!(
+            state.text_buffer.sort(1).and_then(TextSort::glyph_name),
+            Some("beh-ar.fina")
+        );
+    }
+
+    #[test]
+    fn rtl_text_boundary_backspace_can_repair_stale_joining_form() {
+        let mut state = EditorState::default();
+        state.text_buffer.set_glyph_inventory(
+            serde_json::from_str(
+                r#"{
+                    "unicode": {
+                        "1576": "beh-ar",
+                        "1607": "heh-ar"
+                    },
+                    "widths": {
+                        "beh-ar": 500,
+                        "beh-ar.init": 480,
+                        "heh-ar": 510,
+                        "heh-ar.fina": 490
+                    }
+                }"#,
+            )
+            .expect("valid glyph inventory"),
+        );
+        state.text_buffer.set_direction(TextDirection::RightToLeft);
+        state
+            .text_buffer
+            .insert_inactive_glyph("beh-ar", Some('\u{0628}'), 500.0);
+        state
+            .text_buffer
+            .insert_inactive_glyph("heh-ar", Some('\u{0647}'), 510.0);
+        state.text_buffer.set_cursor(0);
+        let before = state.edit_revision();
+
+        assert!(state.delete_text_before_cursor());
+
+        assert_eq!(
+            state.text_buffer.sort(0).and_then(TextSort::glyph_name),
+            Some("beh-ar.init")
+        );
+        assert!(state.edit_revision() > before);
+    }
+
+    #[test]
+    fn rtl_text_boundary_delete_can_repair_stale_joining_form() {
+        let mut state = EditorState::default();
+        state.text_buffer.set_glyph_inventory(
+            serde_json::from_str(
+                r#"{
+                    "unicode": {
+                        "1576": "beh-ar",
+                        "1607": "heh-ar"
+                    },
+                    "widths": {
+                        "beh-ar": 500,
+                        "beh-ar.init": 480,
+                        "heh-ar": 510,
+                        "heh-ar.fina": 490
+                    }
+                }"#,
+            )
+            .expect("valid glyph inventory"),
+        );
+        state.text_buffer.set_direction(TextDirection::RightToLeft);
+        state
+            .text_buffer
+            .insert_inactive_glyph("beh-ar", Some('\u{0628}'), 500.0);
+        state
+            .text_buffer
+            .insert_inactive_glyph("heh-ar", Some('\u{0647}'), 510.0);
+        state.text_buffer.set_cursor(2);
+        let before = state.edit_revision();
+
+        assert!(state.delete_text_after_cursor());
+
+        assert_eq!(
+            state.text_buffer.sort(1).and_then(TextSort::glyph_name),
+            Some("heh-ar.fina")
+        );
+        assert!(state.edit_revision() > before);
     }
 
     #[test]

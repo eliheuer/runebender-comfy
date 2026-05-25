@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import GeneratedIcon from "./GeneratedIcon.vue";
+
 // Sub-toolbar peer for runebender-xilem's `shapes_toolbar.rs`.
 // Appears when Shapes is active and chooses the primitive created by
 // drag gestures in the editor canvas.
@@ -17,6 +19,11 @@ const shapes = [
   ["rectangle", "Rectangle"],
   ["ellipse", "Ellipse"],
 ] as const;
+
+const SHAPE_ICONS: Record<ShapeKind, string> = {
+  rectangle: "shape-rectangle",
+  ellipse: "shape-ellipse",
+};
 </script>
 
 <template>
@@ -32,17 +39,7 @@ const shapes = [
       :aria-pressed="id === active"
       @click="$emit('select', id)"
     >
-      <svg
-        class="shape-icon"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.8"
-        aria-hidden="true"
-      >
-        <rect v-if="id === 'rectangle'" x="5" y="6" width="14" height="12" />
-        <ellipse v-else cx="12" cy="12" rx="7" ry="5.5" />
-      </svg>
+      <GeneratedIcon :name="SHAPE_ICONS[id]" />
     </button>
   </div>
 </template>
@@ -82,9 +79,4 @@ const shapes = [
   border-color: var(--rb-accent, #66ee88);
 }
 
-.shape-icon {
-  width: 32px;
-  height: 32px;
-  display: block;
-}
 </style>

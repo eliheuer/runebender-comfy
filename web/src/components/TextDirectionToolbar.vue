@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import GeneratedIcon from "./GeneratedIcon.vue";
+
 // Sub-toolbar peer for runebender-xilem's
 // `components/text_direction_toolbar.rs`. Appears when Text is active
-// and chooses the direction used by the upcoming text buffer work.
+// and chooses the direction used by active Text entry.
 
 export type TextDirection = "ltr" | "rtl";
 
@@ -17,6 +19,11 @@ const directions = [
   ["ltr", "Left to Right"],
   ["rtl", "Right to Left"],
 ] as const;
+
+const DIRECTION_ICONS: Record<TextDirection, string> = {
+  ltr: "text-ltr",
+  rtl: "text-rtl",
+};
 </script>
 
 <template>
@@ -36,29 +43,7 @@ const directions = [
       :aria-pressed="id === active"
       @click="$emit('select', id)"
     >
-      <svg
-        class="direction-icon"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.8"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        aria-hidden="true"
-      >
-        <template v-if="id === 'ltr'">
-          <path d="M5 6h10" />
-          <path d="M12 3l3 3-3 3" />
-          <path d="M5 13h13" />
-          <path d="M5 18h9" />
-        </template>
-        <template v-else>
-          <path d="M9 6h10" />
-          <path d="M12 3 9 6l3 3" />
-          <path d="M6 13h13" />
-          <path d="M10 18h9" />
-        </template>
-      </svg>
+      <GeneratedIcon :name="DIRECTION_ICONS[id]" />
     </button>
   </div>
 </template>
@@ -67,7 +52,7 @@ const directions = [
 .text-direction-toolbar {
   background: var(--rb-panel-background, #1c1c1c);
   border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 6px;
+  border-radius: 8px;
   padding: 8px;
   display: flex;
   flex-direction: row;
@@ -98,9 +83,4 @@ const directions = [
   border-color: var(--rb-accent, #66ee88);
 }
 
-.direction-icon {
-  width: 32px;
-  height: 32px;
-  display: block;
-}
 </style>

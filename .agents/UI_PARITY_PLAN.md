@@ -239,8 +239,9 @@ For broader routing, see `.agents/REPO_MAP.md`.
 - Rotate 90 CW / CCW are wired through wasm with undo support.
 - Duplicate is wired through wasm with undo support.
 - Duplicate Repeat is wired through wasm with undo support.
-- Remaining gap: Text still needs broader script shaping coverage
-  beyond the current xilem-aligned Arabic joining subset. Knife
+- Remaining gap: Text shaping is currently aligned to xilem's Arabic
+  joining subset; broader script shaping should wait until xilem grows
+  beyond its planned Hebrew/other-RTL notes. Knife
   splitting now handles cubic, quadratic, and hyperbezier outlines,
   with cut hyperbeziers converted to explicit cubic contours.
 
@@ -508,16 +509,128 @@ Kern fields around the LSB/RSB fields. In Text mode the panel moves
 above the bottom text buffer, reads the active sort's previous/current
 and current/next glyph pairs, resolves UFO direct/group kerning with
 the same precedence as Rust Text layout, and writes edits back into
-the active master's `kerning.plist` model. Empty, `-`, and zero values
-remove the direct pair; non-zero values mark kerning dirty, resync the
-Rust Text kerning model, reshape the preview strip, and update the
-Comfy state bridge.
+the active master's `kerning.plist` model. Empty and `-` remove the
+direct pair; numeric values, including `0`, mark kerning dirty, resync
+the Rust Text kerning model, refresh the preview layout, and update
+the Comfy state bridge.
+
+Follow-up completed 2026-05-24: active Text kern and kerning-group
+field edits no longer force Arabic Text-buffer reshaping. They now
+only sync the kerning/groups model and refresh layout, matching
+xilem's kerning-data edit path instead of rewriting Text sort glyph
+names when text content did not change.
+
+Follow-up completed 2026-05-25: Text kern fields now preserve xilem's
+direct-zero behavior. Entering `0` stores a zero-valued direct pair;
+only an empty value or `-` removes the pair.
+
+Follow-up completed 2026-05-25: Text kern fields now use xilem's raw
+input delete semantics. Only an exactly empty value or exactly `-`
+removes the pair; whitespace-padded input is rejected instead of being
+trimmed into a different edit.
+
+Follow-up completed 2026-05-25: the active-glyph panel kerning-group
+fields now show xilem's full stored group names, including the
+`public.kern1.` / `public.kern2.` prefixes. The read-only glyph info
+sidebar still keeps xilem's shortened display.
+
+Follow-up completed 2026-05-25: active-glyph kerning-group edits now
+write the glyph's GLIF lib keys `public.kern1` / `public.kern2`, like
+xilem's `left_group` / `right_group` fields. They no longer rewrite
+`groups.plist` membership or auto-prefix bare input values.
+
+Follow-up completed 2026-05-25: the Rust Text kerning model now
+receives an editor-only merged group map that includes GLIF lib
+`public.kern1` / `public.kern2` memberships as well as `groups.plist`.
+This matches xilem's lookup path, where active glyph `left_group` /
+`right_group` fields participate in direct/group kerning without
+rewriting the saved groups plist.
+
+Follow-up completed 2026-05-25: Text layout and active Text kern
+display no longer prefix-filter group names before lookup. This matches
+xilem's shared kerning lookup, where raw `left_group` / `right_group`
+values can participate as long as the active workspace group map
+contains the glyph membership.
+
+Follow-up completed 2026-05-25: the Text kerning model now carries
+editor-only left/right group hint maps in addition to membership groups.
+Rust Text layout and the active Text kern fields try those hints before
+falling back to all group memberships, matching xilem's
+`lookup_kerning` priority for glyph `left_group` / `right_group`.
+
+Follow-up completed 2026-05-25: Rust Text layout now calls the shared
+`runebender-core` kerning lookup directly instead of maintaining a
+local copy of the glyph/group precedence rules. This keeps Comfy's Text
+spacing tied to the same algorithm xilem uses.
+
+Follow-up completed 2026-05-25: Text kerning hint wiring now matches
+xilem's pair-side usage: the first glyph contributes its `right_group`
+hint and the second glyph contributes its `left_group` hint. Rust Text
+layout and the active Text kern fields now resolve group-priority pairs
+with the same previous/current glyph sides as xilem.
+
+Follow-up completed 2026-05-25: active Text kern and active-glyph
+kerning-group field edits now request a canvas render after syncing
+the Rust Text kerning model. Kerning-driven Text layout changes become
+visible immediately instead of waiting for the next pointer/key render
+trigger.
+
+Follow-up completed 2026-05-25: GLIF lib kerning groups are now read
+through Rust/norad metadata instead of browser regex scans. This keeps
+Comfy aligned with xilem for XML entity decoding and nontrivial plist
+formatting in `public.kern1` / `public.kern2` values.
+
+Follow-up completed 2026-05-25: active glyph serialization now refreshes
+the browser-side GLIF-lib kerning group cache from the serialized bytes,
+while preserving `groups.plist` fallback memberships. This keeps the
+Text kerning model aligned with xilem's live session glyph after outline
+or metric edits.
+
+Follow-up completed 2026-05-24: active glyph width and sidebearing
+edits in Text mode now refresh the glyph bytes, Text sort metadata,
+and kerning model without forcing Arabic Text-buffer reshaping. This
+matches xilem's width-edit behavior; xilem sidebearing fields are still
+TODO, but these metric edits should not rewrite Text sort glyph names
+when text content did not change.
+
+Follow-up completed 2026-05-25: active glyph width edits now mirror
+xilem's raw `f64` parse shape more closely. Empty or whitespace-padded
+field values are rejected instead of JavaScript-coerced to `0` or a
+trimmed number.
+
+Follow-up completed 2026-05-25: active glyph edits now update only the
+active Text sort's stored advance width, matching xilem's
+`update_glyph_width` path. Repeated copies of the same glyph in the
+Text buffer no longer all reflow just because one active sort's glyph
+was edited.
 
 Follow-up completed 2026-05-15: Text sort activation now loads the
 active sort glyph into the outline editor without refitting the
 canvas, so the active-glyph panel and its Kern fields track the same
 glyph that is selected in the Text buffer. The panel hides in Text
 mode when no glyph sort is active.
+
+Follow-up completed 2026-05-24: leaving Text mode and switching
+masters now reload the editable glyph from the active Text sort name,
+not a potentially stale `currentGlyph`, matching xilem's
+`active_sort_name`-driven editor session reload.
+
+Follow-up completed 2026-05-24: active Text sort and master-switch
+reloads now use a history-preserving GLIF/component load path.
+Selecting a sort, leaving Text mode, or switching masters swaps the
+active sort's contours into the existing editor session without
+clearing Rust undo history or resetting the edit revision, matching
+xilem's in-session sort activation and master reload model.
+
+Follow-up completed 2026-05-24: the same reload path now preserves the
+coordinate reference quadrant instead of falling all the way through
+the full grid glyph-open reset. Active Text sort changes therefore
+keep coordinate-panel session state like xilem's in-place sort swap.
+
+Follow-up completed 2026-05-25: active Text sort reloads now preserve
+the last geometric transform too. This keeps Duplicate Repeat state
+alive across xilem-style in-session sort swaps instead of treating the
+reload like a fresh grid glyph open.
 
 Follow-up completed 2026-05-15: Text reshaping now reloads the active
 sort glyph after the Rust buffer snapshot is refreshed, so Arabic
@@ -550,9 +663,25 @@ remain visible immediately.
 
 Follow-up completed 2026-05-15: Text-buffer rendering now receives the
 active Text-mode flag from the Rust tool state. Outside Text mode,
-Comfy hides the Text insertion cursor and draws xilem-style full
-metrics for the active editable sort while keeping inactive sorts on
-minimal metric markers.
+Comfy draws xilem-style full metrics for the active editable sort
+while keeping inactive sorts on minimal metric markers.
+
+Follow-up corrected 2026-05-24: the Text insertion cursor now renders
+only while active Text entry is live. xilem's Text-buffer call site
+requests the cursor outside Preview mode, but its inner cursor renderer
+returns early unless `text_mode_active` is true, so outline-editing tools
+keep active-sort metrics visible without also drawing the insertion
+cursor.
+
+Follow-up corrected 2026-05-24: Comfy does not add a browser-side Text
+cursor blink loop. xilem has a `TextCursor::update()` helper, but the
+current editor canvas never calls it and the actual text-buffer renderer
+draws the insertion cursor directly when active Text entry is live.
+
+Follow-up completed 2026-05-24: clearing and reseeding the Rust Text
+buffer now resets direction to LTR, matching xilem's fresh editor
+session default when opening another glyph instead of carrying a prior
+RTL choice across glyph sessions.
 
 Follow-up completed 2026-05-15: active sort point/handle controls are
 now hidden while the Text tool is active. Switching back to an outline
@@ -573,21 +702,29 @@ font has no glyph for the character, and Vue only refreshes the
 snapshot/editor selection afterward. Focused Rust tests cover inventory
 lookup and RTL neighbor reshaping.
 
-Follow-up completed 2026-05-15: multiline Text buffers now support
-vertical ArrowUp/ArrowDown cursor movement through Rust. The cursor
-preserves its visual X position as it moves between text lines and
-clamps at the first/last line, with Vue routing the keys through the
-same snapshot refresh path as horizontal movement.
-
-Follow-up completed 2026-05-15: Text-mode Home/End are now Rust-owned
-line-boundary moves instead of whole-buffer jumps. This makes the
-multiline Text buffer behave like an editor session once line breaks
-are present while preserving snapshot-driven Vue rendering.
+Superseded 2026-05-24/25: an earlier Comfy-only pass added multiline
+ArrowUp/ArrowDown and Home/End Text cursor movement. Those affordances
+were later removed from the WASM boundary and Rust Text core because
+xilem's current Text input scope only handles visual Left/Right,
+Backspace/Delete, Enter, and printable characters.
 
 Follow-up completed 2026-05-15: Text-mode printable key repeats now
 insert repeated sorts instead of being filtered out by Vue. This
 matches xilem's Text key handling, where repeated character keydown
 events continue through the normal insertion path.
+
+Follow-up completed 2026-05-25: browser Text input now mirrors
+xilem's `Key::Character(s).chars().next()` behavior for multi-scalar
+text keys. Comfy still filters browser named control keys such as
+`Dead` / `Unidentified`, but composed text input no longer gets
+dropped just because it has more than one Unicode scalar.
+
+Follow-up completed 2026-05-25: the same browser Text input helper now
+rejects ASCII named key values such as `ArrowUp`, `Tab`, and
+`PageDown` before taking the first scalar. The filter is an explicit
+browser named-key deny list plus named-key shape checks rather than a
+broad ASCII-word reject, so lower-case multi-character printable input
+can still follow xilem's `Key::Character(...).chars().next()` path.
 
 Follow-up completed 2026-05-15: edit toolbar titles now expose the
 remaining xilem keyboard affordances for HyperPen (`H`), Knife (`K`),
@@ -599,6 +736,12 @@ Preview while the Text tool is active, matching xilem's Text-mode
 guard. Space is now handled only by Text insertion/missing-glyph
 feedback in Text mode instead of accidentally switching tools when the
 font has no space glyph.
+
+Follow-up completed 2026-05-24: browser Text mode now consumes plain
+Space even when U+0020 is missing from the font, so the missing-glyph
+feedback path cannot fall through to page scrolling. Other missing
+printable glyphs still return unhandled, matching xilem's text input
+shape/insert gate.
 
 Follow-up completed 2026-05-15: the matching Space keyup path now
 also ignores Text mode, so browser Text handling owns the whole Space
@@ -911,9 +1054,55 @@ marks on the Vello canvas.
 
 Follow-up completed 2026-05-15: structural Text buffer edits now
 cancel manual kerning state in Rust. Clearing the buffer, changing
-direction/inventory, inserting sorts, inserting line breaks, deleting
-sorts, or replacing sort metadata can no longer leave the kerning drag
-session pointing at a stale sort index.
+inserting sorts, inserting line breaks, or deleting sorts can no
+longer leave the kerning drag session pointing at a stale sort index.
+
+Follow-up completed 2026-05-25: updating the Text kerning model no
+longer cancels an active manual kerning session. This matches xilem's
+split between Text session interaction state and workspace kerning data
+updates from the active glyph panel.
+
+Follow-up completed 2026-05-25: refreshing the Text glyph inventory
+also preserves active manual kerning. Active glyph metric/group edits
+can resync widths, outlines, and kerning data without tearing down the
+current kern-mode interaction state, matching xilem's editor/session
+split.
+
+Follow-up completed 2026-05-25: refreshing an existing Text sort's
+glyph metadata also preserves active manual kerning. This keeps active
+glyph width edits aligned with xilem's `update_glyph_width`, which
+updates the active sort advance width in place without cancelling kern
+mode.
+
+Follow-up completed 2026-05-24: Text manual kerning drags no longer
+mark the active glyph GLIF dirty when the serialized glyph bytes are
+unchanged. Pointer-up now treats kerning-model sync as a separate
+dirty path, matching xilem's split between glyph-outline edits and
+workspace kerning edits.
+
+Follow-up completed 2026-05-25: Shift-drag manual kerning now enters
+the same no-op session xilem does when the hit sort follows a line
+break. The sort activates and kern mode starts, but dragging does not
+write kerning or bump the edit revision unless the current and previous
+sorts are both glyphs.
+
+Follow-up completed 2026-05-25: manual kerning drags now match xilem's
+exact-zero delete rule. Dragging a pair to exactly `0.0` removes the
+direct pair, but tiny non-zero values are preserved instead of being
+rounded away by an epsilon check.
+
+Follow-up completed 2026-05-25: active Text sort hit testing is now
+explicitly guarded for the full Text layout origin, including the
+second-line Y offset. xilem's current path subtracts only the active
+sort X offset, but Comfy keeps second-line active sorts editable where
+they render.
+
+Runtime check completed 2026-05-25: with the dev VirtuaGrotesk test
+font loaded in Vite, Shift-dragging the `B` sort in an `ABCD` Text
+buffer selected `B`, wrote the direct `A/B` pair into the active Left
+Kern field, and visibly reflowed the canvas and bottom preview spacing.
+This verifies the browser pointer path for xilem-style manual Text
+kerning in addition to the Rust unit coverage.
 
 ### Done 2026-05-14 - Info sidebar metadata without opening glyphs
 
@@ -1345,16 +1534,69 @@ for another pointer move.
 Text is no longer routed to the inert fallback in the Rust tool box.
 Selecting Text now creates an active Text tool, Vue shows a
 xilem-style LTR/RTL direction sub-toolbar beneath the edit toolbar,
-and the `T` keyboard shortcut switches into Text mode.
+and the direction buttons only update the active text direction. Bare
+`T` is not a tool-switching shortcut in xilem and is intentionally not
+handled as one in Comfy.
+
+Follow-up completed 2026-05-25: the web static checks now pin the Text
+direction toolbar to xilem's shared toolbar constants and display
+order: LTR before RTL, 8px panel padding/radius, 6px item gap, 48px
+buttons, 1.5px strokes, and the generated `text-ltr` / `text-rtl`
+icons.
 
 ### Done 2026-05-15 - Add first Text buffer behavior
 
 Text mode now accepts printable keyboard input, maps characters to
 glyphs through the active master's Unicode map, inserts matching sorts
-at the cursor, supports arrow/Home/End cursor movement plus
-Backspace/Delete, renders a bottom preview strip using the active
-master's glyph SVGs, reverses the strip for RTL mode, and double-clicks
-sorts back into the glyph editor.
+at the cursor, supports xilem's Text-mode key scope (visual
+Left/Right, Backspace/Delete, Enter, and printable characters),
+renders a bottom preview strip using the active master's glyph SVGs,
+reverses the strip for RTL mode, and double-clicks sorts back into
+the glyph editor.
+
+Follow-up completed 2026-05-24: the stale WASM bindings for
+Text-cursor Up/Down/Home/End movement were removed from the public
+editor API. Comfy keeps only the cursor operations xilem currently
+drives from Text-mode keyboard input: visual Left/Right, deletion,
+line break insertion, and printable-character insertion.
+
+Follow-up completed 2026-05-25: the matching dead Rust Text-buffer
+helpers for Up/Down/Home/End cursor movement were removed too, so the
+core Text API now mirrors the same xilem keyboard scope instead of
+carrying unused cursor affordances behind the WASM boundary.
+
+Follow-up completed 2026-05-24: Text-mode Backspace/Delete now always
+consume the key event, even when the cursor is already at the start or
+end of the buffer. This matches xilem's Text input path, where delete
+keys stay owned by Text mode and still request a render after a
+no-op boundary edit.
+
+Follow-up completed 2026-05-24: boundary Backspace/Delete now still
+call into the Rust Text delete path, so RTL reshape-around can repair
+stale Arabic joining forms even when no sort is removed. Rust reports
+a real edit only if that boundary reshape changes the buffer.
+
+Follow-up completed 2026-05-25: Delete-at-cursor is now guarded for
+xilem's active-sort deletion invariant. If Delete removes the active
+Text sort, no neighbor silently inherits active state; the active bit
+belonged to the removed sort, so the Text buffer returns to no active
+sort.
+
+Follow-up completed 2026-05-25: Backspace-at-active and line-break
+insertion before the active Text sort are also covered. Removing the
+active sort clears active state, while inserting an inactive line-break
+sort before it shifts the active index onto the same glyph object, just
+like xilem's `SortBuffer` active-bit model.
+
+Follow-up completed 2026-05-25: Vue keydown routing now matches
+xilem's editor-canvas order more closely: editor shortcuts run before
+Text input, Text input owns arrows/Delete/Enter next, and outline or
+background-image nudging is only the final fallthrough.
+
+Follow-up completed 2026-05-25: the web static checks now also pin the
+xilem Ctrl+Space ordering: Ctrl+Space remains a preview shortcut before
+Text input even while active Text entry is live, while plain Space
+continues through the Text character path.
 
 ### Done 2026-05-15 - Add Text line breaks and kerning-aware preview spacing
 
@@ -1376,16 +1618,66 @@ is missing.
 Follow-up completed 2026-05-15: the Text session has since moved to
 Rust-owned state, canvas-level multi-sort rendering, Rust layout and
 hit-testing, active-sort editing, manual kerning, and refreshed glyph
-inventory. The remaining Text gap is broader shaping coverage beyond
-the Arabic joining subset currently shared with xilem.
+inventory. The earlier broad-shaping gap is intentionally scoped to
+xilem's current Arabic implementation; Hebrew and other RTL scripts
+remain future work in xilem too.
+
+Follow-up completed 2026-05-24: RTL Arabic shaping now builds context
+from glyph codepoints across the whole Text buffer, ignoring
+line-break sorts the same way xilem's current `create_shaped_sort_from_char`
+and `reshape_buffer_around` helpers do. Line breaks still reset layout
+and kerning, but they no longer split the shaping context.
+
+Follow-up completed 2026-05-24: RTL Arabic reshape-around now expands
+to the neighboring non-transparent Arabic letters around an edit. This
+matches xilem's lower Arabic shaper model, where transparent marks do
+not block joining, and fixes stale forms when inserting a right-joining
+letter between two joining letters.
+
+Follow-up completed 2026-05-25: Arabic positional glyph resolution now
+uses glyph existence rather than width-metadata existence. This matches
+xilem's `GlyphProvider::has_glyph` path, so a `.init` / `.medi` /
+`.fina` glyph with an outline but missing width metadata is still used
+and falls back through the existing advance-width path.
+
+Follow-up completed 2026-05-25: missing Text advance-width metadata now
+falls back to `500.0` in both Rust and Vue, matching xilem's Arabic
+shaper fallback instead of Comfy's older `600.0` browser-side default.
+
+Follow-up completed 2026-05-25: typing the same non-Arabic Unicode as
+the active Text sort now uses the live editable glyph advance width
+instead of stale inventory width, matching xilem's
+`create_sort_from_char` active-sort override. RTL Arabic insertion
+continues through the shaping/inventory path like xilem's Arabic
+shaper.
+
+Follow-up completed 2026-05-25: focused regressions now cover both
+sides of that active-width split: RTL non-Arabic text still takes the
+live active glyph width through xilem's fallback path, while RTL
+Arabic text keeps the shaped glyph's inventory advance.
+
+Follow-up completed 2026-05-24: focused Text-buffer regressions now
+cover xilem's Latin-separator shaping rule: non-Arabic glyphs break
+Arabic joining, and deleting that separator repairs the neighboring
+Arabic forms.
+
+Follow-up completed 2026-05-24: transparent Arabic mark coverage now
+includes the delete path too. Removing a mark between joining Arabic
+letters reshapes the neighboring letters, preserving xilem's
+transparent-mark joining behavior in both insertion and deletion cases.
+
+Follow-up completed 2026-05-25: RTL Text regressions now cover
+xilem's Tatweel / kashida rule. U+0640 stays on its base glyph while
+still acting as a join-causing character for neighboring Arabic
+letters.
 
 ### Done 2026-05-15 - Add Text sort selection and visual cursor movement
 
-The Text preview strip now supports single-click sort selection,
-updates the selected glyph in the side panels, moves the insertion
-cursor next to the clicked sort, and keeps visual ArrowLeft/ArrowRight
-movement direction-aware for RTL mode. Double-click still opens the
-sort glyph for outline editing.
+Text sort activation now lives on the canvas/session path instead of
+the removed browser preview-strip controls. The Rust Text buffer keeps
+visual ArrowLeft/ArrowRight movement direction-aware for RTL mode,
+while double-click sort activation loads the hit sort's glyph for
+outline editing without placing the insertion cursor on plain clicks.
 
 Follow-up completed 2026-05-15: canvas-level Text sort activation now
 loads the newly active sort's glyph into the editable outline state,
@@ -1414,6 +1706,104 @@ cursor and active-sort selection.
 Follow-up completed 2026-05-15: while Text mode is active, the editor
 canvas now ends above the bottom Text buffer band instead of rendering
 under it, matching xilem's split editor/text preview layout.
+
+Follow-up completed 2026-05-24: the bottom Text buffer preview now
+stays visible whenever a Text buffer exists, even after switching out
+of the Text tool. This matches xilem's editor split: the Text tool
+controls active text entry, but the multi-glyph preview strip belongs
+to the open Text session.
+
+Follow-up completed 2026-05-24: Comfy now tracks Text-session
+existence separately from sort count. Deleting the final sort no
+longer hides the bottom Text split or disables Text-mode keyboard
+input, matching xilem's `text_buffer.is_some()` checks.
+
+Follow-up completed 2026-05-24: the Rust renderer now has the same
+Text-session distinction. Empty Text sessions no longer fall back to
+single-glyph canvas rendering; active empty Text mode still draws the
+insertion cursor from the Text layout origin.
+
+Follow-up completed 2026-05-24: the WASM render path now passes an
+active Text-mode flag only when the selected tool is Text and a Text
+session exists. This keeps Rust rendering aligned with Vue's
+`textModeActive` and xilem's `text_buffer.is_some()` gate.
+
+Follow-up completed 2026-05-24: active glyph edits now refresh the
+Rust Text glyph inventory whenever a Text session exists, even if the
+sort buffer is empty. The next typed glyph in an empty Text session
+therefore uses the current width/outline data instead of stale
+pre-edit metadata.
+
+Follow-up completed 2026-05-24: the Text buffer snapshot now carries
+the Rust `has_text_session` bit, and Vue mirrors that authoritative
+state after undo/redo and other history restores. This keeps the
+browser Text-session flag aligned with xilem's session-level undo
+model instead of inferring session existence from sort count.
+
+Follow-up completed 2026-05-24: undo/redo now refreshes the Vue Text
+snapshot whenever a Text session exists, even if the active tool is no
+longer Text. This keeps the persistent bottom Text preview aligned
+with Rust history restores outside active text entry.
+
+Follow-up completed 2026-05-25: undo/redo no longer marks the active
+glyph dirty when the restored history state only changes the Text
+session. Vue now uses the same unchanged-GLIF guard as Text manual
+kerning pointer-up, preserving xilem's split between text-buffer state
+and glyph-outline workspace edits.
+
+Follow-up completed 2026-05-24: LTR/RTL direction changes now request a
+canvas redraw after syncing the Rust Text snapshot. The toolbar still
+does not force a reshape, matching xilem, but the WebGPU canvas no
+longer waits for the next unrelated pointer/key event to show the new
+layout direction.
+
+Follow-up completed 2026-05-24: outside active Text entry, the active
+sort in the canvas Text session no longer receives an extra filled
+glyph paint. It now strokes the editable outline, draws control
+points/handles, renders active components through the Text sort
+origin, and outlines selected components with xilem's 2px selection
+stroke, matching xilem's
+`render_active_sort` path.
+
+Follow-up completed 2026-05-24: the bottom Text preview SVG now uses
+`currentColor` for glyph fills instead of a baked path color, so the
+preview strip has the same color ownership model as xilem's
+`MultiGlyphWidget::color(...)` path.
+
+Follow-up completed 2026-05-25: the same static preview check now also
+guards xilem's per-glyph fill model. The bottom preview emits one SVG
+path per rendered sort instead of merging the whole strip into one
+combined path, preserving xilem's `MultiGlyphWidget` approach that
+avoids winding conflicts between adjacent glyphs.
+
+Follow-up completed 2026-05-24: glyph SVG refresh paths used by Text
+inventory now keep component-aware outlines after Unicode changes,
+renames, mark-color writes, and active glyph serialization. This keeps
+inactive Text sorts with components closer to xilem's bottom preview,
+which resolves workspace components for non-active sorts.
+
+Follow-up completed 2026-05-24: grid outline paste now refreshes
+matching Text sorts and repushes the component-aware glyph inventory
+when a Text session is open. This keeps pasted glyph outlines visible
+in the bottom Text preview immediately instead of waiting for a later
+model sync.
+
+Follow-up completed 2026-05-24: empty Text sessions no longer show a
+browser-only "Text" placeholder in the bottom preview. The split stays
+visible as an empty rendering pane, matching xilem's
+`multi_glyph_view` path when the Text buffer has no glyph paths.
+
+Follow-up completed 2026-05-24: the obsolete preview-strip
+double-click helper was removed after the bottom Text preview became a
+render-only canvas companion. Sort activation now stays on the
+xilem-aligned canvas/Text-session path instead of falling back to the
+grid glyph-open flow.
+
+Follow-up completed 2026-05-24: the Text cursor default color now
+matches xilem's actual renderer path, which paints the cursor with the
+selection rectangle stroke (`#ffaa33`). Comfy's Rust renderer default
+and Vue theme fallback both use the same orange instead of the unused
+blue cursor token.
 
 Follow-up completed 2026-05-15: Text buffer sort hit targets are now
 transparent glyph preview regions instead of browser-card buttons, so
@@ -1456,9 +1846,10 @@ renders the preview and performs the current glyph-name shaping pass.
 
 The Rust Text buffer now computes X/Y layout positions for glyph sorts
 and cursor placement across line breaks, with RTL lines laid out from
-their line width. The wasm API exposes `textBufferLayout(lineHeight)`
-so Vue can migrate the preview strip toward Rust-provided layout
-coordinates before full canvas-level multi-sort rendering lands.
+the full buffer advance width to match xilem's current Text renderer.
+The wasm API exposes `textBufferLayout(lineHeight)` so Vue can migrate
+the preview strip toward Rust-provided layout coordinates before full
+canvas-level multi-sort rendering lands.
 
 ### Done 2026-05-15 - Drive Text preview positions from Rust layout
 
@@ -1466,6 +1857,12 @@ Vue now renders the Text preview strip from `textBufferLayout()`
 coordinates instead of its previous flex-line layout. Glyph positions,
 line positions, and cursor placement now come from Rust-owned Text
 session layout.
+
+Follow-up completed 2026-05-25: Rust preview-layout regressions now
+cover xilem's separate bottom-preview behavior for both LTR and RTL.
+The bottom strip keeps line breaks in one horizontal preview row and
+uses them only to break kerning context; the editable canvas layout
+still stacks the same sorts onto separate Text lines.
 
 ### Done 2026-05-15 - Move Text kerning into Rust layout
 
@@ -1475,14 +1872,30 @@ direct and group kerning pairs during Text layout, including RTL line
 width and position calculations, so Vue no longer computes extra
 kerning offsets around the Rust layout snapshot.
 
+Follow-up completed 2026-05-25: RTL multiline layout is now explicitly
+guarded for xilem's render-loop behavior when kerning is present. Line
+breaks reset the previous-glyph kerning context, but every RTL line
+still starts from the full raw Text buffer advance sum, not from the
+current line's kerned width.
+
 ### Done 2026-05-15 - Move basic Arabic shaping into Rust
 
 The active master's Unicode-to-glyph map and glyph widths are now
 pushed into the wasm editor as a Text glyph inventory. Rust applies
 the existing Arabic positional-form shaping pass to the Text buffer,
-updates shaped glyph names and advance widths, and resets glyphs back
-to base forms when direction changes away from RTL. Vue now asks core
+updates shaped glyph names and advance widths, and Vue now asks core
 to shape the buffer instead of owning the joining table.
+
+Follow-up corrected 2026-05-24: direction toolbar changes do not
+reshape existing Text sorts back to base glyphs. xilem's
+`set_text_direction` only stores the new direction; future text input
+and layout use that direction, while existing shaped sort names remain
+as-is unless a real edit/reshape path runs.
+
+Follow-up completed 2026-05-25: Rust `TextBuffer::set_direction` now
+only updates the direction value. It no longer cancels manual kerning
+state as a side effect, keeping the method aligned with xilem's
+plain `session.text_direction = direction` setter.
 
 ### Done 2026-05-15 - Render Text buffer glyphs on the canvas
 
@@ -1509,18 +1922,71 @@ editable and serializable.
 
 ### Done 2026-05-15 - Add canvas Text sort and cursor hit testing
 
-Text mode now responds to clicks on the editor canvas. Rust hit-tests
-against the Text layout in design space, activates clicked glyph sorts,
-and places the insertion cursor at the nearest visual boundary when
-clicking between glyphs or on empty Text-session space. Vue refreshes
-the Text snapshot after pointer-up so the bottom strip, selected sort,
-canvas cursor, and glyph side panels stay aligned.
+Text mode now responds to sort hit-testing on the editor canvas. Rust
+hit-tests against the Text layout in design space, activates clicked
+glyph sorts for the Text kerning path, and Vue refreshes the Text
+snapshot after pointer-up so the bottom strip, selected sort, canvas
+cursor, and glyph side panels stay aligned.
 
 Follow-up completed 2026-05-15: canvas Text hit-testing now uses the
 same Rust `text_line_height()` as Text rendering, active-sort origins,
 and Vue preview layout. Multi-line canvas clicks no longer fall back
 to UPM-based line spacing when font ascender/descender metrics differ
 from units-per-em.
+
+Follow-up completed 2026-05-24: Text layout tests now cover trailing
+line-break cursor placement for both LTR and RTL. The cursor lands on
+the empty next line, and RTL uses the full-buffer start position,
+matching xilem's Text renderer loop.
+
+Follow-up completed 2026-05-24: plain Text-tool clicks no longer place
+the cursor, matching xilem's current `TextTool::left_click` behavior.
+Canvas double-click handling now follows xilem's order: point
+double-click first, component-base insertion second, then
+tool-agnostic text sort activation. Component double-click inserts the
+base glyph as an inactive text sort, clears component selection, and
+does not open the base glyph directly.
+
+Follow-up completed 2026-05-24: the stale browser/WASM
+`setTextCursor` path from the old clickable preview strip was removed.
+Text cursor movement is now exposed only through the xilem-driven
+keyboard/session operations instead of a public plain-click placement
+API.
+
+Follow-up completed 2026-05-24: the remaining old transition-layer
+Text accessors (`textBufferLen`, `textCursor`, `textActiveSort`) and
+direct `activateTextSort(index)` binding were removed. Vue now reads
+Text state from the Rust snapshot and activates sorts through canvas
+hit-testing, matching the current xilem session boundary more closely.
+
+Follow-up completed 2026-05-24: Text sort hit-testing and manual
+kerning now require the Rust `has_text_session` gate before acting,
+matching xilem's `text_buffer.is_some()` / `text_mode_active` pointer
+guards instead of letting stale buffer contents respond on their own.
+
+Follow-up completed 2026-05-24: Rust Text sort activation now uses a
+single `activate_sort_at` helper that hit-tests, activates the sort,
+and returns the activated sort's layout origin from the same layout
+pass. This mirrors xilem's sort-activation path, where the active sort
+and its text-buffer translation are resolved together.
+
+Follow-up completed 2026-05-25: Text sort hit-testing now matches
+xilem's `kurbo::Rect::contains` edge semantics: minimum edges are
+inclusive and maximum edges are exclusive. A click exactly on the
+boundary between adjacent sorts therefore activates the next sort
+instead of the previous one, and the ascender top edge is outside the
+sort box.
+
+Follow-up completed 2026-05-25: focused Rust coverage now locks the
+RTL kerned activation case. Double-click hit activation for a kerned
+RTL pair returns the same post-kerning layout origin used for canvas
+rendering, preserving xilem's subtract-advance-then-apply-kerning
+order.
+
+Follow-up completed 2026-05-24: point double-click handling is now
+tool-agnostic like xilem. It no longer requires the Select tool before
+toggling the hit point type, so editable active Text sorts follow the
+same first-hit branch regardless of the currently selected tool.
 
 ### Done 2026-05-15 - Add xilem-style Text cursor and sort metrics markers
 
@@ -1529,6 +1995,18 @@ to ascender with top and bottom triangular handles, matching xilem's
 Glyphs-style Text cursor treatment. It also draws minimal metric
 cross markers at each rendered sort's left and right edges, while text
 mode renders all sorts as filled previews like xilem.
+
+Follow-up completed 2026-05-24: audited Text sort metric and manual
+kerning marker rendering against xilem. Kerning highlight colors
+already matched xilem's active-drag behavior; active-sort full metrics
+now fall back to `EditorState::text_metric_bounds()` so ascender,
+descender, and baseline guides still render when optional UFO
+`fontinfo.plist` metrics have not been loaded.
+
+Follow-up completed 2026-05-25: the Text cursor line width now uses
+xilem's literal 1.5px stroke instead of deriving from the general
+stroke scale. The triangle handles stay at xilem's 24px by 16px screen
+space size.
 
 ### Done 2026-05-14 - Bridge Runebender state into ComfyUI output
 

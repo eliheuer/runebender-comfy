@@ -191,8 +191,8 @@ defineEmits<{
 }
 
 .master-preview {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   color: currentColor;
   display: flex;
   align-items: center;
@@ -202,6 +202,7 @@ defineEmits<{
   width: 100%;
   height: 100%;
   display: block;
+  overflow: visible;
 }
 
 </style>

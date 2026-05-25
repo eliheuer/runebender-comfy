@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import GeneratedIcon from "./GeneratedIcon.vue";
+
 // File-operation toolbar peer for runebender-xilem's
 // `components/system_toolbar.rs`. Save is wired through the host
 // and stays disabled only when there is no loaded font/workspace.
@@ -47,11 +49,7 @@ function onSaveAs(enabled: boolean) {
       aria-label="Save"
       @click="onSave(saveEnabled)"
     >
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M5 3h12l2 2v16H5V3Z" />
-        <path d="M8 3v6h8V3M8 21v-7h8v7" />
-        <path d="M10 6h4" />
-      </svg>
+      <GeneratedIcon name="save" />
     </button>
     <button
       type="button"
@@ -63,10 +61,7 @@ function onSaveAs(enabled: boolean) {
       aria-label="Save As"
       @click="onSaveAs(saveAsEnabled)"
     >
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M4 6h6l2 2h8v10H4V6Z" />
-        <path d="M12 12v5M9.5 14.5 12 17l2.5-2.5" />
-      </svg>
+      <GeneratedIcon name="save-as" />
     </button>
     <button
       v-if="closeEnabled"
@@ -76,9 +71,7 @@ function onSaveAs(enabled: boolean) {
       aria-label="Close editor"
       @click="emit('close')"
     >
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M6 6l12 12M18 6l-12 12" />
-      </svg>
+      <GeneratedIcon name="close" />
     </button>
   </div>
 </template>
@@ -126,13 +119,4 @@ function onSaveAs(enabled: boolean) {
   opacity: 0.55;
 }
 
-svg {
-  width: 32px;
-  height: 32px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
 </style>

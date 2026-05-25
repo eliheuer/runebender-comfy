@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import GeneratedIcon from "./GeneratedIcon.vue";
+
 // Right-side transform panel. Mirrors runebender-xilem's
 // `components/transform_panel.rs` as a compact 2-column action grid.
 // Bounds display lives in CoordinatePanel, matching xilem's split
@@ -45,6 +47,19 @@ const actions = [
   ["Intersect", "intersect"],
   ["Exclude (XOR)", "exclude"],
 ] as const;
+
+const ACTION_ICONS: Record<TransformActionId, string> = {
+  "flip-h": "flip-h",
+  "flip-v": "flip-v",
+  "rot-cw": "rot-cw",
+  "rot-ccw": "rot-ccw",
+  duplicate: "duplicate",
+  "duplicate-repeat": "duplicate-repeat",
+  union: "union",
+  subtract: "subtract",
+  intersect: "intersect",
+  exclude: "exclude",
+};
 
 function actionEnabled(id: string, hasSelection: boolean, contourCount: number): boolean {
   if (["union", "subtract", "intersect", "exclude"].includes(id)) {
@@ -100,44 +115,7 @@ function runAction(
         :disabled="!actionAvailable(id, !!bounds, contourCount)"
         @click="runAction(id, !!bounds, contourCount)"
       >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <template v-if="id === 'flip-h'">
-            <path d="M12 4v16M5 7l5 5-5 5V7Zm14 0-5 5 5 5V7Z" />
-          </template>
-          <template v-else-if="id === 'flip-v'">
-            <path d="M4 12h16M7 5l5 5 5-5H7Zm0 14 5-5 5 5H7Z" />
-          </template>
-          <template v-else-if="id === 'rot-cw'">
-            <path d="M7 7a7 7 0 1 0 10 0M17 7v5h-5" />
-          </template>
-          <template v-else-if="id === 'rot-ccw'">
-            <path d="M17 7a7 7 0 1 1-10 0M7 7v5h5" />
-          </template>
-          <template v-else-if="id === 'duplicate'">
-            <rect x="8" y="8" width="10" height="10" />
-            <path d="M6 16H4V4h12v2" />
-          </template>
-          <template v-else-if="id === 'duplicate-repeat'">
-            <rect x="9" y="9" width="9" height="9" />
-            <path d="M6 15H4V4h11v2M17 4l3 3-3 3" />
-          </template>
-          <template v-else-if="id === 'union'">
-            <circle cx="10" cy="12" r="5" />
-            <circle cx="14" cy="12" r="5" />
-          </template>
-          <template v-else-if="id === 'subtract'">
-            <circle cx="10" cy="12" r="5" />
-            <path d="M14 7a5 5 0 0 1 0 10" />
-          </template>
-          <template v-else-if="id === 'intersect'">
-            <path d="M12 8a5 5 0 0 1 0 8 5 5 0 0 1 0-8Z" />
-          </template>
-          <template v-else>
-            <circle cx="9" cy="12" r="4" />
-            <circle cx="15" cy="12" r="4" />
-            <path d="M9 8l6 8M15 8l-6 8" />
-          </template>
-        </svg>
+        <GeneratedIcon :name="ACTION_ICONS[id]" />
       </button>
     </div>
   </section>
@@ -185,13 +163,4 @@ function runAction(
   opacity: 0.55;
 }
 
-svg {
-  width: 24px;
-  height: 24px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.6;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
 </style>

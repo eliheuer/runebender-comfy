@@ -2,8 +2,24 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
   <dict>
+    <key>close</key>
+    <string>close.glif</string>
+    <key>duplicate</key>
+    <string>duplicate.glif</string>
+    <key>duplicate-repeat</key>
+    <string>duplicate-repeat.glif</string>
+    <key>exclude</key>
+    <string>exclude.glif</string>
+    <key>flip-h</key>
+    <string>flip-h.glif</string>
+    <key>flip-v</key>
+    <string>flip-v.glif</string>
+    <key>glyph-grid</key>
+    <string>glyph-grid.glif</string>
     <key>hyperpen</key>
     <string>hyperpen.glif</string>
+    <key>intersect</key>
+    <string>intersect.glif</string>
     <key>knife</key>
     <string>knife.glif</string>
     <key>measure</key>
@@ -12,11 +28,31 @@
     <string>pen.glif</string>
     <key>preview</key>
     <string>preview.glif</string>
+    <key>rot-ccw</key>
+    <string>rot-ccw.glif</string>
+    <key>rot-cw</key>
+    <string>rot-cw.glif</string>
+    <key>save</key>
+    <string>save.glif</string>
+    <key>save-as</key>
+    <string>save-as.glif</string>
     <key>select</key>
     <string>select.glif</string>
+    <key>shape-ellipse</key>
+    <string>shape-ellipse.glif</string>
+    <key>shape-rectangle</key>
+    <string>shape-rectangle.glif</string>
     <key>shapes</key>
     <string>shapes.glif</string>
+    <key>subtract</key>
+    <string>subtract.glif</string>
     <key>text</key>
     <string>text.glif</string>
+    <key>text-ltr</key>
+    <string>text-ltr.glif</string>
+    <key>text-rtl</key>
+    <string>text-rtl.glif</string>
+    <key>union</key>
+    <string>union.glif</string>
   </dict>
 </plist>

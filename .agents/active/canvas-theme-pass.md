@@ -1,10 +1,10 @@
 ---
 slug: canvas-theme-pass
 agent: Codex (eli@desktop)
-branch: agent/canvas-theme-pass
-worktree: ~/Temp/worktrees/runebender-comfy-canvas-theme-pass
+branch: main
+worktree: /Users/eli/GH/repos/runebender-comfy
 started: 2026-05-23
-last_touched: 2026-05-23
+last_touched: 2026-05-25
 touches:
   - rust-core/src/renderer.rs
   - rust-core/src/wasm_api.rs
@@ -22,10 +22,15 @@ background stay visually aligned with the DOM chrome.
 ## Status
 
 - [x] Preflight passed; no overlapping active claims found.
-- [ ] Finish host-side theme extraction and `setTheme` application.
-- [ ] Rebuild WASM/bundle and run web bundle/workspace tests.
+- [x] Added renderer-owned `CanvasTheme` with JS-facing `GlyphEditor.setTheme`.
+- [x] Removed fixed inline Vue chrome variables so `.runebender-host` follows ComfyUI CSS variables.
+- [x] Added host-side CSS color resolution and applies the computed palette to the WASM renderer.
+- [x] Rebuilt WASM and the Vue bundle.
+- [x] Ran `python3 -m unittest tests.test_web_bundle tests.test_workspace`.
+- [x] Ran `cargo test` and `cargo fmt -- --check`.
 
 ## Notes
 
-Started from an existing local `rust-core/src/renderer.rs` change that
-already introduces a renderer-owned `CanvasTheme`.
+`web/wasm/` is ignored by git but was regenerated locally by
+`COREPACK_ENABLE_AUTO_PIN=0 pnpm wasm:release` before the Vue bundle
+was rebuilt.

@@ -4,7 +4,7 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use kurbo::{Affine, BezPath, Point, Shape, Vec2};
+use kurbo::{Affine, BezPath, Point, Rect, Shape, Vec2};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -37,6 +37,7 @@ fn text_codepoint_from_wasm(codepoint: u32) -> Option<char> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TextBufferSnapshot {
+    has_text_session: bool,
     cursor: usize,
     active_sort: Option<usize>,
     direction: &'static str,
@@ -128,7 +129,7 @@ pub fn glyph_category_for_codepoint(cp: u32) -> String {
 pub fn glif_metadata(bytes: &[u8]) -> Result<String, JsValue> {
     let glyph = norad::Glyph::parse_raw(bytes)
         .map_err(|e| JsValue::from_str(&format!("parse .glif: {e}")))?;
-    let metadata = glyph_metadata_from_norad(&glyph);
+    let metadata = glif_metadata_from_norad(&glyph);
     serde_json::to_string(&metadata)
         .map_err(|e| JsValue::from_str(&format!("serialize metadata: {e}")))
 }
@@ -147,6 +148,31 @@ fn glyph_metadata_from_norad(glyph: &norad::Glyph) -> GlyphMetadata {
     )
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GlifMetadata {
+    #[serde(flatten)]
+    glyph: GlyphMetadata,
+    left_kerning_group: Option<String>,
+    right_kerning_group: Option<String>,
+}
+
+fn glif_metadata_from_norad(glyph: &norad::Glyph) -> GlifMetadata {
+    GlifMetadata {
+        glyph: glyph_metadata_from_norad(glyph),
+        left_kerning_group: glyph
+            .lib
+            .get("public.kern1")
+            .and_then(|value| value.as_string())
+            .map(ToString::to_string),
+        right_kerning_group: glyph
+            .lib
+            .get("public.kern2")
+            .and_then(|value| value.as_string())
+            .map(ToString::to_string),
+    }
+}
+
 /// Update only the UFO `public.markColor` lib entry in a .glif file.
 /// This is used for grid/sidebar mark-color edits that do not load
 /// the glyph into the outline editor.
@@ -159,10 +185,35 @@ pub fn glif_with_mark_color(bytes: &[u8], mark_color: &str) -> Result<Vec<u8>, J
     if mark_color.is_empty() {
         glyph.lib.remove("public.markColor");
     } else {
-        glyph.lib.insert(
-            "public.markColor".to_string(),
-            mark_color.into(),
-        );
+        glyph
+            .lib
+            .insert("public.markColor".to_string(), mark_color.into());
+    }
+    glyph
+        .encode_xml()
+        .map_err(|e| JsValue::from_str(&format!("serialize .glif: {e}")))
+}
+
+/// Update one UFO kerning group lib entry in a .glif file. `side`
+/// accepts `left`/`public.kern1` or `right`/`public.kern2`; an empty
+/// group or `-` clears that lib entry, matching xilem's active panel.
+#[wasm_bindgen(js_name = glifWithKerningGroup)]
+pub fn glif_with_kerning_group(bytes: &[u8], side: &str, group: &str) -> Result<Vec<u8>, JsValue> {
+    let mut glyph = norad::Glyph::parse_raw(bytes)
+        .map_err(|e| JsValue::from_str(&format!("parse .glif: {e}")))?;
+    let key = match side {
+        "left" | "public.kern1" => "public.kern1",
+        "right" | "public.kern2" => "public.kern2",
+        _ => {
+            return Err(JsValue::from_str(
+                "kerning group side must be left or right",
+            ));
+        }
+    };
+    if group.is_empty() || group == "-" {
+        glyph.lib.remove(key);
+    } else {
+        glyph.lib.insert(key.to_string(), group.to_string().into());
     }
     glyph
         .encode_xml()
@@ -298,7 +349,11 @@ pub fn glif_map_to_svgs(glyph_xml_by_name: &str, units_per_em: f64) -> Result<St
         }
     }
 
-    let upm = if units_per_em > 0.0 { units_per_em } else { 1000.0 };
+    let upm = if units_per_em > 0.0 {
+        units_per_em
+    } else {
+        1000.0
+    };
     let mut svgs: HashMap<String, String> = HashMap::with_capacity(glyphs.len());
     for (name, glyph) in &glyphs {
         let mut bez = norad_glyph_to_bezpath(glyph);
@@ -310,8 +365,7 @@ pub fn glif_map_to_svgs(glyph_xml_by_name: &str, units_per_em: f64) -> Result<St
         }
     }
 
-    serde_json::to_string(&svgs)
-        .map_err(|e| JsValue::from_str(&format!("serialize svgs: {e}")))
+    serde_json::to_string(&svgs).map_err(|e| JsValue::from_str(&format!("serialize svgs: {e}")))
 }
 
 /// Grid-thumbnail SVG with a CONSTANT em-based vertical viewBox, so
@@ -432,6 +486,47 @@ fn build_component_previews(
         .collect()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SIMPLE_GLIF: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<glyph name="A" format="2">
+  <advance width="500"/>
+</glyph>
+"#;
+
+    #[test]
+    fn glif_with_kerning_group_round_trips_xilem_lib_fields() {
+        let with_left = glif_with_kerning_group(SIMPLE_GLIF, "left", "public.kern1.A")
+            .expect("left group update succeeds");
+        let glyph = norad::Glyph::parse_raw(&with_left).expect("updated glif parses");
+        assert_eq!(
+            glyph
+                .lib
+                .get("public.kern1")
+                .and_then(|value| value.as_string()),
+            Some("public.kern1.A")
+        );
+
+        let cleared = glif_with_kerning_group(&with_left, "public.kern1", "-")
+            .expect("left group clear succeeds");
+        let glyph = norad::Glyph::parse_raw(&cleared).expect("cleared glif parses");
+        assert!(glyph.lib.get("public.kern1").is_none());
+
+        let with_right = glif_with_kerning_group(&cleared, "right", "bare-input")
+            .expect("right group update succeeds");
+        let glyph = norad::Glyph::parse_raw(&with_right).expect("right-updated glif parses");
+        assert_eq!(
+            glyph
+                .lib
+                .get("public.kern2")
+                .and_then(|value| value.as_string()),
+            Some("bare-input")
+        );
+    }
+}
+
 fn affine_to_norad_transform(transform: Affine) -> norad::AffineTransform {
     let coeffs = transform.as_coeffs();
     norad::AffineTransform {
@@ -477,27 +572,61 @@ fn anatomy_svg_from_bezpath_and_contours(
     if bez.elements().is_empty() {
         return Ok(String::new());
     }
-    let bbox = bez.bounding_box();
-    let side = bbox.width().max(bbox.height()).max(1.0);
-    let outline_stroke = (side / 200.0).clamp(1.0, 2.5);
-    let handle_stroke = (side / 320.0).clamp(0.5, 1.5);
-    let point_radius = (side / 65.0).clamp(2.0, 8.0);
-    let corner_half = point_radius * 0.75;
+    let outline_bbox = bez.bounding_box();
+    let mut x0 = outline_bbox.x0;
+    let mut y0 = outline_bbox.y0;
+    let mut x1 = outline_bbox.x1;
+    let mut y1 = outline_bbox.y1;
+    for contour in contours {
+        for pt in &contour.points {
+            x0 = x0.min(pt.x);
+            y0 = y0.min(pt.y);
+            x1 = x1.max(pt.x);
+            y1 = y1.max(pt.y);
+        }
+    }
+    let width = (x1 - x0).max(1.0);
+    let height = (y1 - y0).max(1.0);
+    let side = width.max(height);
+    let outline_stroke = 1.5;
+    let handle_stroke = 1.5;
+    let point_outline = 1.5;
+    // Match the edit renderer's screen-space marker proportions, then
+    // convert them into this SVG viewBox's design-space units.
+    let unit_per_px = side / 300.0;
+    let smooth_radius = (4.5 * unit_per_px).clamp(2.0, 8.0);
+    let offcurve_radius = (3.0 * unit_per_px).clamp(1.5, 6.0);
+    let corner_half = (3.5 * unit_per_px).clamp(2.0, 7.0);
+    // The anatomy panel is a small, read-only version of the edit view.
+    // Its fit must include off-curve handles and point marker geometry,
+    // not just the outline's path bounds, otherwise large glyphs clip at
+    // panel edges even though the editor canvas has viewport padding.
+    let padding = (smooth_radius
+        .max(offcurve_radius)
+        .max(corner_half)
+        + outline_stroke
+        + handle_stroke
+        + 4.0)
+        .max(side * 0.035);
+    x0 -= padding;
+    y0 -= padding;
+    x1 += padding;
+    y1 += padding;
 
     let mut out = String::new();
     write!(
         &mut out,
         r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="{} {} {} {}" preserveAspectRatio="xMidYMid meet">"#,
-        bbox.x0,
-        -bbox.y1,
-        bbox.width(),
-        bbox.height()
+        x0,
+        -y1,
+        x1 - x0,
+        y1 - y0
     )
     .expect("write svg header");
     out.push_str(r#"<g transform="scale(1 -1)">"#);
     write!(
         &mut out,
-        r##"<path d="{}" fill="none" stroke="#66EE88" stroke-width="{}" vector-effect="non-scaling-stroke" />"##,
+        r##"<path d="{}" fill="none" stroke="var(--rb-canvas-path-stroke, #c0c0c0)" stroke-width="{}" vector-effect="non-scaling-stroke" />"##,
         bez.to_svg(),
         outline_stroke
     )
@@ -511,7 +640,14 @@ fn anatomy_svg_from_bezpath_and_contours(
         let pts = &contour.points;
         if pts.len() < 2 {
             for pt in pts {
-                write_point(&mut out, pt, point_radius, corner_half);
+                write_point(
+                    &mut out,
+                    pt,
+                    smooth_radius,
+                    offcurve_radius,
+                    corner_half,
+                    point_outline,
+                );
             }
             continue;
         }
@@ -549,7 +685,14 @@ fn anatomy_svg_from_bezpath_and_contours(
         }
 
         for pt in pts {
-            write_point(&mut out, pt, point_radius, corner_half);
+            write_point(
+                &mut out,
+                pt,
+                smooth_radius,
+                offcurve_radius,
+                corner_half,
+                point_outline,
+            );
         }
     }
 
@@ -641,6 +784,21 @@ impl GlyphEditor {
         Ok(())
     }
 
+    #[wasm_bindgen(js_name = setGlyphGlifWithComponentsPreserveHistory)]
+    pub fn set_glyph_glif_with_components_preserve_history(
+        &mut self,
+        bytes: &[u8],
+        glyph_xml_by_name: &str,
+    ) -> Result<(), JsValue> {
+        let glyph = norad::Glyph::parse_raw(bytes)
+            .map_err(|e| JsValue::from_str(&format!("parse .glif: {e}")))?;
+        let glyphs = parse_glif_xml_map(glyph_xml_by_name)?;
+        self.state.set_glyph_from_norad_preserving_history(&glyph);
+        self.state
+            .set_component_previews(build_component_previews(&glyph, &glyphs));
+        Ok(())
+    }
+
     /// Parse a UFO `fontinfo.plist` and store the vertical metrics
     /// (UPM, ascender, descender, x-height, cap-height). The
     /// renderer uses these to draw the metric box guidelines.
@@ -691,9 +849,20 @@ impl GlyphEditor {
         self.renderer.resize(width, height);
     }
 
+    #[wasm_bindgen(js_name = setDeviceScale)]
+    pub fn set_device_scale(&mut self, scale: f64) {
+        self.renderer.set_device_scale(scale);
+    }
+
+    #[wasm_bindgen(js_name = setTheme)]
+    pub fn set_theme(&mut self, theme_json: &str) -> Result<(), JsValue> {
+        self.renderer.set_theme_json(theme_json)
+    }
+
     pub fn render(&mut self) -> Result<(), JsValue> {
+        let text_mode_active = self.tool.is_text() && self.state.has_text_session;
         self.renderer
-            .render(&self.state, self.tool.is_preview(), self.tool.is_text())
+            .render(&self.state, self.tool.is_preview(), text_mode_active)
     }
 
     #[wasm_bindgen(js_name = setTool)]
@@ -759,26 +928,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = shapeTextBuffer)]
     pub fn shape_text_buffer(&mut self) -> bool {
-        self.state.text_buffer.shape_arabic()
-    }
-
-    #[wasm_bindgen(js_name = textBufferLen)]
-    pub fn text_buffer_len(&self) -> usize {
-        self.state.text_buffer.len()
-    }
-
-    #[wasm_bindgen(js_name = textCursor)]
-    pub fn text_cursor(&self) -> usize {
-        self.state.text_buffer.cursor()
-    }
-
-    #[wasm_bindgen(js_name = textActiveSort)]
-    pub fn text_active_sort(&self) -> i32 {
-        self.state
-            .text_buffer
-            .active_sort()
-            .and_then(|index| i32::try_from(index).ok())
-            .unwrap_or(-1)
+        self.state.text_buffer.shape_arabic_if_rtl()
     }
 
     #[wasm_bindgen(js_name = textBufferSnapshot)]
@@ -811,6 +961,7 @@ impl GlyphEditor {
             })
             .collect();
         let snapshot = TextBufferSnapshot {
+            has_text_session: self.state.has_text_session,
             cursor: self.state.text_buffer.cursor(),
             active_sort: self.state.text_buffer.active_sort(),
             direction: match self.state.text_buffer.direction() {
@@ -844,24 +995,114 @@ impl GlyphEditor {
             .map_err(|e| JsValue::from_str(&format!("serialize text layout: {e}")))
     }
 
+    #[wasm_bindgen(js_name = textBufferPreviewSvg)]
+    pub fn text_buffer_preview_svg(&self) -> Result<String, JsValue> {
+        let layout = self.state.text_buffer.preview_layout();
+        let active_sort = self.state.text_buffer.active_sort();
+        let mut paths = Vec::new();
+        let mut bounds: Option<Rect> = None;
+
+        for item in layout {
+            let Some(sort) = self.state.text_buffer.sort(item.index) else {
+                continue;
+            };
+            let mut path = if Some(item.index) == active_sort {
+                let mut active_path = BezPath::new();
+                for path in &self.state.paths {
+                    active_path.extend(path.to_bezpath().elements().iter().copied());
+                }
+                active_path.extend(self.state.component_preview.elements().iter().copied());
+                active_path
+            } else {
+                let Some(glyph_name) = sort.glyph_name() else {
+                    continue;
+                };
+                let Some(outline) = self.state.text_buffer.glyph_outline_svg(glyph_name) else {
+                    continue;
+                };
+                BezPath::from_svg(outline)
+                    .map_err(|e| JsValue::from_str(&format!("parse text preview SVG path: {e}")))?
+            };
+            if path.elements().is_empty() {
+                continue;
+            }
+            path.apply_affine(Affine::translate((item.x, item.y)));
+            let path_bounds = path.bounding_box();
+            bounds = Some(match bounds {
+                Some(existing) => existing.union(path_bounds),
+                None => path_bounds,
+            });
+            paths.push(path);
+        }
+
+        let Some(bbox) = bounds else {
+            return Ok(String::new());
+        };
+
+        // Match xilem's MultiGlyphWidget::with_fit_to_bounds: the combined
+        // outline bounds are scaled into 80% of the panel, leaving equal
+        // visual margin around the rendered text strip.
+        let margin_x = bbox.width().max(1.0) * 0.125;
+        let margin_y = bbox.height().max(1.0) * 0.125;
+        let view_x = bbox.x0 - margin_x;
+        let view_y = -(bbox.y1 + margin_y);
+        let view_width = (bbox.width() + margin_x * 2.0).max(1.0);
+        let view_height = (bbox.height() + margin_y * 2.0).max(1.0);
+
+        let mut svg = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="{} {} {} {}" preserveAspectRatio="xMidYMid meet">"#,
+            view_x, view_y, view_width, view_height,
+        );
+        for path in paths {
+            write!(
+                &mut svg,
+                r##"<path d="{}" fill="currentColor" fill-rule="nonzero" transform="scale(1 -1)"/>"##,
+                path.to_svg()
+            )
+            .map_err(|e| JsValue::from_str(&format!("write text preview SVG: {e}")))?;
+        }
+        svg.push_str("</svg>");
+        Ok(svg)
+    }
+
     #[wasm_bindgen(js_name = clearTextBuffer)]
     pub fn clear_text_buffer(&mut self) {
         self.state.text_buffer.clear();
+        self.state.has_text_session = false;
     }
 
     #[wasm_bindgen(js_name = insertTextGlyph)]
     pub fn insert_text_glyph(&mut self, name: &str, codepoint: u32, advance_width: f64) {
         let codepoint = text_codepoint_from_wasm(codepoint);
+        self.state.has_text_session = true;
         self.state
             .text_buffer
             .insert_glyph(name, codepoint, advance_width);
     }
 
+    #[wasm_bindgen(js_name = insertInactiveTextGlyph)]
+    pub fn insert_inactive_text_glyph(&mut self, name: &str, codepoint: u32, advance_width: f64) {
+        let codepoint = text_codepoint_from_wasm(codepoint);
+        let snapshot = self.state.clone();
+        self.state.has_text_session = true;
+        self.state
+            .insert_inactive_text_glyph(name, codepoint, advance_width);
+        self.undo.add_undo_group(snapshot);
+    }
+
     #[wasm_bindgen(js_name = insertTextCharacter)]
     pub fn insert_text_character(&mut self, codepoint: u32) -> bool {
-        text_codepoint_from_wasm(codepoint)
-            .map(|char| self.state.text_buffer.insert_character(char))
-            .unwrap_or(false)
+        let Some(char) = text_codepoint_from_wasm(codepoint) else {
+            return false;
+        };
+        let snapshot = self.state.clone();
+        if self.state.insert_text_character(char) {
+            self.state.has_text_session = true;
+            self.undo.add_undo_group(snapshot);
+            true
+        } else {
+            false
+        }
     }
 
     #[wasm_bindgen(js_name = updateTextGlyph)]
@@ -880,22 +1121,32 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = insertTextLineBreak)]
     pub fn insert_text_line_break(&mut self) {
-        self.state.text_buffer.insert_line_break();
+        let snapshot = self.state.clone();
+        self.state.has_text_session = true;
+        self.state.insert_text_line_break();
+        self.undo.add_undo_group(snapshot);
     }
 
     #[wasm_bindgen(js_name = deleteTextBeforeCursor)]
     pub fn delete_text_before_cursor(&mut self) -> bool {
-        self.state.text_buffer.delete_before_cursor().is_some()
+        let snapshot = self.state.clone();
+        if self.state.delete_text_before_cursor() {
+            self.undo.add_undo_group(snapshot);
+            true
+        } else {
+            false
+        }
     }
 
     #[wasm_bindgen(js_name = deleteTextAfterCursor)]
     pub fn delete_text_after_cursor(&mut self) -> bool {
-        self.state.text_buffer.delete_after_cursor().is_some()
-    }
-
-    #[wasm_bindgen(js_name = setTextCursor)]
-    pub fn set_text_cursor(&mut self, cursor: usize) {
-        self.state.text_buffer.set_cursor(cursor);
+        let snapshot = self.state.clone();
+        if self.state.delete_text_after_cursor() {
+            self.undo.add_undo_group(snapshot);
+            true
+        } else {
+            false
+        }
     }
 
     #[wasm_bindgen(js_name = moveTextCursorVisualLeft)]
@@ -908,33 +1159,18 @@ impl GlyphEditor {
         self.state.text_buffer.move_cursor_visual_right();
     }
 
-    #[wasm_bindgen(js_name = moveTextCursorVisualUp)]
-    pub fn move_text_cursor_visual_up(&mut self, line_height: f64) {
+    #[wasm_bindgen(js_name = activateTextSortAt)]
+    pub fn activate_text_sort_at(&mut self, x: f64, y: f64) -> bool {
+        if !self.state.has_text_session {
+            return false;
+        }
+        let design_pos = self.state.viewport.screen_to_design(Point::new(x, y));
+        let line_height = self.state.text_line_height();
+        let (ascender, descender) = self.state.text_metric_bounds();
         self.state
             .text_buffer
-            .move_cursor_visual_up(line_height.max(1.0));
-    }
-
-    #[wasm_bindgen(js_name = moveTextCursorVisualDown)]
-    pub fn move_text_cursor_visual_down(&mut self, line_height: f64) {
-        self.state
-            .text_buffer
-            .move_cursor_visual_down(line_height.max(1.0));
-    }
-
-    #[wasm_bindgen(js_name = moveTextCursorLineStart)]
-    pub fn move_text_cursor_line_start(&mut self) {
-        self.state.text_buffer.move_cursor_line_start();
-    }
-
-    #[wasm_bindgen(js_name = moveTextCursorLineEnd)]
-    pub fn move_text_cursor_line_end(&mut self) {
-        self.state.text_buffer.move_cursor_line_end();
-    }
-
-    #[wasm_bindgen(js_name = activateTextSort)]
-    pub fn activate_text_sort(&mut self, index: usize) -> bool {
-        self.state.text_buffer.activate_sort(index)
+            .activate_sort_at(design_pos.x, design_pos.y, line_height, ascender, descender)
+            .is_some()
     }
 
     // ------------------------------------------------------------------
@@ -998,6 +1234,11 @@ impl GlyphEditor {
             .component_base_at(design)
             .unwrap_or_default()
             .to_string()
+    }
+
+    #[wasm_bindgen(js_name = clearComponentSelection)]
+    pub fn clear_component_selection(&mut self) {
+        self.state.clear_component_selection();
     }
 
     #[wasm_bindgen(js_name = contourContextAt)]
@@ -1514,10 +1755,9 @@ impl GlyphEditor {
         if mark_color.is_empty() {
             glyph.lib.remove("public.markColor");
         } else {
-            glyph.lib.insert(
-                "public.markColor".to_string(),
-                mark_color.into(),
-            );
+            glyph
+                .lib
+                .insert("public.markColor".to_string(), mark_color.into());
         }
 
         glyph
@@ -1633,7 +1873,7 @@ fn to_norad_point_type(typ: WsPointType) -> norad::PointType {
 fn write_handle(out: &mut String, x1: f64, y1: f64, x2: f64, y2: f64, stroke: f64) {
     write!(
         out,
-        r##"<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="#66EE88" stroke-width="{}" vector-effect="non-scaling-stroke" />"##,
+        r##"<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="var(--rb-primary-text, #909090)" stroke-width="{}" vector-effect="non-scaling-stroke" />"##,
         x1,
         y1,
         x2,
@@ -1643,25 +1883,42 @@ fn write_handle(out: &mut String, x1: f64, y1: f64, x2: f64, y2: f64, stroke: f6
     .expect("write handle");
 }
 
-fn write_point(out: &mut String, pt: &norad::ContourPoint, radius: f64, corner_half: f64) {
+fn write_point(
+    out: &mut String,
+    pt: &norad::ContourPoint,
+    smooth_radius: f64,
+    offcurve_radius: f64,
+    corner_half: f64,
+    point_outline: f64,
+) {
     let (fill, stroke) = if matches!(pt.typ, norad::PointType::OffCurve) {
-        ("#cc99ff", "#9900ff")
+        (
+            "var(--rb-canvas-point-offcurve-inner, #181818)",
+            "var(--rb-canvas-point-offcurve-outer, #cc66ff)",
+        )
     } else if pt.smooth {
-        ("#579aff", "#4428ec")
+        (
+            "var(--rb-canvas-point-smooth-inner, #181818)",
+            "var(--rb-canvas-point-smooth-outer, #4088ff)",
+        )
     } else {
-        ("#6ae756", "#208e56")
+        (
+            "var(--rb-canvas-point-corner-inner, #181818)",
+            "var(--rb-canvas-point-corner-outer, #66ee88)",
+        )
     };
 
     match pt.typ {
         norad::PointType::OffCurve => {
             write!(
                 out,
-                r#"<circle cx="{}" cy="{}" r="{}" fill="{}" stroke="{}" stroke-width="1" vector-effect="non-scaling-stroke" />"#,
+                r#"<circle cx="{}" cy="{}" r="{}" fill="{}" stroke="{}" stroke-width="{}" vector-effect="non-scaling-stroke" />"#,
                 pt.x,
                 pt.y,
-                radius,
+                offcurve_radius,
                 fill,
-                stroke
+                stroke,
+                point_outline
             )
             .expect("write offcurve");
         }
@@ -1669,24 +1926,26 @@ fn write_point(out: &mut String, pt: &norad::ContourPoint, radius: f64, corner_h
             if pt.smooth {
                 write!(
                     out,
-                    r#"<circle cx="{}" cy="{}" r="{}" fill="{}" stroke="{}" stroke-width="1" vector-effect="non-scaling-stroke" />"#,
+                    r#"<circle cx="{}" cy="{}" r="{}" fill="{}" stroke="{}" stroke-width="{}" vector-effect="non-scaling-stroke" />"#,
                     pt.x,
                     pt.y,
-                    radius,
+                    smooth_radius,
                     fill,
-                    stroke
+                    stroke,
+                    point_outline
                 )
                 .expect("write smooth point");
             } else {
                 write!(
                     out,
-                    r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}" stroke="{}" stroke-width="1" vector-effect="non-scaling-stroke" />"#,
+                    r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}" stroke="{}" stroke-width="{}" vector-effect="non-scaling-stroke" />"#,
                     pt.x - corner_half,
                     pt.y - corner_half,
                     corner_half * 2.0,
                     corner_half * 2.0,
                     fill,
-                    stroke
+                    stroke,
+                    point_outline
                 )
                 .expect("write corner point");
             }

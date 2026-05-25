@@ -1,0 +1,27 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<glyph name="intersect" format="2">
+  <advance width="24"/>
+  <outline>
+    <contour>
+      <point x="12.0" y="-8.0" type="line"/>
+      <point x="13.259029213332214" y="-8.94427190999916"/>
+      <point x="14.000000000000002" y="-10.426213483334736"/>
+      <point x="14.000000000000002" y="-12.000000000000002" type="curve" smooth="yes"/>
+      <point x="14.000000000000002" y="-13.573786516665265"/>
+      <point x="13.259029213332214" y="-15.05572809000084"/>
+      <point x="12.000000000000002" y="-16.0" type="curve"/>
+      <point x="10.74097078666779" y="-15.05572809000084"/>
+      <point x="10.000000000000002" y="-13.573786516665265"/>
+      <point x="10.000000000000002" y="-12.0" type="curve" smooth="yes"/>
+      <point x="10.000000000000002" y="-10.426213483334736"/>
+      <point x="10.74097078666779" y="-8.944271909999161"/>
+      <point x="12.000000000000002" y="-8.000000000000004" type="curve"/>
+    </contour>
+  </outline>
+  <lib>
+    <dict>
+      <key>com.runebender.iconRenderMode</key>
+      <string>stroke</string>
+    </dict>
+  </lib>
+</glyph>

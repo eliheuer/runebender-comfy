@@ -77,6 +77,7 @@ const cellStyle = computed(() => {
   border-radius: 6px;
   cursor: pointer;
   overflow: hidden;
+  scroll-snap-align: start;
   transition:
     background-color 0.08s,
     border-color 0.08s;

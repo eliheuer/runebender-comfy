@@ -1276,39 +1276,33 @@ impl MouseDelegate for TextTool {
     type Data = EditorState;
 
     fn left_down(&mut self, event: MouseEvent, state: &mut Self::Data) {
-        if !event.mods.shift {
+        if !state.has_text_session || !event.mods.shift {
             return;
         }
 
         let design_pos = state.viewport.screen_to_design(event.pos);
         let line_height = state.text_line_height();
-        let hit = state
-            .text_buffer
-            .hit_test(design_pos.x, design_pos.y, line_height);
+        let (ascender, descender) = state.text_metric_bounds();
+        let hit = state.text_buffer.hit_test(
+            design_pos.x,
+            design_pos.y,
+            line_height,
+            ascender,
+            descender,
+        );
         let Some(index) = hit.active_sort else {
             return;
         };
 
         if state.text_buffer.begin_manual_kerning(index, design_pos.x) {
+            state.text_buffer.activate_sort(index);
             self.suppress_next_click = true;
         }
     }
 
-    fn left_click(&mut self, event: MouseEvent, state: &mut Self::Data) {
+    fn left_click(&mut self, _event: MouseEvent, _state: &mut Self::Data) {
         if self.suppress_next_click {
             self.suppress_next_click = false;
-            return;
-        }
-
-        let design_pos = state.viewport.screen_to_design(event.pos);
-        let line_height = state.text_line_height();
-        let hit = state
-            .text_buffer
-            .hit_test(design_pos.x, design_pos.y, line_height);
-        if let Some(index) = hit.active_sort {
-            state.text_buffer.activate_sort(index);
-        } else {
-            state.text_buffer.set_cursor(hit.cursor);
         }
     }
 
@@ -1317,7 +1311,13 @@ impl MouseDelegate for TextTool {
             return;
         }
         let design_pos = state.viewport.screen_to_design(event.pos);
-        state.text_buffer.drag_manual_kerning(design_pos.x);
+        if state
+            .text_buffer
+            .drag_manual_kerning(design_pos.x)
+            .is_some()
+        {
+            state.bump_edit_revision();
+        }
     }
 
     fn left_drag_changed(&mut self, event: MouseEvent, _drag: Drag, state: &mut Self::Data) {
@@ -1325,7 +1325,13 @@ impl MouseDelegate for TextTool {
             return;
         }
         let design_pos = state.viewport.screen_to_design(event.pos);
-        state.text_buffer.drag_manual_kerning(design_pos.x);
+        if state
+            .text_buffer
+            .drag_manual_kerning(design_pos.x)
+            .is_some()
+        {
+            state.bump_edit_revision();
+        }
     }
 
     fn left_drag_ended(&mut self, _event: MouseEvent, _drag: Drag, state: &mut Self::Data) {
@@ -1935,11 +1941,12 @@ mod tests {
     }
 
     #[test]
-    fn text_click_activates_canvas_sort() {
+    fn text_click_does_not_place_cursor_matching_xilem() {
         let mut state = EditorState::default();
         state.text_buffer.insert_glyph("A", Some('A'), 500.0);
         state.text_buffer.insert_glyph("B", Some('B'), 500.0);
         assert_eq!(state.text_buffer.active_sort(), Some(1));
+        assert_eq!(state.text_buffer.cursor(), 2);
 
         let mut tool = ActiveTool::Text(TextTool::default());
         let event = MouseEvent {
@@ -1950,13 +1957,14 @@ mod tests {
 
         tool.left_click(event, &mut state);
 
-        assert_eq!(state.text_buffer.active_sort(), Some(0));
-        assert_eq!(state.text_buffer.cursor(), 1);
+        assert_eq!(state.text_buffer.active_sort(), Some(1));
+        assert_eq!(state.text_buffer.cursor(), 2);
     }
 
     #[test]
-    fn text_click_hit_testing_uses_editor_line_height() {
+    fn text_click_after_suppressed_kern_drag_does_not_place_cursor() {
         let mut state = EditorState {
+            has_text_session: true,
             metrics: Some(crate::editor::FontMetrics {
                 units_per_em: Some(2048.0),
                 ascender: Some(700.0),
@@ -1966,21 +1974,183 @@ mod tests {
             ..Default::default()
         };
         state.text_buffer.insert_glyph("A", Some('A'), 500.0);
-        state.text_buffer.insert_line_break();
         state.text_buffer.insert_glyph("B", Some('B'), 500.0);
+        state.text_buffer.set_cursor(2);
 
         let mut tool = ActiveTool::Text(TextTool::default());
+        tool.left_down(
+            MouseEvent {
+                pos: state.viewport.to_screen(Point::new(750.0, 0.0)),
+                button: Some(crate::editing::MouseButton::Left),
+                mods: crate::editing::Modifiers {
+                    shift: true,
+                    ..Default::default()
+                },
+            },
+            &mut state,
+        );
+        assert_eq!(state.text_buffer.manual_kerning_sort(), Some(1));
+        assert_eq!(state.text_buffer.active_sort(), Some(1));
+
+        let line_height = state.text_line_height();
         let event = MouseEvent {
-            pos: state.viewport.to_screen(Point::new(250.0, -1000.0)),
+            pos: state.viewport.to_screen(Point::new(250.0, -line_height)),
             button: None,
             mods: Default::default(),
         };
 
         tool.left_click(event, &mut state);
 
-        assert_eq!(state.text_line_height(), 1000.0);
+        assert_eq!(line_height, 1000.0);
+        assert_eq!(state.text_buffer.active_sort(), Some(1));
+        assert_eq!(state.text_buffer.cursor(), 2);
+    }
+
+    #[test]
+    fn text_manual_kerning_drag_bumps_revision() {
+        let mut state = EditorState {
+            has_text_session: true,
+            ..Default::default()
+        };
+        state.text_buffer.insert_glyph("A", Some('A'), 500.0);
+        state.text_buffer.insert_glyph("V", Some('V'), 500.0);
+        let before = state.edit_revision();
+        let mut tool = ActiveTool::Text(TextTool::default());
+
+        tool.left_down(
+            MouseEvent {
+                pos: Point::new(550.0, 0.0),
+                button: Some(crate::editing::MouseButton::Left),
+                mods: crate::editing::Modifiers {
+                    shift: true,
+                    ..Default::default()
+                },
+            },
+            &mut state,
+        );
+        tool.left_drag_changed(
+            MouseEvent {
+                pos: Point::new(580.0, 0.0),
+                button: None,
+                mods: crate::editing::Modifiers {
+                    shift: true,
+                    ..Default::default()
+                },
+            },
+            Drag {
+                start: Point::new(550.0, 0.0),
+                prev: Point::new(550.0, 0.0),
+                current: Point::new(580.0, 0.0),
+            },
+            &mut state,
+        );
+
+        assert!(
+            state.edit_revision() > before,
+            "manual kerning should participate in editor change tracking"
+        );
+        assert_eq!(state.text_buffer.layout(1000.0).items[1].x, 530.0);
+    }
+
+    #[test]
+    fn text_manual_kerning_after_line_break_is_noop_like_xilem() {
+        let mut state = EditorState {
+            has_text_session: true,
+            ..Default::default()
+        };
+        state.text_buffer.insert_glyph("A", Some('A'), 500.0);
+        state.text_buffer.insert_line_break();
+        state.text_buffer.insert_glyph("V", Some('V'), 500.0);
+        let before = state.edit_revision();
+        let line_height = state.text_line_height();
+        let mut tool = ActiveTool::Text(TextTool::default());
+
+        tool.left_down(
+            MouseEvent {
+                pos: state.viewport.to_screen(Point::new(250.0, -line_height)),
+                button: Some(crate::editing::MouseButton::Left),
+                mods: crate::editing::Modifiers {
+                    shift: true,
+                    ..Default::default()
+                },
+            },
+            &mut state,
+        );
+        tool.left_drag_changed(
+            MouseEvent {
+                pos: state.viewport.to_screen(Point::new(280.0, -line_height)),
+                button: None,
+                mods: crate::editing::Modifiers {
+                    shift: true,
+                    ..Default::default()
+                },
+            },
+            Drag {
+                start: state.viewport.to_screen(Point::new(250.0, -line_height)),
+                prev: state.viewport.to_screen(Point::new(250.0, -line_height)),
+                current: state.viewport.to_screen(Point::new(280.0, -line_height)),
+            },
+            &mut state,
+        );
+
+        assert_eq!(state.text_buffer.manual_kerning_sort(), Some(2));
         assert_eq!(state.text_buffer.active_sort(), Some(2));
-        assert_eq!(state.text_buffer.cursor(), 3);
+        assert_eq!(
+            state.edit_revision(),
+            before,
+            "xilem enters kern mode here but has no glyph pair to mutate"
+        );
+    }
+
+    #[test]
+    fn text_manual_kerning_down_activates_dragged_sort() {
+        let mut state = EditorState {
+            has_text_session: true,
+            ..Default::default()
+        };
+        state.text_buffer.insert_glyph("A", Some('A'), 500.0);
+        state.text_buffer.insert_glyph("V", Some('V'), 500.0);
+        state.text_buffer.insert_glyph("A.alt", Some('A'), 500.0);
+        assert_eq!(state.text_buffer.active_sort(), Some(2));
+
+        let mut tool = ActiveTool::Text(TextTool::default());
+        tool.left_down(
+            MouseEvent {
+                pos: Point::new(550.0, 0.0),
+                button: Some(crate::editing::MouseButton::Left),
+                mods: crate::editing::Modifiers {
+                    shift: true,
+                    ..Default::default()
+                },
+            },
+            &mut state,
+        );
+
+        assert_eq!(state.text_buffer.manual_kerning_sort(), Some(1));
+        assert_eq!(state.text_buffer.active_sort(), Some(1));
+    }
+
+    #[test]
+    fn text_manual_kerning_requires_text_session_like_xilem() {
+        let mut state = EditorState::default();
+        state.text_buffer.insert_glyph("A", Some('A'), 500.0);
+        state.text_buffer.insert_glyph("V", Some('V'), 500.0);
+
+        let mut tool = ActiveTool::Text(TextTool::default());
+        tool.left_down(
+            MouseEvent {
+                pos: Point::new(550.0, 0.0),
+                button: Some(crate::editing::MouseButton::Left),
+                mods: crate::editing::Modifiers {
+                    shift: true,
+                    ..Default::default()
+                },
+            },
+            &mut state,
+        );
+
+        assert_eq!(state.text_buffer.manual_kerning_sort(), None);
+        assert_eq!(state.text_buffer.active_sort(), Some(1));
     }
 
     #[test]
@@ -2315,6 +2485,33 @@ mod tests {
         let mut tool = ActiveTool::Select(SelectTool::default());
         let event = MouseEvent {
             pos: Point::new(500.0, 0.0),
+            button: Some(crate::editing::MouseButton::Left),
+            mods: Default::default(),
+        };
+
+        tool.left_down(event, &mut state);
+
+        assert!(state.selection.contains(&point_id));
+    }
+
+    #[test]
+    fn select_hit_testing_uses_active_text_sort_y_origin() {
+        let mut state = EditorState::default();
+        let point = path_point(Point::new(0.0, 0.0), false);
+        let point_id = point.id;
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![point]),
+            false,
+        )));
+        state.text_buffer.insert_glyph("A", Some('A'), 500.0);
+        state.text_buffer.insert_line_break();
+        state.text_buffer.insert_glyph("B", Some('B'), 500.0);
+        assert!(state.text_buffer.activate_sort(2));
+        assert_eq!(state.active_text_sort_origin(), Vec2::new(0.0, -1000.0));
+
+        let mut tool = ActiveTool::Select(SelectTool::default());
+        let event = MouseEvent {
+            pos: state.viewport.to_screen(Point::new(0.0, -1000.0)),
             button: Some(crate::editing::MouseButton::Left),
             mods: Default::default(),
         };

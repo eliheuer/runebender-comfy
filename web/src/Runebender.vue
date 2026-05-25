@@ -14,6 +14,7 @@ import init, {
   glifMetadata,
   glifToSvg,
   glifToSvgWithComponents,
+  glifWithKerningGroup,
   glifWithMarkColor,
   glifWithName,
   glifWithOutlinesFrom,
@@ -41,13 +42,13 @@ import TopBar from "./components/TopBar.vue";
 import TransformPanel, {
   type TransformActionId,
 } from "./components/TransformPanel.vue";
-import { THEME_CHROME_COLORS } from "./themeTokens";
 import WelcomePanel from "./components/WelcomePanel.vue";
 import WorkspaceToolbar from "./components/WorkspaceToolbar.vue";
 
 const props = defineProps<{
   nodeId?: string;
   fontPathRef?: { value: string };
+  initialFiles?: () => Promise<File[]>;
   onGlyphDataChange?: (value: string) => void;
   // Host-provided callback. When set (e.g. ComfyUI embedded mode), the
   // editor shows a Close button next to Save and invokes this on click.
@@ -117,7 +118,9 @@ const WELCOME_DEMO_FONTINFO = `<?xml version="1.0" encoding="UTF-8"?>
 
 const canvas = ref<HTMLCanvasElement | null>(null);
 const gridView = ref<HTMLDivElement | null>(null);
+const stage = ref<HTMLDivElement | null>(null);
 const gridViewportWidth = ref<number>(0);
+const gridViewportHeight = ref<number>(0);
 const backgroundImageInput = ref<HTMLInputElement | null>(null);
 const fontDirectoryInput = ref<HTMLInputElement | null>(null);
 const status = ref<string>("initializing");
@@ -151,31 +154,15 @@ const currentRightSidebearing = ref<number>(0);
 const activeTool = ref<ToolId>("Select");
 const activeShape = ref<ShapeKind>("rectangle");
 const textDirection = ref<TextDirection>("ltr");
+const hasTextBufferSession = ref<boolean>(false);
 const textBuffer = ref<TextSort[]>([]);
 const textCursor = ref<number>(0);
 const activeTextSortIndex = ref<number | null>(null);
 const temporaryPreviewReturnTool = ref<ToolId | null>(null);
 const coordinateQuadrant = ref<CoordinateQuadrant>("cc");
 const editorPanelsVisible = ref<boolean>(true);
-const chromeStyle = {
-  "--rb-app-background": THEME_CHROME_COLORS.appBackground,
-  "--rb-control-background": THEME_CHROME_COLORS.controlBackground,
-  "--rb-panel-background": THEME_CHROME_COLORS.panelBackground,
-  "--rb-panel-outline": THEME_CHROME_COLORS.panelOutline,
-  "--rb-primary-text": THEME_CHROME_COLORS.primaryText,
-  "--rb-secondary-text": THEME_CHROME_COLORS.secondaryText,
-  "--rb-muted-text": THEME_CHROME_COLORS.mutedText,
-  "--rb-subdued-text": THEME_CHROME_COLORS.subduedText,
-  "--rb-accent": THEME_CHROME_COLORS.accent,
-  "--rb-glyph-preview": THEME_CHROME_COLORS.glyphPreview,
-  "--rb-warning": THEME_CHROME_COLORS.warning,
-  "--rb-background-image-selection": THEME_CHROME_COLORS.backgroundImageSelection,
-  "--rb-danger": THEME_CHROME_COLORS.danger,
-  "--rb-danger-text": THEME_CHROME_COLORS.dangerText,
-  "--rb-overlay-text": THEME_CHROME_COLORS.overlayText,
-  "--rb-mark-selected-ring": THEME_CHROME_COLORS.markSelectedRing,
-  "--rb-mark-hover-ring": THEME_CHROME_COLORS.markHoverRing,
-};
+const editorBottomPreviewHeight = ref<number>(124);
+const editorBottomPreviewDragStart = ref<{ y: number; height: number } | null>(null);
 const backgroundImage = ref<BackgroundImageState | null>(null);
 const backgroundImageFrame = ref<Record<string, string>>({});
 const backgroundImageDragStart = ref<{ x: number; y: number } | null>(null);
@@ -223,6 +210,8 @@ type GlyphMetadata = {
   contours: number;
   unicode: string | null;
   unicodes: string[];
+  leftKerningGroup?: string | null;
+  rightKerningGroup?: string | null;
 };
 
 type GridGlyphItem = {
@@ -324,6 +313,7 @@ type TextSort =
   | { kind: "lineBreak" };
 
 type TextBufferSnapshot = {
+  hasTextSession: boolean;
   cursor: number;
   activeSort: number | null;
   direction: TextDirection;
@@ -346,10 +336,6 @@ type TextLayoutSnapshot = {
     y: number;
     advanceWidth: number;
   }>;
-};
-
-type TextLayoutItem = TextLayoutSnapshot["items"][number] & {
-  sort: Extract<TextSort, { kind: "glyph" }>;
 };
 
 const masterDataMap = ref<Map<string, MasterData>>(new Map());
@@ -399,7 +385,14 @@ const activeMasterIndex = computed(() => masters.value.indexOf(activeMasterName.
 const masterPreviewSvgs = computed(() =>
   masters.value.map((name) => {
     const data = masterDataMap.value.get(name);
-    return data?.glyphSvgs.get("n") ?? data?.glyphSvgs.get("N");
+    if (!data) return undefined;
+    const bytes = data.glyphBytes.get("n") ?? data.glyphBytes.get("N");
+    if (!bytes) return data.glyphSvgs.get("n") ?? data.glyphSvgs.get("N");
+    try {
+      return glifToSvgWithComponents(bytes, glyphXmlMapJson(data.glyphBytes)) || glifToSvg(bytes);
+    } catch {
+      return data.glyphSvgs.get("n") ?? data.glyphSvgs.get("N");
+    }
   }),
 );
 const dirtyGlyphCount = computed(() => {
@@ -446,8 +439,21 @@ const glyphGridColumns = computed(() => {
   return Math.max(1, Math.min(8, columns || 1));
 });
 
+const glyphGridRowHeight = computed(() => {
+  const bentoGap = 6;
+  const targetRowHeight = 192;
+  const height = Math.max(0, gridViewportHeight.value);
+  if (height <= 0) return targetRowHeight;
+  const visibleRows = Math.max(
+    1,
+    Math.floor((height + bentoGap) / (targetRowHeight + bentoGap)),
+  );
+  return (height - bentoGap * (visibleRows - 1)) / visibleRows;
+});
+
 const gridStyle = computed(() => ({
   gridTemplateColumns: `repeat(${glyphGridColumns.value}, minmax(0, 1fr))`,
+  gridAutoRows: `${glyphGridRowHeight.value}px`,
 }));
 
 function computeGlyphColumnSpan(name: string): number {
@@ -535,17 +541,15 @@ const selectedUnicodeDisplay = computed(() => {
 const activeGlyphSvg = computed(() =>
   currentGlyph.value ? glyphSvgs.value.get(currentGlyph.value) : undefined,
 );
-const activeGlyphPreviewStyle = computed(() => {
-  const svg = activeGlyphSvg.value;
-  if (!svg) return {};
-  const viewBox = /\bviewBox="([^"]+)"/.exec(svg)?.[1]?.trim().split(/\s+/).map(Number);
-  const width = viewBox && viewBox.length === 4 ? viewBox[2] : NaN;
-  const height = viewBox && viewBox.length === 4 ? viewBox[3] : NaN;
-  if (!Number.isFinite(width) || !Number.isFinite(height) || height <= 0) {
-    return {};
+const activeGlyphPreviewSvg = computed(() => {
+  if (!currentGlyph.value || !activeMasterData.value) return undefined;
+  const bytes = activeMasterData.value.glyphBytes.get(currentGlyph.value);
+  if (!bytes) return activeGlyphSvg.value;
+  try {
+    return glifToSvgWithComponents(bytes, glyphXmlByName.value) || glifToSvg(bytes);
+  } catch {
+    return activeGlyphSvg.value;
   }
-  const panelWidth = Math.max(60, Math.min(200, 140 * (width / height)));
-  return { width: `${panelWidth}px` };
 });
 const activeGlyphUnicode = computed(() =>
   currentGlyph.value ? glyphUnicodes.value.get(currentGlyph.value) : undefined,
@@ -557,9 +561,19 @@ const activeLeftKern = computed(() => activeTextKernValue("left"));
 const activeRightKern = computed(() => activeTextKernValue("right"));
 const canEditActiveLeftKern = computed(() => activeTextKernPair("left") !== null);
 const canEditActiveRightKern = computed(() => activeTextKernPair("right") !== null);
+const textModeActive = computed(() => activeTool.value === "Text" && hasTextBufferSession.value);
 const activeGlyphPanelVisible = computed(
-  () => !!currentGlyph.value && (activeTool.value !== "Text" || activeTextSortIndex.value !== null),
+  () => !!currentGlyph.value && (!textModeActive.value || activeTextSortIndex.value !== null),
 );
+const textBufferPreviewVisible = computed(() => hasTextBufferSession.value);
+const editorBottomPreviewVisible = computed(
+  () =>
+    viewMode.value === "editor" &&
+    (textBufferPreviewVisible.value || (!!currentGlyph.value && !!activeGlyphPreviewSvg.value)),
+);
+const editorBottomPreviewStyle = computed(() => ({
+  "--rb-editor-bottom-preview-height": `${editorBottomPreviewHeight.value}px`,
+}));
 const selectedAnatomySvg = computed(() => {
   if (!selectedGlyph.value || !activeMasterData.value) return undefined;
   const bytes = activeMasterData.value.glyphBytes.get(selectedGlyph.value);
@@ -570,28 +584,23 @@ const selectedAnatomySvg = computed(() => {
     return undefined;
   }
 });
-const TEXT_PREVIEW_SCALE = 0.12;
 const textLayout = ref<TextLayoutSnapshot>({ cursorX: 0, cursorY: 0, items: [] });
-const textLayoutItems = computed<TextLayoutItem[]>(() =>
-  textLayout.value.items
-    .map((item) => {
-      const sort = textBuffer.value[item.index];
-      if (!sort || sort.kind !== "glyph") return undefined;
-      return { ...item, sort };
-    })
-    .filter((item): item is TextLayoutItem => !!item),
-);
-const textPreviewHeight = computed(() => {
-  const minY = Math.min(0, textLayout.value.cursorY, ...textLayout.value.items.map((item) => item.y));
-  return Math.max(70, Math.abs(minY) * TEXT_PREVIEW_SCALE + 70);
-});
-const textPreviewWidth = computed(() => {
-  const maxX = Math.max(
-    textLayout.value.cursorX,
-    ...textLayout.value.items.map((item) => item.x + item.advanceWidth),
-    600,
-  );
-  return Math.max(120, maxX * TEXT_PREVIEW_SCALE + 24);
+const textPreviewRevision = ref(0);
+function bumpTextPreviewRevision() {
+  textPreviewRevision.value += 1;
+}
+const textBufferPreviewSvg = computed(() => {
+  textPreviewRevision.value;
+  textBuffer.value;
+  textLayout.value;
+  activeTextSortIndex.value;
+  currentGlyph.value;
+  try {
+    return editor?.textBufferPreviewSvg() ?? "";
+  } catch (e) {
+    console.warn("failed to render text buffer preview:", e);
+    return "";
+  }
 });
 
 type Editor = {
@@ -600,6 +609,7 @@ type Editor = {
   pointerUp(x: number, y: number, button: number, mods: number): boolean;
   pointerCancel(): boolean;
   componentBaseAt(x: number, y: number): string;
+  clearComponentSelection(): void;
   setTool(toolId: ToolId): boolean;
   setShapeTool(shape: ShapeKind): boolean;
   setShapeShiftLocked(locked: boolean): boolean;
@@ -609,24 +619,20 @@ type Editor = {
   textKerningModel(): string;
   setTextGlyphInventory(json: string): void;
   shapeTextBuffer(): boolean;
-  textActiveSort(): number;
   textBufferSnapshot(): string;
   textBufferLayout(lineHeight: number): string;
+  textBufferPreviewSvg(): string;
   clearTextBuffer(): void;
   insertTextGlyph(name: string, codepoint: number, advanceWidth: number): void;
+  insertInactiveTextGlyph(name: string, codepoint: number, advanceWidth: number): void;
   insertTextCharacter(codepoint: number): boolean;
   updateTextGlyph(index: number, name: string, codepoint: number, advanceWidth: number): boolean;
   insertTextLineBreak(): void;
   deleteTextBeforeCursor(): boolean;
   deleteTextAfterCursor(): boolean;
-  setTextCursor(cursor: number): void;
   moveTextCursorVisualLeft(): void;
   moveTextCursorVisualRight(): void;
-  moveTextCursorVisualUp(lineHeight: number): void;
-  moveTextCursorVisualDown(lineHeight: number): void;
-  moveTextCursorLineStart(): void;
-  moveTextCursorLineEnd(): void;
-  activateTextSort(index: number): boolean;
+  activateTextSortAt(x: number, y: number): boolean;
   wheel(x: number, y: number, deltaY: number): void;
   undo(): boolean;
   redo(): boolean;
@@ -653,9 +659,12 @@ type Editor = {
   excludeSelection(): boolean;
   render(): void;
   resize(w: number, h: number): void;
+  setDeviceScale(scale: number): void;
+  setTheme(themeJson: string): void;
   setGlyphSvg(svg: string): void;
   setGlyphGlif(bytes: Uint8Array): void;
   setGlyphGlifWithComponents(bytes: Uint8Array, glyphXmlByName: string): void;
+  setGlyphGlifWithComponentsPreserveHistory(bytes: Uint8Array, glyphXmlByName: string): void;
   setFontInfo(bytes: Uint8Array): void;
   fitToCanvas(w: number, h: number): void;
   setZoom(z: number): void;
@@ -709,6 +718,7 @@ type SaveAsDestination = {
 let editor: Editor | null = null;
 let raf = 0;
 let resizeObserver: ResizeObserver | null = null;
+let themeObserver: MutationObserver | null = null;
 let comfySyncTimer: number | null = null;
 let lastPublishedComfyState = "";
 
@@ -732,11 +742,27 @@ onMounted(async () => {
     canvas.value.height = height;
 
     editor = (await GlyphEditor.new(canvas.value, width, height)) as unknown as Editor;
+    editor.setDeviceScale(dpr);
+    applyCanvasTheme();
 
     status.value = "ready";
 
     resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(canvas.value);
+    themeObserver = new MutationObserver(() => {
+      applyCanvasTheme();
+      requestRender();
+    });
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class", "style", "data-theme"],
+    });
+    if (document.body) {
+      themeObserver.observe(document.body, {
+        attributes: true,
+        attributeFilter: ["class", "style", "data-theme"],
+      });
+    }
     updateGridViewportSize();
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
@@ -751,6 +777,11 @@ onMounted(async () => {
 
     if (currentFontPath.value) {
       await loadWorkspaceSlot(currentFontPath.value);
+    } else if (props.initialFiles) {
+      const loaded = await loadDevTestFont();
+      if (!loaded) {
+        loadWelcomeDemoGlyph();
+      }
     } else {
       loadWelcomeDemoGlyph();
     }
@@ -777,6 +808,165 @@ function requestRender() {
     refreshSelectionState();
     refreshCompatibilityMarkers();
   });
+}
+
+async function loadDevTestFont(): Promise<boolean> {
+  try {
+    const files = await props.initialFiles?.();
+    if (files.length === 0) return false;
+    await loadGlifFiles(files);
+    fontLabel.value ||= "Dev test font";
+    return true;
+  } catch (e) {
+    console.warn("dev test font auto-load failed:", e);
+    return false;
+  }
+}
+
+type Rgba = [number, number, number, number];
+
+function parseCssColor(color: string, fallback: Rgba, alpha?: number): Rgba {
+  const value = color.trim();
+  const hex = value.match(/^#([0-9a-f]{3,8})$/i)?.[1];
+  const clampByte = (value: number, fallback: number) => {
+    if (!Number.isFinite(value)) return fallback;
+    return Math.max(0, Math.min(255, Math.round(value)));
+  };
+  if (hex) {
+    const expand = (part: string) => (part.length === 1 ? part + part : part);
+    const r = parseInt(expand(hex.slice(0, hex.length === 3 || hex.length === 4 ? 1 : 2)), 16);
+    const gStart = hex.length === 3 || hex.length === 4 ? 1 : 2;
+    const gLen = hex.length === 3 || hex.length === 4 ? 1 : 2;
+    const g = parseInt(expand(hex.slice(gStart, gStart + gLen)), 16);
+    const bStart = gStart + gLen;
+    const b = parseInt(expand(hex.slice(bStart, bStart + gLen)), 16);
+    const aStart = bStart + gLen;
+    const a =
+      hex.length === 4 || hex.length === 8
+        ? parseInt(expand(hex.slice(aStart, aStart + gLen)), 16)
+        : 255;
+    return [
+      clampByte(r, fallback[0]),
+      clampByte(g, fallback[1]),
+      clampByte(b, fallback[2]),
+      clampByte(alpha ?? a, fallback[3]),
+    ];
+  }
+
+  const numeric = value.match(/rgba?\(([^)]+)\)/i)?.[1];
+  if (numeric) {
+    const parts = numeric
+      .replace(/\//g, " ")
+      .split(/[,\s]+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (parts.length >= 3) {
+      const channel = (part: string, fallback: number) => {
+        if (part.endsWith("%")) return clampByte((Number(part.slice(0, -1)) / 100) * 255, fallback);
+        return clampByte(Number(part), fallback);
+      };
+      const alphaChannel = (part: string) => {
+        if (part.endsWith("%")) return clampByte((Number(part.slice(0, -1)) / 100) * 255, fallback[3]);
+        const value = Number(part);
+        return clampByte(value <= 1 ? value * 255 : value, fallback[3]);
+      };
+      const parsedAlpha =
+        parts.length >= 4
+          ? alphaChannel(parts[3])
+          : 255;
+      return [
+        channel(parts[0], fallback[0]),
+        channel(parts[1], fallback[1]),
+        channel(parts[2], fallback[2]),
+        clampByte(alpha ?? parsedAlpha, fallback[3]),
+      ];
+    }
+  }
+
+  const modern = value.match(/^color\((?:srgb|display-p3)\s+(.+)\)$/i)?.[1];
+  if (modern) {
+    const parts = modern
+      .replace(/\//g, " ")
+      .split(/\s+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (parts.length >= 3) {
+      const channel = (part: string, fallback: number) => {
+        if (part.endsWith("%")) return clampByte((Number(part.slice(0, -1)) / 100) * 255, fallback);
+        return clampByte(Number(part) * 255, fallback);
+      };
+      const alphaChannel = (part: string) => {
+        if (part.endsWith("%")) return clampByte((Number(part.slice(0, -1)) / 100) * 255, fallback[3]);
+        const value = Number(part);
+        return clampByte(value <= 1 ? value * 255 : value, fallback[3]);
+      };
+      const parsedAlpha = parts.length >= 4 ? alphaChannel(parts[3]) : 255;
+      return [
+        channel(parts[0], fallback[0]),
+        channel(parts[1], fallback[1]),
+        channel(parts[2], fallback[2]),
+        clampByte(alpha ?? parsedAlpha, fallback[3]),
+      ];
+    }
+  }
+
+  return [fallback[0], fallback[1], fallback[2], alpha ?? fallback[3]];
+}
+
+function resolveHostColor(variableName: string, fallback: Rgba, alpha?: number): Rgba {
+  const host = canvas.value?.closest(".runebender-host") ?? document.documentElement;
+  const probe = document.createElement("span");
+  probe.style.color = `var(${variableName}, rgba(${fallback[0]}, ${fallback[1]}, ${fallback[2]}, ${fallback[3] / 255}))`;
+  probe.style.position = "absolute";
+  probe.style.visibility = "hidden";
+  host.appendChild(probe);
+  const resolved = getComputedStyle(probe).color;
+  probe.remove();
+  return parseCssColor(resolved, fallback, alpha);
+}
+
+function applyCanvasTheme() {
+  if (!editor) return;
+  const accent = resolveHostColor("--rb-accent", [0x66, 0xee, 0x88, 0xff]);
+  const selected = resolveHostColor("--rb-warning", [0xff, 0xdd, 0x33, 0xff]);
+  const selection = resolveHostColor("--rb-canvas-selection", [0xff, 0xaa, 0x33, 0xff]);
+  const primaryText = resolveHostColor("--rb-primary-text", [0x90, 0x90, 0x90, 0xff]);
+  const panelText = resolveHostColor("--rb-secondary-text", [0x70, 0x70, 0x70, 0xff]);
+
+  editor.setTheme(
+    JSON.stringify({
+      bg: resolveHostColor("--rb-canvas-background", [0x10, 0x10, 0x10, 0xff]),
+      pathStroke: resolveHostColor("--rb-canvas-path-stroke", [0xc0, 0xc0, 0xc0, 0xff]),
+      previewFill: resolveHostColor("--rb-glyph-preview", [0x80, 0x80, 0x80, 0xff]),
+      componentFill: resolveHostColor("--rb-canvas-component", [0x66, 0x99, 0xcc, 0xff]),
+      componentSelectedFill: resolveHostColor(
+        "--rb-canvas-component-selected",
+        [0x88, 0xbb, 0xff, 0xff],
+      ),
+      handleLine: primaryText,
+      pointSmoothInner: resolveHostColor("--rb-canvas-point-smooth-inner", [0x18, 0x18, 0x18, 0xff]),
+      pointSmoothOuter: resolveHostColor("--rb-canvas-point-smooth-outer", [0x40, 0x88, 0xff, 0xff]),
+      pointCornerInner: resolveHostColor("--rb-canvas-point-corner-inner", [0x18, 0x18, 0x18, 0xff]),
+      pointCornerOuter: resolveHostColor("--rb-canvas-point-corner-outer", [0x66, 0xee, 0x88, 0xff]),
+      pointOffcurveInner: resolveHostColor("--rb-canvas-point-offcurve-inner", [0x18, 0x18, 0x18, 0xff]),
+      pointOffcurveOuter: resolveHostColor("--rb-canvas-point-offcurve-outer", [0xcc, 0x66, 0xff, 0xff]),
+      pointHyperInner: resolveHostColor("--rb-canvas-point-hyper-inner", [0x18, 0x18, 0x18, 0xff]),
+      pointHyperOuter: resolveHostColor("--rb-canvas-point-hyper-outer", [0xff, 0x66, 0xcc, 0xff]),
+      pointSelectedInner: selected,
+      pointSelectedOuter: selection,
+      startNodeOuter: resolveHostColor("--rb-canvas-start-node", [0xff, 0xaa, 0x33, 0xff]),
+      marqueeFill: [selection[0], selection[1], selection[2], 0x20],
+      marqueeStroke: selection,
+      toolPreview: selection,
+      metricGuide: accent,
+      designGridFine: [panelText[0], panelText[1], panelText[2], 0x40],
+      designGridCoarse: [panelText[0], panelText[1], panelText[2], 0x58],
+      textPreviewFill: resolveHostColor("--rb-canvas-text-preview-fill", [0x80, 0x80, 0x80, 0xff]),
+      textCursor: resolveHostColor("--rb-canvas-text-cursor", [0xff, 0xaa, 0x33, 0xff]),
+      textKernActive: resolveHostColor("--rb-canvas-kern-active", [0x00, 0xff, 0xcc, 0xff]),
+      textKernPrevious: resolveHostColor("--rb-canvas-kern-previous", [0xff, 0xaa, 0x33, 0xff]),
+    }),
+  );
 }
 
 function loadWelcomeDemoGlyph() {
@@ -1467,8 +1657,9 @@ function onCoordinateChange(axis: "x" | "y" | "width" | "height", value: number)
 function onActiveGlyphWidthChange(event: Event) {
   if (!editor || !currentGlyph.value) return;
   const input = event.target as HTMLInputElement | null;
-  const width = Number(input?.value);
-  if (!Number.isFinite(width)) {
+  const value = input?.value ?? "";
+  const width = Number(value);
+  if (!value || value.trim() !== value || !Number.isFinite(width)) {
     if (input) input.value = Math.round(currentWidth.value).toString();
     return;
   }
@@ -1480,7 +1671,6 @@ function onActiveGlyphWidthChange(event: Event) {
   syncCurrentGlyphBytesFromEditor();
   markGlyphDirty(currentGlyph.value);
   syncTextKerningModelToEditor();
-  reshapeTextBuffer();
   requestRender();
   queueComfyStateSync();
 }
@@ -1524,7 +1714,6 @@ function onActiveGlyphSidebearingChange(side: "left" | "right", event: Event) {
   markGlyphDirty(currentGlyph.value);
   refreshSidebearingsFromEditor();
   syncTextKerningModelToEditor();
-  reshapeTextBuffer();
   requestRender();
   queueComfyStateSync();
 }
@@ -1556,14 +1745,15 @@ function onActiveGlyphUnicodeChange(event: Event) {
   try {
     const bytes = glifWithUnicode(currentBytes, unicode);
     const info = parseGlyphInfo(bytes);
-    data.glyphBytes.set(currentGlyph.value, bytes);
-    data.glyphMetadata.set(currentGlyph.value, {
+    const metadata = {
       name: currentGlyph.value,
       width: info.width,
       contours: info.contours,
       unicode: info.unicode,
       unicodes: info.unicodes,
-    });
+    };
+    data.glyphBytes.set(currentGlyph.value, bytes);
+    data.glyphMetadata.set(currentGlyph.value, metadata);
     if (info.unicode) {
       data.glyphUnicodes.set(currentGlyph.value, info.unicode);
       const cp = parseInt(info.unicode, 16);
@@ -1575,11 +1765,12 @@ function onActiveGlyphUnicodeChange(event: Event) {
       data.glyphUnicodes.delete(currentGlyph.value);
       data.glyphCategories.set(currentGlyph.value, "Other");
     }
-    const svg = glifToSvg(bytes);
+    const svg = glyphSvgWithComponents(bytes, data.glyphBytes);
     if (svg) data.glyphSvgs.set(currentGlyph.value, svg);
     masterDataMap.value = new Map(masterDataMap.value);
     if (input) input.value = info.unicode ?? "";
     markGlyphDirty(currentGlyph.value);
+    syncCurrentTextSorts(metadata);
     syncTextKerningModelToEditor();
     reshapeTextBuffer();
     queueComfyStateSync();
@@ -1627,20 +1818,46 @@ function replaceGlyphNameInKerning(
   }
 }
 
-function syncRenamedTextSorts(oldName: string, newName: string, metadata: GlyphMetadata) {
+function syncTextSortsForGlyph(oldName: string, newName: string, metadata: GlyphMetadata) {
   if (!editor) return;
   const codepoint = metadata.unicode ? parseInt(metadata.unicode, 16) : 0;
+  let changed = false;
   for (let index = 0; index < textBuffer.value.length; index++) {
     const sort = textBuffer.value[index];
     if (sort.kind !== "glyph" || sort.glyphName !== oldName) continue;
+    changed =
+      editor.updateTextGlyph(
+        index,
+        newName,
+        Number.isFinite(codepoint) ? codepoint : 0,
+        metadata.width,
+      ) || changed;
+  }
+  if (changed) {
+    refreshTextStateFromEditor();
+  }
+}
+
+function syncRenamedTextSorts(oldName: string, newName: string, metadata: GlyphMetadata) {
+  syncTextSortsForGlyph(oldName, newName, metadata);
+}
+
+function syncCurrentTextSorts(metadata: GlyphMetadata) {
+  if (!currentGlyph.value) return;
+  if (!editor || activeTextSortIndex.value === null) return;
+  const activeSort = textBuffer.value[activeTextSortIndex.value];
+  if (activeSort?.kind !== "glyph" || activeSort.glyphName !== currentGlyph.value) return;
+  const codepoint = metadata.unicode ? parseInt(metadata.unicode, 16) : 0;
+  if (
     editor.updateTextGlyph(
-      index,
-      newName,
+      activeTextSortIndex.value,
+      currentGlyph.value,
       Number.isFinite(codepoint) ? codepoint : 0,
       metadata.width,
-    );
+    )
+  ) {
+    refreshTextStateFromEditor();
   }
-  refreshTextStateFromEditor();
 }
 
 function onActiveGlyphNameChange(event: Event) {
@@ -1699,7 +1916,7 @@ function onActiveGlyphNameChange(event: Event) {
     data.glyphMarkColors.delete(oldName);
     if (markColor) data.glyphMarkColors.set(newName, markColor);
     data.glyphSvgs.delete(oldName);
-    const svg = glifToSvg(bytes);
+    const svg = glyphSvgWithComponents(bytes, data.glyphBytes);
     if (svg) data.glyphSvgs.set(newName, svg);
 
     replaceGlyphNameInGroups(data.groups, oldName, newName);
@@ -1728,11 +1945,15 @@ function onActiveGlyphNameChange(event: Event) {
 }
 
 function onToolSelect(tool: ToolId) {
+  const wasTextSession = activeTool.value === "Text" && activeTextSortIndex.value !== null;
   activeTool.value = tool;
   const toolChanged = editor?.setTool(tool) ?? false;
   let shapeChanged = false;
   if (tool === "Shapes") {
     shapeChanged = editor?.setShapeTool(activeShape.value) ?? false;
+  }
+  if (wasTextSession && tool !== "Text") {
+    loadActiveTextSortGlyphIntoEditor();
   }
   if (toolChanged || shapeChanged) {
     syncEditorMutationAfterWasmChange();
@@ -1765,7 +1986,7 @@ function onTextDirectionSelect(direction: TextDirection) {
   textDirection.value = direction;
   editor?.setTextDirection(direction);
   refreshTextStateFromEditor();
-  reshapeTextBuffer();
+  requestRender();
 }
 
 function textPreviewLineHeight(): number {
@@ -1780,6 +2001,7 @@ function refreshTextStateFromEditor(syncSorts = true) {
   if (!editor) return;
   try {
     const snapshot = JSON.parse(editor.textBufferSnapshot()) as TextBufferSnapshot;
+    hasTextBufferSession.value = snapshot.hasTextSession;
     if (syncSorts) {
       textBuffer.value = snapshot.sorts.map((sort): TextSort => {
         if (sort.kind === "lineBreak") return { kind: "lineBreak" };
@@ -1788,7 +2010,7 @@ function refreshTextStateFromEditor(syncSorts = true) {
           glyphName: sort.glyphName ?? ".notdef",
           char: sort.char ?? "",
           codepoint: sort.codepoint ?? 0,
-          advanceWidth: sort.advanceWidth ?? 600,
+          advanceWidth: sort.advanceWidth ?? 500,
         };
       });
     }
@@ -1808,6 +2030,7 @@ function refreshTextStateFromEditor(syncSorts = true) {
     textLayout.value = JSON.parse(
       editor.textBufferLayout(textPreviewLineHeight()),
     ) as TextLayoutSnapshot;
+    bumpTextPreviewRevision();
     requestRender();
   } catch (e) {
     console.warn("failed to read text buffer snapshot:", e);
@@ -1822,68 +2045,73 @@ function insertTextCharacter(char: string): boolean {
     return false;
   }
   refreshTextStateFromEditor();
-  loadActiveTextSortGlyphIntoEditor();
   return true;
 }
 
-function insertTextGlyphByName(glyphName: string): boolean {
+function textGlyphPayload(glyphName: string): {
+  codepoint: number;
+  advanceWidth: number;
+} {
   const metadata = glyphMetadataMap.value.get(glyphName);
   const unicode = glyphUnicodes.value.get(glyphName);
   const codepoint = unicode ? parseInt(unicode, 16) : 0;
+  return {
+    codepoint: Number.isFinite(codepoint) ? codepoint : 0,
+    advanceWidth: metadata?.width ?? 500,
+  };
+}
+
+function insertTextGlyphByName(glyphName: string): boolean {
+  const { codepoint, advanceWidth } = textGlyphPayload(glyphName);
   editor?.insertTextGlyph(
     glyphName,
-    Number.isFinite(codepoint) ? codepoint : 0,
-    metadata?.width ?? 600,
+    codepoint,
+    advanceWidth,
   );
   refreshTextStateFromEditor();
-  reshapeTextBuffer();
   return true;
+}
+
+function insertInactiveTextGlyphByName(glyphName: string): boolean {
+  const { codepoint, advanceWidth } = textGlyphPayload(glyphName);
+  editor?.insertInactiveTextGlyph(glyphName, codepoint, advanceWidth);
+  refreshTextStateFromEditor();
+  return true;
+}
+
+function seedTextBufferWithGlyph(glyphName: string) {
+  if (!editor) return;
+  const metadata = glyphMetadataMap.value.get(glyphName);
+  const unicode = glyphUnicodes.value.get(glyphName);
+  const codepoint = unicode ? parseInt(unicode, 16) : 0;
+  const advanceWidth =
+    metadata?.width ?? (currentWidth.value > 0 ? currentWidth.value : 500);
+  editor.clearTextBuffer();
+  editor.insertTextGlyph(
+    glyphName,
+    Number.isFinite(codepoint) ? codepoint : 0,
+    advanceWidth,
+  );
+  hasTextBufferSession.value = true;
+  refreshTextStateFromEditor();
 }
 
 function insertTextLineBreak(): boolean {
   editor?.insertTextLineBreak();
   refreshTextStateFromEditor();
-  reshapeTextBuffer();
   return true;
 }
 
 function deleteTextBeforeCursor(): boolean {
-  if (textCursor.value <= 0) return false;
-  editor?.deleteTextBeforeCursor();
+  const changed = editor?.deleteTextBeforeCursor() ?? false;
   refreshTextStateFromEditor();
-  reshapeTextBuffer();
-  return true;
+  return changed;
 }
 
 function deleteTextAfterCursor(): boolean {
-  if (textCursor.value >= textBuffer.value.length) return false;
-  editor?.deleteTextAfterCursor();
+  const changed = editor?.deleteTextAfterCursor() ?? false;
   refreshTextStateFromEditor();
-  reshapeTextBuffer();
-  return true;
-}
-
-function openTextSort(sort: TextSort) {
-  if (sort.kind !== "glyph") return;
-  openGlyph(sort.glyphName);
-  activeTool.value = "Text";
-  if (editor?.setTool("Text")) {
-    syncEditorMutationAfterWasmChange();
-  }
-}
-
-function activateTextSort(logicalIndex: number) {
-  const sort = textBuffer.value[logicalIndex];
-  if (!sort || sort.kind !== "glyph") return;
-  editor?.activateTextSort(logicalIndex);
-  refreshTextStateFromEditor();
-  loadGlyphIntoEditor(sort.glyphName, { fitCanvas: false });
-}
-
-function setTextCursor(position: number) {
-  const cursor = Math.max(0, Math.min(textBuffer.value.length, position));
-  editor?.setTextCursor(cursor);
-  refreshTextStateFromEditor();
+  return changed;
 }
 
 function moveTextCursorVisual(delta: -1 | 1) {
@@ -1895,51 +2123,66 @@ function moveTextCursorVisual(delta: -1 | 1) {
   refreshTextStateFromEditor();
 }
 
-function moveTextCursorVertical(delta: -1 | 1) {
-  if (delta < 0) {
-    editor?.moveTextCursorVisualUp(textPreviewLineHeight());
-  } else {
-    editor?.moveTextCursorVisualDown(textPreviewLineHeight());
-  }
-  refreshTextStateFromEditor();
-}
-
-function moveTextCursorLineBoundary(boundary: "start" | "end") {
-  if (boundary === "start") {
-    editor?.moveTextCursorLineStart();
-  } else {
-    editor?.moveTextCursorLineEnd();
-  }
-  refreshTextStateFromEditor();
-}
-
 function reshapeTextBuffer() {
   editor?.shapeTextBuffer();
   refreshTextStateFromEditor();
-  loadActiveTextSortGlyphIntoEditor();
   requestRender();
 }
 
-function textLayoutItemStyle(item: TextLayoutItem): Record<string, string> {
-  const width = Math.max(28, Math.min(118, item.advanceWidth * TEXT_PREVIEW_SCALE));
-  return {
-    left: `${item.x * TEXT_PREVIEW_SCALE}px`,
-    top: `${-item.y * TEXT_PREVIEW_SCALE}px`,
-    width: `${width}px`,
-  };
-}
+const NON_TEXT_KEY_VALUES = new Set([
+  "Alt",
+  "AltGraph",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "ArrowUp",
+  "Backspace",
+  "CapsLock",
+  "Clear",
+  "ContextMenu",
+  "Control",
+  "Dead",
+  "Delete",
+  "End",
+  "Enter",
+  "Escape",
+  "Fn",
+  "FnLock",
+  "Help",
+  "Home",
+  "Hyper",
+  "Insert",
+  "Meta",
+  "NumLock",
+  "PageDown",
+  "PageUp",
+  "Pause",
+  "PrintScreen",
+  "Process",
+  "ScrollLock",
+  "Shift",
+  "Super",
+  "Symbol",
+  "SymbolLock",
+  "Tab",
+  "Unidentified",
+]);
 
-function textCursorStyle(): Record<string, string> {
-  return {
-    left: `${textLayout.value.cursorX * TEXT_PREVIEW_SCALE}px`,
-    top: `${-textLayout.value.cursorY * TEXT_PREVIEW_SCALE}px`,
-  };
+function singleInputCharacter(key: string): string | null {
+  const chars = Array.from(key);
+  if (!chars.length) return null;
+  if (chars.length === 1) return chars[0];
+  if (NON_TEXT_KEY_VALUES.has(key)) return null;
+  if (/^F(?:[1-9]|1[0-9]|2[0-4])$/.test(key)) return null;
+  if (/^[A-Z][A-Za-z0-9]*$/.test(key)) return null;
+  return chars[0];
 }
 
 function handleTextToolKey(e: KeyboardEvent): boolean {
-  if (activeTool.value !== "Text" || e.metaKey || e.ctrlKey || e.altKey) {
+  if (!textModeActive.value) {
     return false;
   }
+  const commandModified = e.metaKey || e.ctrlKey;
 
   switch (e.key) {
     case "ArrowLeft":
@@ -1948,31 +2191,22 @@ function handleTextToolKey(e: KeyboardEvent): boolean {
     case "ArrowRight":
       moveTextCursorVisual(1);
       return true;
-    case "ArrowUp":
-      moveTextCursorVertical(-1);
-      return true;
-    case "ArrowDown":
-      moveTextCursorVertical(1);
-      return true;
-    case "Home":
-      moveTextCursorLineBoundary("start");
-      return true;
-    case "End":
-      moveTextCursorLineBoundary("end");
-      return true;
     case "Backspace":
-      deleteTextBeforeCursor();
+      if (!deleteTextBeforeCursor()) requestRender();
       return true;
     case "Delete":
-      deleteTextAfterCursor();
+      if (!deleteTextAfterCursor()) requestRender();
       return true;
     case "Enter":
       insertTextLineBreak();
       return true;
     default:
-      if (e.key.length === 1) {
-        insertTextCharacter(e.key);
-        return true;
+      {
+        if (commandModified) return false;
+        const char = singleInputCharacter(e.key);
+        if (char) {
+          return insertTextCharacter(char) || char === " ";
+        }
       }
       return false;
   }
@@ -1980,12 +2214,17 @@ function handleTextToolKey(e: KeyboardEvent): boolean {
 
 function handleResize() {
   updateGridViewportSize();
+  editorBottomPreviewHeight.value = clampEditorBottomPreviewHeight(editorBottomPreviewHeight.value);
   if (!editor || !canvas.value) return;
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.value.getBoundingClientRect();
   const width = Math.max(1, Math.floor(rect.width * dpr));
   const height = Math.max(1, Math.floor(rect.height * dpr));
-  if (canvas.value.width === width && canvas.value.height === height) return;
+  editor.setDeviceScale(dpr);
+  if (canvas.value.width === width && canvas.value.height === height) {
+    requestRender();
+    return;
+  }
   canvas.value.width = width;
   canvas.value.height = height;
   editor.resize(width, height);
@@ -1995,6 +2234,87 @@ function handleResize() {
 function updateGridViewportSize() {
   const rect = canvas.value?.getBoundingClientRect() ?? gridView.value?.getBoundingClientRect();
   gridViewportWidth.value = rect?.width ?? 0;
+  gridViewportHeight.value = rect?.height ?? 0;
+}
+
+function clampEditorBottomPreviewHeight(height: number): number {
+  const stageRect = stage.value?.getBoundingClientRect();
+  const stageHeight = stageRect?.height ?? window.innerHeight;
+  const toolbarRect = stage.value
+    ?.querySelector(".editor-tools-overlay")
+    ?.getBoundingClientRect();
+  const toolbarClearance =
+    stageRect && toolbarRect
+      ? Math.max(96, stageRect.bottom - toolbarRect.bottom - 8)
+      : Math.floor(stageHeight * 0.75);
+  const max = Math.max(72, Math.min(Math.floor(stageHeight - 36), Math.floor(toolbarClearance)));
+  return Math.max(36, Math.min(max, Math.round(height)));
+}
+
+function onBottomPreviewResizePointerDown(e: PointerEvent) {
+  if (!editorBottomPreviewVisible.value) return;
+  e.preventDefault();
+  e.stopPropagation();
+  startBottomPreviewResize(e.clientY);
+  (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+}
+
+function onBottomPreviewResizePointerMove(e: PointerEvent) {
+  if (!editorBottomPreviewDragStart.value) return;
+  e.preventDefault();
+  e.stopPropagation();
+  updateBottomPreviewResize(e.clientY);
+}
+
+function onBottomPreviewResizePointerUp(e: PointerEvent) {
+  if (!editorBottomPreviewDragStart.value) return;
+  e.preventDefault();
+  e.stopPropagation();
+  stopBottomPreviewResize();
+  (e.currentTarget as Element).releasePointerCapture?.(e.pointerId);
+}
+
+function startBottomPreviewResize(clientY: number) {
+  stopBottomPreviewResize();
+  editorBottomPreviewDragStart.value = {
+    y: clientY,
+    height: editorBottomPreviewHeight.value,
+  };
+  window.addEventListener("mousemove", onBottomPreviewResizeMouseMove);
+  window.addEventListener("mouseup", onBottomPreviewResizeMouseUp);
+}
+
+function updateBottomPreviewResize(clientY: number) {
+  const drag = editorBottomPreviewDragStart.value;
+  if (!drag) return;
+  editorBottomPreviewHeight.value = clampEditorBottomPreviewHeight(
+    drag.height + drag.y - clientY,
+  );
+}
+
+function stopBottomPreviewResize() {
+  editorBottomPreviewDragStart.value = null;
+  window.removeEventListener("mousemove", onBottomPreviewResizeMouseMove);
+  window.removeEventListener("mouseup", onBottomPreviewResizeMouseUp);
+}
+
+function onBottomPreviewResizeMouseDown(e: MouseEvent) {
+  if (!editorBottomPreviewVisible.value) return;
+  e.preventDefault();
+  e.stopPropagation();
+  startBottomPreviewResize(e.clientY);
+}
+
+function onBottomPreviewResizeMouseMove(e: MouseEvent) {
+  if (!editorBottomPreviewDragStart.value) return;
+  e.preventDefault();
+  updateBottomPreviewResize(e.clientY);
+}
+
+function onBottomPreviewResizeMouseUp(e: MouseEvent) {
+  if (!editorBottomPreviewDragStart.value) return;
+  e.preventDefault();
+  stopBottomPreviewResize();
 }
 
 function canvasCoords(e: PointerEvent): [number, number] | null {
@@ -2028,6 +2348,8 @@ function onPointerDown(e: PointerEvent) {
   if (!editor) return;
   const c = canvasCoords(e);
   if (!c) return;
+  const previousTextSort =
+    activeTool.value === "Text" ? activeTextSortIndex.value : null;
   dismissBackgroundImageContextMenu();
   dismissContourContextMenu();
   if (backgroundImage.value?.selected) {
@@ -2039,6 +2361,12 @@ function onPointerDown(e: PointerEvent) {
   (e.target as Element).setPointerCapture?.(e.pointerId);
   editor.pointerDown(c[0], c[1], e.button, modBits(e));
   refreshMeasureState();
+  if (activeTool.value === "Text") {
+    refreshTextStateFromEditor();
+    if (activeTextSortIndex.value !== previousTextSort) {
+      loadActiveTextSortGlyphIntoEditor();
+    }
+  }
   requestRender();
 }
 
@@ -2114,10 +2442,12 @@ function onPointerUp(e: PointerEvent) {
   const changed = editor.pointerUp(c[0], c[1], e.button, modBits(e));
   (e.target as Element).releasePointerCapture?.(e.pointerId);
   if (changed && currentGlyph.value) {
-    syncCurrentGlyphBytesFromEditor();
-    markGlyphDirty(currentGlyph.value);
-    currentContours.value = editor.contourCount();
-    queueComfyStateSync();
+    const glyphChanged = syncCurrentGlyphBytesFromEditor({ skipUnchanged: true });
+    if (glyphChanged) {
+      markGlyphDirty(currentGlyph.value);
+      currentContours.value = editor.contourCount();
+      queueComfyStateSync();
+    }
   }
   refreshSelectionState();
   refreshMeasureState();
@@ -2144,28 +2474,31 @@ function onCanvasDoubleClick(e: MouseEvent) {
   if (!editor) return;
   const c = canvasMouseCoords(e);
   if (!c) return;
-  if (activeTool.value === "Select") {
-    if (editor.togglePointTypeAt(c[0], c[1])) {
-      syncCurrentGlyphBytesFromEditor();
-      if (currentGlyph.value) {
-        markGlyphDirty(currentGlyph.value);
-      }
-      refreshSelectionState();
-      requestRender();
-      queueComfyStateSync();
-      return;
+  if (editor.togglePointTypeAt(c[0], c[1])) {
+    syncCurrentGlyphBytesFromEditor();
+    if (currentGlyph.value) {
+      markGlyphDirty(currentGlyph.value);
     }
-    const baseName = editor.componentBaseAt(c[0], c[1]);
-    if (!baseName || !activeMasterData.value?.glyphBytes.has(baseName)) return;
-    openGlyph(baseName);
-    return;
-  }
-  if (activeTool.value === "Text") {
-    const baseName = editor.componentBaseAt(c[0], c[1]);
-    if (!baseName || !activeMasterData.value?.glyphBytes.has(baseName)) return;
-    insertTextGlyphByName(baseName);
+    refreshSelectionState();
     requestRender();
     queueComfyStateSync();
+    return;
+  }
+  const baseName = editor.componentBaseAt(c[0], c[1]);
+  if (baseName && hasTextBufferSession.value && activeMasterData.value?.glyphBytes.has(baseName)) {
+    insertInactiveTextGlyphByName(baseName);
+    editor.clearComponentSelection();
+    refreshSelectionState();
+    requestRender();
+    queueComfyStateSync();
+    return;
+  }
+  if (editor.activateTextSortAt(c[0], c[1])) {
+    refreshTextStateFromEditor();
+    loadActiveTextSortGlyphIntoEditor();
+    requestRender();
+    queueComfyStateSync();
+    return;
   }
 }
 
@@ -2181,6 +2514,8 @@ function parseGlyphInfo(bytes: Uint8Array): {
   unicode: string | null;
   unicodes: string[];
   markColor: string | null;
+  leftKerningGroup: string | null;
+  rightKerningGroup: string | null;
   width: number;
   contours: number;
 } {
@@ -2203,6 +2538,8 @@ function parseGlyphInfo(bytes: Uint8Array): {
     unicode: metadata.unicode,
     unicodes,
     markColor: markMatch?.[1]?.replace(/\s+/g, "") ?? null,
+    leftKerningGroup: metadata.leftKerningGroup ?? null,
+    rightKerningGroup: metadata.rightKerningGroup ?? null,
     width: metadata.width,
     contours: metadata.contours,
   };
@@ -2346,15 +2683,63 @@ function buildGlyphKerningGroups(
   return byGlyph;
 }
 
-function displayKerningGroup(group: string | undefined, prefix: string): string {
-  return group?.startsWith(prefix) ? group.slice(prefix.length) : (group ?? "");
+function plistKerningGroupsForGlyph(
+  groupsMap: Map<string, string[]>,
+  glyphName: string,
+): GlyphKerningGroups {
+  const groups: GlyphKerningGroups = {};
+  for (const [groupName, members] of groupsMap) {
+    if (!members.includes(glyphName)) continue;
+    if (groupName.startsWith("public.kern1.") && !groups.left) {
+      groups.left = groupName;
+    } else if (groupName.startsWith("public.kern2.") && !groups.right) {
+      groups.right = groupName;
+    }
+  }
+  return groups;
 }
 
-function normalizeKerningGroup(side: "left" | "right", value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed || trimmed === "-") return null;
-  const prefix = side === "left" ? "public.kern1." : "public.kern2.";
-  return trimmed.startsWith(prefix) ? trimmed : `${prefix}${trimmed}`;
+function setGlyphKerningGroupsFromInfo(
+  data: MasterData,
+  glyphName: string,
+  info: { leftKerningGroup: string | null; rightKerningGroup: string | null },
+) {
+  const nextGroups = {
+    ...plistKerningGroupsForGlyph(data.groups, glyphName),
+    ...(info.leftKerningGroup ? { left: info.leftKerningGroup } : {}),
+    ...(info.rightKerningGroup ? { right: info.rightKerningGroup } : {}),
+  };
+  if (nextGroups.left || nextGroups.right) {
+    data.glyphKerningGroups.set(glyphName, nextGroups);
+  } else {
+    data.glyphKerningGroups.delete(glyphName);
+  }
+}
+
+function textKerningGroupsForEditor(): Map<string, string[]> {
+  const merged = new Map<string, string[]>();
+  for (const [groupName, members] of groups.value) {
+    merged.set(groupName, [...members]);
+  }
+  for (const [glyphName, glyphGroups] of glyphKerningGroups.value) {
+    for (const groupName of [glyphGroups.left, glyphGroups.right]) {
+      if (!groupName) continue;
+      const members = merged.get(groupName) ?? [];
+      if (!members.includes(glyphName)) {
+        merged.set(groupName, [...members, glyphName]);
+      }
+    }
+  }
+  return merged;
+}
+
+function textKerningGroupHintsForEditor(side: "left" | "right"): Record<string, string> {
+  const hints: Record<string, string> = {};
+  for (const [glyphName, glyphGroups] of glyphKerningGroups.value) {
+    const groupName = glyphGroups[side];
+    if (groupName) hints[glyphName] = groupName;
+  }
+  return hints;
 }
 
 function textGlyphNameAt(index: number | null): string | null {
@@ -2363,16 +2748,23 @@ function textGlyphNameAt(index: number | null): string | null {
   return sort?.kind === "glyph" ? sort.glyphName : null;
 }
 
-function kerningGroupsForGlyph(glyphName: string, prefix: string): string[] {
-  const groupsForGlyph = glyphKerningGroups.value.get(glyphName);
-  const group =
-    prefix === "public.kern1." ? groupsForGlyph?.left : groupsForGlyph?.right;
-  return group?.startsWith(prefix) ? [group] : [];
+function kerningGroupsForGlyph(glyphName: string, hint?: string): string[] {
+  const groupMap = textKerningGroupsForEditor();
+  const groupNames: string[] = [];
+  if (hint && groupMap.get(hint)?.includes(glyphName)) {
+    groupNames.push(hint);
+  }
+  for (const [groupName, members] of groupMap) {
+    if (members.includes(glyphName) && !groupNames.includes(groupName)) {
+      groupNames.push(groupName);
+    }
+  }
+  return groupNames;
 }
 
 function lookupKerningValue(left: string, right: string): number {
-  const leftGroups = kerningGroupsForGlyph(left, "public.kern1.");
-  const rightGroups = kerningGroupsForGlyph(right, "public.kern2.");
+  const leftGroups = kerningGroupsForGlyph(left, glyphKerningGroups.value.get(left)?.right);
+  const rightGroups = kerningGroupsForGlyph(right, glyphKerningGroups.value.get(right)?.left);
   const pairs = kerning.value.get(left);
   const direct = pairs?.get(right);
   if (direct !== undefined) return direct;
@@ -2418,19 +2810,15 @@ function updateActiveTextKern(side: "left" | "right", value: string) {
   const data = activeMasterData.value;
   const pair = activeTextKernPair(side);
   if (!data || !pair) return;
-  const trimmed = value.trim();
   const pairs = data.kerning.get(pair[0]) ?? new Map<string, number>();
 
-  if (!trimmed || trimmed === "-") {
+  if (!value || value === "-") {
     pairs.delete(pair[1]);
   } else {
-    const kernValue = Number(trimmed);
+    if (value.trim() !== value) return;
+    const kernValue = Number(value);
     if (!Number.isFinite(kernValue)) return;
-    if (Math.abs(kernValue) < Number.EPSILON) {
-      pairs.delete(pair[1]);
-    } else {
-      pairs.set(pair[1], kernValue);
-    }
+    pairs.set(pair[1], kernValue);
   }
 
   if (pairs.size > 0) {
@@ -2441,7 +2829,7 @@ function updateActiveTextKern(side: "left" | "right", value: string) {
   masterDataMap.value = new Map(masterDataMap.value);
   markKerningDirty();
   syncTextKerningModelToEditor();
-  reshapeTextBuffer();
+  requestRender();
   queueComfyStateSync();
 }
 
@@ -2449,37 +2837,30 @@ function updateGlyphKerningGroup(side: "left" | "right", value: string) {
   const glyphName = currentGlyph.value;
   const data = activeMasterData.value;
   if (!glyphName || !data) return;
-  const prefix = side === "left" ? "public.kern1." : "public.kern2.";
-  const targetGroup = normalizeKerningGroup(side, value);
-  let changed = false;
+  const bytes = data.glyphBytes.get(glyphName);
+  if (!bytes) return;
+  const nextGroup = value;
+  const currentGroups = data.glyphKerningGroups.get(glyphName);
+  const currentGroup = side === "left" ? currentGroups?.left : currentGroups?.right;
+  if ((currentGroup ?? "") === nextGroup) return;
 
-  for (const [groupName, members] of Array.from(data.groups.entries())) {
-    if (!groupName.startsWith(prefix)) continue;
-    const nextMembers = members.filter((member) => member !== glyphName);
-    if (nextMembers.length !== members.length) {
-      changed = true;
-      if (nextMembers.length > 0) {
-        data.groups.set(groupName, nextMembers);
-      } else {
-        data.groups.delete(groupName);
-      }
-    }
+  const nextBytes = glifWithKerningGroup(bytes, side, nextGroup);
+  data.glyphBytes.set(glyphName, nextBytes);
+  const nextGroups = { ...(currentGroups ?? {}) };
+  if (!nextGroup || nextGroup === "-") {
+    delete nextGroups[side];
+  } else {
+    nextGroups[side] = nextGroup;
   }
-
-  if (targetGroup) {
-    const members = data.groups.get(targetGroup) ?? [];
-    if (!members.includes(glyphName)) {
-      data.groups.set(targetGroup, [...members, glyphName]);
-      changed = true;
-    }
+  if (nextGroups.left || nextGroups.right) {
+    data.glyphKerningGroups.set(glyphName, nextGroups);
+  } else {
+    data.glyphKerningGroups.delete(glyphName);
   }
-
-  if (!changed) return;
-  data.glyphKerningGroups = buildGlyphKerningGroups(data.groups);
   masterDataMap.value = new Map(masterDataMap.value);
-  markGroupsDirty();
+  markGlyphDirty(glyphName);
   syncTextKerningModelToEditor();
-  reshapeTextBuffer();
+  requestRender();
   queueComfyStateSync();
 }
 
@@ -2488,7 +2869,9 @@ function syncTextKerningModelToEditor() {
   try {
     editor.setTextKerningModel(
       JSON.stringify({
-        groups: stringArrayMapToRecord(groups.value),
+        groups: stringArrayMapToRecord(textKerningGroupsForEditor()),
+        leftGroups: textKerningGroupHintsForEditor("left"),
+        rightGroups: textKerningGroupHintsForEditor("right"),
         kerning: nestedNumberMapToRecord(kerning.value),
       }),
     );
@@ -2613,6 +2996,10 @@ function glyphOutlineMapToRecord(map: Map<string, string>): Record<string, strin
   return out;
 }
 
+function glyphSvgWithComponents(bytes: Uint8Array, glyphBytes: Map<string, Uint8Array>): string {
+  return glifToSvgWithComponents(bytes, glyphXmlMapJson(glyphBytes)) || glifToSvg(bytes);
+}
+
 async function loadGlifFiles(
   files: File[],
   fileHandles: Map<string, FileSystemFileHandle> = new Map(),
@@ -2624,6 +3011,7 @@ async function loadGlifFiles(
   selectedGlyph.value = "";
   selectedGlyphs.value = new Set();
   selectedCategory.value = "All";
+  hasTextBufferSession.value = false;
   textBuffer.value = [];
   textCursor.value = 0;
   activeTextSortIndex.value = null;
@@ -2829,15 +3217,33 @@ async function buildMasterData(
   const glyphMetadata = new Map<string, GlyphMetadata>();
   const glyphCategories = new Map<string, Category>();
   const glyphMarkColors = new Map<string, string>();
+  const glyphLibKerningGroups = new Map<string, GlyphKerningGroups>();
   for (const item of loaded) {
     if (!item) continue;
-    const { name, unicode, unicodes, markColor, width, contours, bytes, path } = item;
+    const {
+      name,
+      unicode,
+      unicodes,
+      markColor,
+      leftKerningGroup,
+      rightKerningGroup,
+      width,
+      contours,
+      bytes,
+      path,
+    } = item;
     if (!name) continue;
     glyphBytes.set(name, bytes);
     glyphPaths.set(name, path);
     glyphMetadata.set(name, { name, width, contours, unicode, unicodes });
     if (unicode) glyphUnicodes.set(name, unicode);
     if (markColor) glyphMarkColors.set(name, markColor);
+    if (leftKerningGroup || rightKerningGroup) {
+      glyphLibKerningGroups.set(name, {
+        ...(leftKerningGroup ? { left: leftKerningGroup } : {}),
+        ...(rightKerningGroup ? { right: rightKerningGroup } : {}),
+      });
+    }
     const cp = unicode ? parseInt(unicode, 16) : NaN;
     const cat = Number.isFinite(cp)
       ? (glyphCategoryForCodepoint(cp) as Category)
@@ -2872,6 +3278,12 @@ async function buildMasterData(
   const groupsPath = groupsFile ? relPath(groupsFile) : inferGroupsPath(glifs);
   const groupsFileHandle = groupsPath ? (fileHandles.get(groupsPath) ?? null) : null;
   const glyphKerningGroups = buildGlyphKerningGroups(groups);
+  for (const [glyphName, glyphGroups] of glyphLibKerningGroups) {
+    glyphKerningGroups.set(glyphName, {
+      ...(glyphKerningGroups.get(glyphName) ?? {}),
+      ...glyphGroups,
+    });
+  }
   const kerningFile = ufoFiles.find((f) =>
     /\/kerning\.plist$/i.test(relPath(f)),
   );
@@ -3011,14 +3423,17 @@ function activateMaster(name: string) {
       console.warn("setFontInfo failed:", e);
     }
   }
-  // If the editor is showing a glyph that exists in this master,
-  // reload it from the master's bytes.
-  if (currentGlyph.value && canvas.value) {
-    const bytes = data.glyphBytes.get(currentGlyph.value);
+  // If a Text sort is active, it owns the editable glyph when leaving
+  // Text mode and when switching masters, matching xilem's active_sort_name.
+  const glyphToReload = textGlyphNameAt(activeTextSortIndex.value) ?? currentGlyph.value;
+  if (glyphToReload && canvas.value) {
+    const bytes = data.glyphBytes.get(glyphToReload);
     if (bytes) {
       try {
-        editor.setGlyphGlifWithComponents(bytes, glyphXmlMapJson(data.glyphBytes));
-        coordinateQuadrant.value = "cc";
+        editor.setGlyphGlifWithComponentsPreserveHistory(bytes, glyphXmlMapJson(data.glyphBytes));
+        currentGlyph.value = glyphToReload;
+        selectedGlyph.value = glyphToReload;
+        selectedGlyphs.value = new Set([glyphToReload]);
         currentWidth.value = editor.advanceWidth();
         currentContours.value = editor.contourCount();
         refreshSidebearingsFromEditor();
@@ -3165,21 +3580,25 @@ function pasteGridGlyph(): boolean {
       if (!target) continue;
       const bytes = glifWithOutlinesFrom(source, target);
       const info = parseGlyphInfo(bytes);
-      data.glyphBytes.set(name, bytes);
-      data.glyphMetadata.set(name, {
+      const metadata = {
         name,
         width: info.width,
         contours: info.contours,
         unicode: info.unicode,
         unicodes: info.unicodes,
-      });
+      };
+      data.glyphBytes.set(name, bytes);
+      data.glyphMetadata.set(name, metadata);
       if (info.unicode) {
         data.glyphUnicodes.set(name, info.unicode);
       } else {
         data.glyphUnicodes.delete(name);
       }
-      const svg = glifToSvgWithComponents(bytes, glyphXmlMapJson(data.glyphBytes)) || glifToSvg(bytes);
+      const svg = glyphSvgWithComponents(bytes, data.glyphBytes);
       if (svg) data.glyphSvgs.set(name, svg);
+      if (hasTextBufferSession.value) {
+        syncTextSortsForGlyph(name, name, metadata);
+      }
       markGlyphDirty(name);
       if (name === currentGlyph.value && editor) {
         editor.setGlyphGlifWithComponents(bytes, glyphXmlMapJson(data.glyphBytes));
@@ -3192,6 +3611,10 @@ function pasteGridGlyph(): boolean {
       }
     }
     masterDataMap.value = new Map(masterDataMap.value);
+    if (hasTextBufferSession.value) {
+      syncTextKerningModelToEditor();
+      bumpTextPreviewRevision();
+    }
     status.value = `pasted outlines into ${targets.length} glyph${targets.length === 1 ? "" : "s"}`;
     queueComfyStateSync(true);
     return true;
@@ -3244,15 +3667,23 @@ function handleGridKeyDown(e: KeyboardEvent): boolean {
   return false;
 }
 
-function loadGlyphIntoEditor(name: string, options: { fitCanvas?: boolean } = {}) {
+function loadGlyphIntoEditor(
+  name: string,
+  options: { fitCanvas?: boolean; seedTextBuffer?: boolean; preserveHistory?: boolean } = {},
+) {
   if (!editor || !canvas.value) return;
   const data = activeMasterData.value;
   if (!data) return;
   const bytes = data.glyphBytes.get(name);
   if (!bytes) return;
   try {
-    editor.setGlyphGlifWithComponents(bytes, glyphXmlMapJson(data.glyphBytes));
-    coordinateQuadrant.value = "cc";
+    const glyphXmlByName = glyphXmlMapJson(data.glyphBytes);
+    if (options.preserveHistory) {
+      editor.setGlyphGlifWithComponentsPreserveHistory(bytes, glyphXmlByName);
+    } else {
+      editor.setGlyphGlifWithComponents(bytes, glyphXmlByName);
+      coordinateQuadrant.value = "cc";
+    }
     refreshSelectionState();
     viewMode.value = "editor";
     currentGlyph.value = name;
@@ -3261,6 +3692,10 @@ function loadGlyphIntoEditor(name: string, options: { fitCanvas?: boolean } = {}
     currentWidth.value = editor.advanceWidth();
     currentContours.value = editor.contourCount();
     refreshSidebearingsFromEditor();
+    if (options.seedTextBuffer !== false) {
+      syncTextKerningModelToEditor();
+      seedTextBufferWithGlyph(name);
+    }
     updateCompatibilityErrors();
     void importMatchingGlyphImage(name);
     if (options.fitCanvas) {
@@ -3284,7 +3719,11 @@ function loadGlyphIntoEditor(name: string, options: { fitCanvas?: boolean } = {}
 function loadActiveTextSortGlyphIntoEditor() {
   const glyphName = textGlyphNameAt(activeTextSortIndex.value);
   if (glyphName) {
-    loadGlyphIntoEditor(glyphName, { fitCanvas: false });
+    loadGlyphIntoEditor(glyphName, {
+      fitCanvas: false,
+      seedTextBuffer: false,
+      preserveHistory: true,
+    });
   }
 }
 
@@ -3322,7 +3761,7 @@ function setMarkOnSelected(rgba: string) {
       try {
         const bytes = glifWithMarkColor(originalBytes, rgba);
         data.glyphBytes.set(name, bytes);
-        const svg = glifToSvg(bytes);
+        const svg = glyphSvgWithComponents(bytes, data.glyphBytes);
         if (svg) data.glyphSvgs.set(name, svg);
       } catch (e) {
         console.warn("serializing mark color failed:", e);
@@ -3415,8 +3854,13 @@ function syncEditorMutationAfterWasmChange(): boolean {
 function applyEditorHistoryChange(change: () => boolean): boolean {
   if (!editor || !currentGlyph.value) return false;
   if (!change()) return false;
-  syncCurrentGlyphBytesFromEditor();
-  markGlyphDirty(currentGlyph.value);
+  if (activeTool.value === "Text" || hasTextBufferSession.value) {
+    refreshTextStateFromEditor();
+  }
+  const glyphChanged = syncCurrentGlyphBytesFromEditor({ skipUnchanged: true });
+  if (glyphChanged) {
+    markGlyphDirty(currentGlyph.value);
+  }
   updateCompatibilityErrors();
   refreshSelectionState();
   currentContours.value = editor.contourCount();
@@ -4062,7 +4506,17 @@ async function persistKerningData(data: MasterData, masterName = activeMasterNam
   );
 }
 
-function syncCurrentGlyphBytesFromEditor(): boolean {
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function syncCurrentGlyphBytesFromEditor(
+  options: { skipUnchanged?: boolean } = {},
+): boolean {
   if (!editor || !currentGlyph.value) return false;
   const data = activeMasterData.value;
   const originalBytes = data?.glyphBytes.get(currentGlyph.value);
@@ -4071,29 +4525,36 @@ function syncCurrentGlyphBytesFromEditor(): boolean {
   try {
     const markColor = data.glyphMarkColors.get(currentGlyph.value) ?? "";
     const bytes = editor.currentGlyphGlif(originalBytes, markColor);
+    if (options.skipUnchanged && bytesEqual(bytes, originalBytes)) {
+      return false;
+    }
     const info = parseGlyphInfo(bytes);
-    data.glyphBytes.set(currentGlyph.value, bytes);
-    data.glyphMetadata.set(currentGlyph.value, {
+    const metadata = {
       name: currentGlyph.value,
       width: info.width,
       contours: info.contours,
       unicode: info.unicode,
       unicodes: info.unicodes,
-    });
+    };
+    data.glyphBytes.set(currentGlyph.value, bytes);
+    data.glyphMetadata.set(currentGlyph.value, metadata);
+    setGlyphKerningGroupsFromInfo(data, currentGlyph.value, info);
     if (info.unicode) {
       data.glyphUnicodes.set(currentGlyph.value, info.unicode);
     } else {
       data.glyphUnicodes.delete(currentGlyph.value);
     }
-    const svg = glifToSvg(bytes);
+    const svg = glyphSvgWithComponents(bytes, data.glyphBytes);
     if (svg) data.glyphSvgs.set(currentGlyph.value, svg);
     currentWidth.value = info.width;
     currentContours.value = info.contours;
     refreshSidebearingsFromEditor();
     masterDataMap.value = new Map(masterDataMap.value);
     updateCompatibilityErrors();
-    if (textBuffer.value.length > 0) {
+    if (hasTextBufferSession.value) {
+      syncCurrentTextSorts(metadata);
       syncTextKerningModelToEditor();
+      bumpTextPreviewRevision();
     }
     queueComfyStateSync();
     return true;
@@ -4418,7 +4879,9 @@ function onKeyDown(e: KeyboardEvent) {
     return;
   }
 
-  // Esc returns to the grid view from the editor.
+  // Esc returns to the grid view from the editor, except in active Text mode.
+  // Xilem keeps Text editing active here; Enter is the close-editor key
+  // outside Text mode, while Enter inserts line breaks inside Text mode.
   if (e.key === "Escape" && (backgroundImageContextMenu.value || contourContextMenu.value)) {
     e.preventDefault();
     dismissBackgroundImageContextMenu();
@@ -4427,6 +4890,9 @@ function onKeyDown(e: KeyboardEvent) {
   }
   if (e.key === "Escape" && viewMode.value === "editor") {
     e.preventDefault();
+    if (textModeActive.value) {
+      return;
+    }
     backToGrid();
     return;
   }
@@ -4444,18 +4910,13 @@ function onKeyDown(e: KeyboardEvent) {
       requestRender();
     }
   }
-  if (handleTextToolKey(e)) {
-    e.preventDefault();
-    return;
-  }
-
-  if (e.key === "Enter" && activeTool.value !== "Text") {
+  if (e.key === "Enter" && !textModeActive.value) {
     e.preventDefault();
     backToGrid();
     return;
   }
 
-  if (e.key === "Tab" && activeTool.value !== "Text") {
+  if (e.key === "Tab" && !textModeActive.value) {
     e.preventDefault();
     editorPanelsVisible.value = !editorPanelsVisible.value;
     return;
@@ -4472,7 +4933,7 @@ function onKeyDown(e: KeyboardEvent) {
   if (
     e.key === " " &&
     !e.repeat &&
-    activeTool.value !== "Text" &&
+    !textModeActive.value &&
     temporaryPreviewReturnTool.value === null
   ) {
     e.preventDefault();
@@ -4483,60 +4944,28 @@ function onKeyDown(e: KeyboardEvent) {
     return;
   }
 
-  if (activeTool.value !== "Text") {
-    const nudge =
-      e.key === "ArrowLeft"
-        ? [-1, 0]
-        : e.key === "ArrowRight"
-          ? [1, 0]
-          : e.key === "ArrowUp"
-            ? [0, 1]
-            : e.key === "ArrowDown"
-              ? [0, -1]
-              : null;
-    if (nudge && nudgeSelectedBackgroundImage(nudge[0], nudge[1])) {
-      e.preventDefault();
-      return;
-    }
-    if (
-      nudge &&
-      selectionCount.value > 0 &&
-      applyEditorMutation(() =>
-        editor.nudgeSelection(nudge[0], nudge[1], e.shiftKey, meta, e.altKey),
-      )
-    ) {
-      e.preventDefault();
-      return;
-    }
-  }
-
   if (meta && e.key.toLowerCase() === "z") {
     e.preventDefault();
     applyEditorHistoryChange(() => (e.shiftKey ? editor.redo() : editor.undo()));
-  } else if (meta && !e.shiftKey && e.key.toLowerCase() === "y") {
-    e.preventDefault();
-    applyEditorHistoryChange(() => editor.redo());
   } else if (meta && !e.shiftKey && e.key.toLowerCase() === "i") {
     e.preventDefault();
     backgroundImageInput.value?.click();
   } else if (
     meta &&
     !e.shiftKey &&
-    e.key.toLowerCase() === "l" &&
-    activeTool.value !== "Text"
+    e.key.toLowerCase() === "l"
   ) {
     if (toggleBackgroundImageLock()) {
       e.preventDefault();
     }
-  } else if (meta && e.key.toLowerCase() === "t" && activeTool.value !== "Text") {
+  } else if (meta && e.key.toLowerCase() === "t") {
     if (reportUnavailableBackgroundTrace("local", e.shiftKey)) {
       e.preventDefault();
     }
   } else if (
     meta &&
     e.shiftKey &&
-    e.key.toLowerCase() === "y" &&
-    activeTool.value !== "Text"
+    e.key.toLowerCase() === "y"
   ) {
     if (reportUnavailableBackgroundTrace("quiver", false)) {
       e.preventDefault();
@@ -4555,8 +4984,7 @@ function onKeyDown(e: KeyboardEvent) {
   } else if (
     meta &&
     e.shiftKey &&
-    e.key.toLowerCase() === "h" &&
-    activeTool.value !== "Text"
+    e.key.toLowerCase() === "h"
   ) {
     if (applyEditorMutation(() => editor.convertHyperToCubic())) {
       e.preventDefault();
@@ -4565,7 +4993,7 @@ function onKeyDown(e: KeyboardEvent) {
     meta &&
     e.shiftKey &&
     e.key.toLowerCase() === "r" &&
-    activeTool.value !== "Text"
+    !textModeActive.value
   ) {
     if (applyEditorMutation(() => editor.rotateSelectionClockwise())) {
       e.preventDefault();
@@ -4574,7 +5002,7 @@ function onKeyDown(e: KeyboardEvent) {
     meta &&
     e.shiftKey &&
     e.key.toLowerCase() === "l" &&
-    activeTool.value !== "Text"
+    !textModeActive.value
   ) {
     if (applyEditorMutation(() => editor.rotateSelectionCounterClockwise())) {
       e.preventDefault();
@@ -4582,7 +5010,7 @@ function onKeyDown(e: KeyboardEvent) {
   } else if (
     meta &&
     e.key.toLowerCase() === "d" &&
-    activeTool.value !== "Text"
+    !textModeActive.value
   ) {
     const duplicate = e.shiftKey
       ? () => editor.duplicateRepeatSelection()
@@ -4594,36 +5022,42 @@ function onKeyDown(e: KeyboardEvent) {
     meta &&
     e.shiftKey &&
     e.key.toLowerCase() === "o" &&
-    activeTool.value !== "Text"
+    !textModeActive.value
   ) {
     if (applyEditorMutation(() => editor.unionSelection())) {
       e.preventDefault();
     }
   } else if (meta && handleZoomShortcut(e.key)) {
     e.preventDefault();
-  } else if (e.key === "Backspace" || e.key === "Delete") {
+  } else if ((e.key === "Backspace" || e.key === "Delete") && !textModeActive.value) {
     if (deleteSelectedBackgroundImage()) {
       e.preventDefault();
     } else if (selectionCount.value > 0 && applySelectionEdit("delete")) {
       e.preventDefault();
     }
-  } else if (!meta && !e.shiftKey && e.key.toLowerCase() === "t" && selectionCount.value > 0) {
+  } else if (
+    !meta &&
+    !e.shiftKey &&
+    e.key.toLowerCase() === "t" &&
+    !textModeActive.value &&
+    selectionCount.value > 0
+  ) {
     if (applySelectionEdit("toggle-point")) {
       e.preventDefault();
     }
-  } else if (!meta && e.shiftKey && e.key.toLowerCase() === "h" && activeTool.value !== "Text") {
+  } else if (!meta && e.shiftKey && e.key.toLowerCase() === "h" && !textModeActive.value) {
     if (applyEditorMutation(() => editor.flipSelectionHorizontal())) {
       e.preventDefault();
     }
-  } else if (!meta && e.shiftKey && e.key.toLowerCase() === "v" && activeTool.value !== "Text") {
+  } else if (!meta && e.shiftKey && e.key.toLowerCase() === "v" && !textModeActive.value) {
     if (applyEditorMutation(() => editor.flipSelectionVertical())) {
       e.preventDefault();
     }
-  } else if (!meta && !e.shiftKey && e.key.toLowerCase() === "r" && activeTool.value !== "Text") {
+  } else if (!meta && !e.shiftKey && e.key.toLowerCase() === "r" && !textModeActive.value) {
     if (applyEditorMutation(() => editor.reverseContours())) {
       e.preventDefault();
     }
-  } else if (!meta && !e.shiftKey) {
+  } else if (!meta && !e.shiftKey && !textModeActive.value) {
     const key = e.key.toLowerCase();
     const tool =
       key === "v"
@@ -4634,12 +5068,41 @@ function onKeyDown(e: KeyboardEvent) {
             ? "HyperPen"
             : key === "k"
               ? "Knife"
-              : key === "t"
-                ? "Text"
-                : null;
+              : null;
     if (tool) {
       e.preventDefault();
       onToolSelect(tool);
+    }
+  }
+
+  if (handleTextToolKey(e)) {
+    e.preventDefault();
+    return;
+  }
+
+  const nudge =
+    e.key === "ArrowLeft"
+      ? [-1, 0]
+      : e.key === "ArrowRight"
+        ? [1, 0]
+        : e.key === "ArrowUp"
+          ? [0, 1]
+          : e.key === "ArrowDown"
+            ? [0, -1]
+            : null;
+  if (nudge) {
+    if (nudgeSelectedBackgroundImage(nudge[0], nudge[1])) {
+      e.preventDefault();
+      return;
+    }
+    if (
+      selectionCount.value > 0 &&
+      applyEditorMutation(() =>
+        editor.nudgeSelection(nudge[0], nudge[1], e.shiftKey, meta, e.altKey),
+      )
+    ) {
+      e.preventDefault();
+      return;
     }
   }
 }
@@ -4658,7 +5121,7 @@ function onKeyUp(e: KeyboardEvent) {
     }
     return;
   }
-  if (activeTool.value === "Text") {
+  if (textModeActive.value) {
     return;
   }
   if (e.key !== " ") return;
@@ -4681,6 +5144,8 @@ onBeforeUnmount(() => {
     clipboardNoticeTimer = null;
   }
   resizeObserver?.disconnect();
+  themeObserver?.disconnect();
+  stopBottomPreviewResize();
   clearBackgroundImage();
   window.removeEventListener("keydown", onKeyDown);
   window.removeEventListener("keyup", onKeyUp);
@@ -4694,7 +5159,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="runebender-host" :style="chromeStyle">
+  <div class="runebender-host" :class="{ 'is-editor-mode': viewMode === 'editor' }">
     <input
       ref="backgroundImageInput"
       class="hidden-file-input"
@@ -4749,14 +5214,19 @@ onBeforeUnmount(() => {
       <!-- Stage = canvas + grid stacked on the same area. Canvas
            stays in the DOM (visibility-hidden in grid mode) so the
            WebGPU surface stays bound. -->
-      <div class="stage">
+      <div
+        ref="stage"
+        class="stage"
+        :class="{ 'editor-bottom-preview-visible': editorBottomPreviewVisible }"
+        :style="editorBottomPreviewStyle"
+      >
         <canvas
           ref="canvas"
           class="runebender-canvas"
           :class="{
             'drag-hover': dragHover,
             'is-hidden': viewMode !== 'editor' && glyphNames.length > 0,
-            'text-buffer-visible': viewMode === 'editor' && activeTool === 'Text',
+            'text-buffer-visible': viewMode === 'editor' && textBufferPreviewVisible,
           }"
           @pointerdown="onPointerDown"
           @pointermove="onPointerMove"
@@ -4966,13 +5436,12 @@ onBeforeUnmount(() => {
         <div
           v-if="viewMode === 'editor' && editorPanelsVisible && currentGlyph && activeTool !== 'Text'"
           class="glyph-preview-overlay"
-          :style="activeGlyphPreviewStyle"
           aria-label="Active glyph preview"
         >
           <span
-            v-if="activeGlyphSvg"
+            v-if="activeGlyphPreviewSvg"
             class="glyph-preview-shape"
-            v-html="activeGlyphSvg"
+            v-html="activeGlyphPreviewSvg"
           />
         </div>
 
@@ -4982,80 +5451,113 @@ onBeforeUnmount(() => {
           :class="{ 'text-mode': activeTool === 'Text' }"
           aria-label="Active glyph metrics"
         >
-          <div class="active-glyph-row top">
-            <input
-              type="text"
-              :value="currentGlyph"
-              aria-label="Glyph name"
-              @change="onActiveGlyphNameChange"
-              @keydown.enter.prevent="onActiveGlyphNameChange"
-            />
-            <input
-              type="text"
-              :value="activeGlyphUnicode ?? ''"
-              aria-label="Unicode"
-              @change="onActiveGlyphUnicodeChange"
-              @keydown.enter.prevent="onActiveGlyphUnicodeChange"
-            />
+          <div class="active-glyph-header">
+            <label class="metric-field glyph-name-field">
+              <span>Name</span>
+              <input
+                type="text"
+                :value="currentGlyph"
+                aria-label="Glyph name"
+                @change="onActiveGlyphNameChange"
+                @keydown.enter.prevent="onActiveGlyphNameChange"
+              />
+            </label>
+            <label class="metric-field width-field">
+              <span>Width</span>
+              <input
+                type="number"
+                :value="Math.round(currentWidth)"
+                aria-label="Advance width"
+                @change="onActiveGlyphWidthChange"
+                @keydown.enter.prevent="onActiveGlyphWidthChange"
+              />
+            </label>
+            <label class="metric-field unicode-field">
+              <span>Unicode</span>
+              <input
+                type="text"
+                :value="activeGlyphUnicode ?? ''"
+                aria-label="Unicode"
+                placeholder="None"
+                @change="onActiveGlyphUnicodeChange"
+                @keydown.enter.prevent="onActiveGlyphUnicodeChange"
+              />
+            </label>
           </div>
-          <div class="active-glyph-row kern-sidebearings">
-            <input
-              type="number"
-              :value="activeLeftKern ?? ''"
-              aria-label="Left kern"
-              placeholder="Kern"
-              :disabled="activeTool !== 'Text' || !canEditActiveLeftKern"
-              @change="updateActiveTextKern('left', ($event.target as HTMLInputElement).value)"
-              @keydown.enter.prevent="updateActiveTextKern('left', ($event.target as HTMLInputElement).value)"
-            />
-            <input
-              type="number"
-              :value="Math.round(currentLeftSidebearing)"
-              aria-label="Left sidebearing"
-              @change="onActiveGlyphSidebearingChange('left', $event)"
-              @keydown.enter.prevent="onActiveGlyphSidebearingChange('left', $event)"
-            />
-            <input
-              type="number"
-              :value="Math.round(currentRightSidebearing)"
-              aria-label="Right sidebearing"
-              @change="onActiveGlyphSidebearingChange('right', $event)"
-              @keydown.enter.prevent="onActiveGlyphSidebearingChange('right', $event)"
-            />
-            <input
-              type="number"
-              :value="activeRightKern ?? ''"
-              aria-label="Right kern"
-              placeholder="Kern"
-              :disabled="activeTool !== 'Text' || !canEditActiveRightKern"
-              @change="updateActiveTextKern('right', ($event.target as HTMLInputElement).value)"
-              @keydown.enter.prevent="updateActiveTextKern('right', ($event.target as HTMLInputElement).value)"
-            />
+
+          <div class="metrics-strip">
+            <label class="metric-field group-field">
+              <span>Left Group</span>
+              <input
+                type="text"
+                :value="activeGlyphKerningGroups?.left ?? ''"
+                aria-label="Left kerning group"
+                placeholder="None"
+                @change="updateGlyphKerningGroup('left', ($event.target as HTMLInputElement).value)"
+                @keydown.enter.prevent="updateGlyphKerningGroup('left', ($event.target as HTMLInputElement).value)"
+              />
+            </label>
+            <label class="metric-field metric-compact">
+              <span>LSB</span>
+              <input
+                type="number"
+                :value="Math.round(currentLeftSidebearing)"
+                aria-label="Left sidebearing"
+                @change="onActiveGlyphSidebearingChange('left', $event)"
+                @keydown.enter.prevent="onActiveGlyphSidebearingChange('left', $event)"
+              />
+            </label>
+            <label class="metric-field metric-compact">
+              <span>RSB</span>
+              <input
+                type="number"
+                :value="Math.round(currentRightSidebearing)"
+                aria-label="Right sidebearing"
+                @change="onActiveGlyphSidebearingChange('right', $event)"
+                @keydown.enter.prevent="onActiveGlyphSidebearingChange('right', $event)"
+              />
+            </label>
+            <label class="metric-field group-field">
+              <span>Right Group</span>
+              <input
+                type="text"
+                :value="activeGlyphKerningGroups?.right ?? ''"
+                aria-label="Right kerning group"
+                placeholder="None"
+                @change="updateGlyphKerningGroup('right', ($event.target as HTMLInputElement).value)"
+                @keydown.enter.prevent="updateGlyphKerningGroup('right', ($event.target as HTMLInputElement).value)"
+              />
+            </label>
           </div>
-          <div class="active-glyph-row metrics">
-            <input
-              type="text"
-              :value="displayKerningGroup(activeGlyphKerningGroups?.left, 'public.kern1.')"
-              aria-label="Left kerning group"
-              placeholder="Group"
-              @change="updateGlyphKerningGroup('left', ($event.target as HTMLInputElement).value)"
-              @keydown.enter.prevent="updateGlyphKerningGroup('left', ($event.target as HTMLInputElement).value)"
-            />
-            <input
-              type="number"
-              :value="Math.round(currentWidth)"
-              aria-label="Advance width"
-              @change="onActiveGlyphWidthChange"
-              @keydown.enter.prevent="onActiveGlyphWidthChange"
-            />
-            <input
-              type="text"
-              :value="displayKerningGroup(activeGlyphKerningGroups?.right, 'public.kern2.')"
-              aria-label="Right kerning group"
-              placeholder="Group"
-              @change="updateGlyphKerningGroup('right', ($event.target as HTMLInputElement).value)"
-              @keydown.enter.prevent="updateGlyphKerningGroup('right', ($event.target as HTMLInputElement).value)"
-            />
+
+          <div
+            v-if="activeTool === 'Text' && activeTextSortIndex !== null"
+            class="kern-strip"
+          >
+            <label class="metric-field">
+              <span>Left Kern</span>
+              <input
+                type="number"
+                :value="activeLeftKern ?? ''"
+                aria-label="Left kern"
+                placeholder="Auto"
+                :disabled="!canEditActiveLeftKern"
+                @change="updateActiveTextKern('left', ($event.target as HTMLInputElement).value)"
+                @keydown.enter.prevent="updateActiveTextKern('left', ($event.target as HTMLInputElement).value)"
+              />
+            </label>
+            <label class="metric-field">
+              <span>Right Kern</span>
+              <input
+                type="number"
+                :value="activeRightKern ?? ''"
+                aria-label="Right kern"
+                placeholder="Auto"
+                :disabled="!canEditActiveRightKern"
+                @change="updateActiveTextKern('right', ($event.target as HTMLInputElement).value)"
+                @keydown.enter.prevent="updateActiveTextKern('right', ($event.target as HTMLInputElement).value)"
+              />
+            </label>
           </div>
         </div>
 
@@ -5105,53 +5607,37 @@ onBeforeUnmount(() => {
         </div>
 
         <div
-          v-if="viewMode === 'editor' && activeTool === 'Text'"
-          class="text-buffer-panel"
-          dir="ltr"
-          @click.self="setTextCursor(textBuffer.length)"
+          v-if="editorBottomPreviewVisible"
+          class="editor-bottom-preview-panel"
+          :aria-label="textBufferPreviewVisible ? 'Text preview' : 'Active glyph filled preview'"
         >
           <div
-            class="text-layout-surface"
-            :style="{
-              width: `${textPreviewWidth}px`,
-              height: `${textPreviewHeight}px`,
-            }"
+            class="editor-bottom-preview-resizer"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize active glyph preview"
+            @pointerdown="onBottomPreviewResizePointerDown"
+            @pointermove="onBottomPreviewResizePointerMove"
+            @pointerup="onBottomPreviewResizePointerUp"
+            @pointercancel="onBottomPreviewResizePointerUp"
+            @mousedown="onBottomPreviewResizeMouseDown"
+          />
+          <div
+            v-if="textBufferPreviewVisible"
+            class="text-preview-surface"
+            aria-hidden="true"
           >
-            <span
-              class="text-cursor"
-              :style="textCursorStyle()"
-              role="presentation"
+            <div
+              v-if="textBufferPreviewSvg"
+              class="text-preview-glyphs"
+              v-html="textBufferPreviewSvg"
             />
-            <button
-              v-for="item in textLayoutItems"
-              :key="`sort-${item.index}-${item.sort.glyphName}`"
-              type="button"
-              class="text-sort"
-              :class="{
-                active: item.sort.glyphName === currentGlyph,
-                selected: item.index === activeTextSortIndex,
-              }"
-              :style="textLayoutItemStyle(item)"
-              :title="item.sort.glyphName"
-              :aria-label="item.sort.glyphName"
-              :aria-pressed="item.index === activeTextSortIndex"
-              @click.stop="activateTextSort(item.index)"
-              @dblclick.stop="openTextSort(item.sort)"
-            >
-              <span
-                v-if="glyphSvgs.get(item.sort.glyphName)"
-                class="text-sort-glyph"
-                v-html="glyphSvgs.get(item.sort.glyphName)"
-              />
-              <span v-else class="text-sort-fallback">{{ item.sort.char }}</span>
-            </button>
-            <span
-              v-if="!textLayoutItems.length"
-              class="text-empty"
-            >
-              Text
-            </span>
           </div>
+          <span
+            v-else
+            class="editor-bottom-preview-glyph"
+            v-html="activeGlyphPreviewSvg"
+          />
         </div>
       </div>
 
@@ -5230,6 +5716,30 @@ onBeforeUnmount(() => {
   --rb-mark-selected-ring:         var(--rb-accent);
   --rb-background-image-selection: var(--rb-accent);
 
+  /* Canvas theme bridge. Vue resolves these variables and passes the
+   * resulting RGBA values into the Rust renderer, keeping the WebGPU
+   * scene aligned with the surrounding ComfyUI chrome. */
+  --rb-canvas-background:         var(--rb-app-background);
+  --rb-canvas-path-stroke:        var(--content-fg, #c0c0c0);
+  --rb-canvas-selection:          #ffaa33;
+  --rb-canvas-component:          #6699cc;
+  --rb-canvas-component-selected: #88bbff;
+  --rb-canvas-point-smooth-inner: #181818;
+  --rb-canvas-point-smooth-outer: #4088ff;
+  --rb-canvas-point-corner-inner: #181818;
+  --rb-canvas-point-corner-outer: var(--rb-accent);
+  --rb-canvas-point-offcurve-inner: #181818;
+  --rb-canvas-point-offcurve-outer: #cc66ff;
+  --rb-canvas-point-hyper-inner: #181818;
+  --rb-canvas-point-hyper-outer: #ff66cc;
+  --rb-canvas-start-node:         #ffaa33;
+  --rb-canvas-text-cursor:        #ffaa33;
+  --rb-canvas-kern-active:        #00ffcc;
+  --rb-canvas-kern-previous:      #ffaa33;
+  --rb-canvas-text-preview-fill:  #808080;
+  --rb-editor-edge-inset:         8px;
+  --rb-editor-bottom-preview-height: clamp(112px, 15%, 180px);
+
   width: 100%;
   height: 100%;
   background: var(--rb-app-background);
@@ -5238,12 +5748,11 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 6px;
   box-sizing: border-box;
+}
 
-  /* Firefox slim track-less scrollbars (inherited by all descendants).
-   * WebKit equivalent is the ::-webkit-scrollbar block at the bottom
-   * of this stylesheet. */
-  scrollbar-width: thin;
-  scrollbar-color: var(--rb-panel-outline, #606060) transparent;
+.runebender-host.is-editor-mode {
+  padding: 0;
+  gap: 0;
 }
 
 .hidden-file-input {
@@ -5363,14 +5872,20 @@ onBeforeUnmount(() => {
 
 .coordinate-overlay {
   position: absolute;
-  right: 12px;
-  bottom: 12px;
+  right: var(--rb-editor-edge-inset, 8px);
+  bottom: var(--rb-editor-edge-inset, 8px);
   z-index: 3;
+}
+
+.stage.editor-bottom-preview-visible .coordinate-overlay,
+.stage.editor-bottom-preview-visible .glyph-preview-overlay,
+.stage.editor-bottom-preview-visible .active-glyph-overlay {
+  bottom: calc(var(--rb-editor-bottom-preview-height) + var(--rb-editor-edge-inset, 8px));
 }
 
 .transform-overlay {
   position: absolute;
-  right: 12px;
+  right: var(--rb-editor-edge-inset, 8px);
   top: 50%;
   transform: translateY(-50%);
   z-index: 3;
@@ -5378,8 +5893,8 @@ onBeforeUnmount(() => {
 
 .editor-tools-overlay {
   position: absolute;
-  left: 12px;
-  top: 12px;
+  left: var(--rb-editor-edge-inset, 8px);
+  top: var(--rb-editor-edge-inset, 8px);
   z-index: 4;
   display: flex;
   flex-direction: column;
@@ -5390,8 +5905,8 @@ onBeforeUnmount(() => {
 
 .workspace-overlay {
   position: absolute;
-  right: 12px;
-  top: 12px;
+  right: var(--rb-editor-edge-inset, 8px);
+  top: var(--rb-editor-edge-inset, 8px);
   z-index: 4;
   display: flex;
   gap: 6px;
@@ -5525,8 +6040,8 @@ onBeforeUnmount(() => {
 
 .compat-badge {
   position: absolute;
-  left: 12px;
-  top: 12px;
+  left: var(--rb-editor-edge-inset, 8px);
+  top: var(--rb-editor-edge-inset, 8px);
   z-index: 5;
   width: min(360px, calc(100% - 24px));
   max-height: 160px;
@@ -5556,8 +6071,7 @@ onBeforeUnmount(() => {
 .active-glyph-overlay {
   position: absolute;
   z-index: 3;
-  bottom: 12px;
-  height: 140px;
+  bottom: var(--rb-editor-edge-inset, 8px);
   box-sizing: border-box;
   background: var(--rb-panel-background, #1c1c1c);
   border: 1.5px solid var(--rb-panel-outline, #606060);
@@ -5566,9 +6080,10 @@ onBeforeUnmount(() => {
 }
 
 .glyph-preview-overlay {
-  left: 12px;
-  width: 140px;
-  padding: 14px;
+  left: var(--rb-editor-edge-inset, 8px);
+  width: 235px;
+  height: 140px;
+  padding: 18px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -5586,61 +6101,139 @@ onBeforeUnmount(() => {
   justify-content: center;
 }
 .glyph-preview-shape :deep(svg) {
-  width: 100%;
-  height: 100%;
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
 }
 
 .active-glyph-overlay {
   left: 50%;
-  width: 488px;
-  padding: 12px;
+  width: min(560px, calc(100% - 32px));
+  padding: 8px;
   transform: translateX(-50%);
   display: grid;
-  align-content: center;
-  gap: 8px;
+  gap: 6px;
 }
 .active-glyph-overlay.text-mode {
-  bottom: calc(max(96px, 15%) + 18px);
+  bottom: calc(var(--rb-editor-bottom-preview-height) + 18px);
 }
 
-.active-glyph-row {
+.active-glyph-header,
+.metrics-strip,
+.kern-strip {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
-.active-glyph-row.top {
-  grid-template-columns: 346px 110px;
+
+.active-glyph-header {
+  grid-template-columns: minmax(220px, 1.6fr) 118px minmax(132px, 1fr);
 }
-.active-glyph-row.kern-sidebearings {
-  grid-template-columns: repeat(4, 110px);
+
+.metrics-strip {
+  grid-template-columns: minmax(118px, 1fr) 86px 86px minmax(118px, 1fr);
 }
-.active-glyph-row.metrics {
-  grid-template-columns: 149px 150px 149px;
+
+.kern-strip {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
-.active-glyph-row output,
-.active-glyph-row input {
-  height: 30px;
+
+.metric-field {
   box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px;
   background: var(--rb-app-background, #101010);
   border: 1.5px solid var(--rb-panel-outline, #606060);
   border-radius: 6px;
-  color: var(--rb-primary-text, #909090);
-  font: 12px ui-monospace, monospace;
-  text-align: center;
 }
-.active-glyph-row input {
+
+.metric-field span {
+  color: var(--rb-muted-text, #808080);
+  font: 10px ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.metric-field input {
   appearance: textfield;
+  box-sizing: border-box;
   width: 100%;
+  height: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  color: var(--rb-primary-text, #909090);
+  font: 13px ui-monospace, monospace;
+  text-align: right;
+  outline: none;
 }
-.active-glyph-row input:disabled {
-  color: var(--rb-panel-outline, #606060);
-  border-color: var(--rb-control-background, #303030);
+
+.metric-field input::-webkit-outer-spin-button,
+.metric-field input::-webkit-inner-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+.metric-compact {
+  grid-template-columns: 32px minmax(0, 1fr);
+}
+
+.group-field {
+  grid-template-columns: 70px minmax(0, 1fr);
+}
+
+.glyph-name-field input {
+  color: var(--rb-accent, #66ee88);
+  font-weight: 700;
+}
+
+.glyph-name-field {
+  grid-template-columns: 48px minmax(0, 1fr);
+}
+
+.unicode-field input {
+  text-align: right;
+  font-size: 12px;
+}
+
+.width-field {
+  grid-template-columns: 44px minmax(0, 1fr);
+}
+
+.metric-field:focus-within {
+  border-color: var(--rb-accent, #66ee88);
+}
+
+.metric-field input::placeholder {
+  color: var(--rb-subdued-text, #505050);
+}
+
+.group-field input {
+  color: var(--rb-secondary-text, #707070);
+}
+
+.group-field input:placeholder-shown {
+  color: var(--rb-subdued-text, #505050);
+}
+
+.metric-field input:disabled {
+  color: var(--rb-subdued-text, #505050);
+  opacity: 1;
 }
 .measure-overlay {
   position: absolute;
@@ -5679,87 +6272,93 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
-.text-buffer-panel {
+.editor-bottom-preview-panel {
   position: absolute;
-  z-index: 4;
+  z-index: 2;
   left: 0;
   right: 0;
   bottom: 0;
-  height: max(96px, 15%);
-  max-height: 180px;
-  overflow-x: auto;
-  overflow-y: auto;
-  padding: 8px;
-  background: var(--rb-panel-background, #1c1c1c);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 0;
+  height: var(--rb-editor-bottom-preview-height);
   box-sizing: border-box;
-}
-
-.text-layout-surface {
-  position: relative;
-  min-width: 100%;
-  min-height: 70px;
-}
-
-.text-sort {
-  appearance: none;
-  position: absolute;
-  min-width: 28px;
-  max-width: 118px;
-  height: 70px;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 0;
-  color: var(--rb-primary-text, #909090);
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-  cursor: pointer;
-}
-.text-sort:hover,
-.text-sort.active,
-.text-sort.selected {
-  color: var(--rb-accent, #66ee88);
-}
-.text-sort.selected {
-  box-shadow: inset 0 -2px 0 var(--rb-accent, #66ee88);
+  overflow: hidden;
+  background: var(--rb-panel-background, #1c1c1c);
+  pointer-events: auto;
 }
 
-.text-sort-glyph {
+.editor-bottom-preview-resizer {
+  position: absolute;
+  z-index: 1;
+  left: 0;
+  right: 0;
+  top: -6px;
+  height: 14px;
+  cursor: ns-resize;
+  pointer-events: auto;
+}
+
+.editor-bottom-preview-resizer::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 6px;
+  height: 1.5px;
+  background: var(--rb-panel-outline, #606060);
+}
+
+.editor-bottom-preview-resizer:hover::after {
+  background: var(--rb-accent, #66ee88);
+}
+
+.editor-bottom-preview-glyph {
   width: 100%;
   height: 100%;
+  color: #ffdd33;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.editor-bottom-preview-glyph :deep(svg) {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: min(520px, 80%);
+  max-height: 100%;
+}
+
+.text-preview-surface {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.text-preview-glyphs {
+  width: 100%;
+  height: 100%;
+  color: #ffdd33;
   display: flex;
   align-items: center;
   justify-content: center;
 }
-.text-sort-glyph :deep(svg) {
+.text-preview-glyphs :deep(svg) {
   width: 100%;
   height: 100%;
+  display: block;
 }
-
-.text-sort-fallback {
-  font: 32px ui-serif, Georgia, serif;
-  line-height: 1;
-}
-
-.text-cursor {
-  position: absolute;
-  width: 2px;
-  height: 70px;
-  background: var(--rb-accent, #66ee88);
-  border-radius: 2px;
-  pointer-events: none;
-}
-
-.text-empty {
-  position: absolute;
-  left: 10px;
-  bottom: 10px;
-  color: var(--rb-panel-outline, #606060);
-  font: 12px ui-monospace, monospace;
-  pointer-events: none;
+.text-preview-glyphs :deep(path) {
+  fill: currentColor !important;
+  stroke: none !important;
 }
 
 .runebender-canvas {
@@ -5772,8 +6371,8 @@ onBeforeUnmount(() => {
   touch-action: none;
 }
 .runebender-canvas.text-buffer-visible {
-  bottom: max(96px, 15%);
-  height: auto;
+  bottom: var(--rb-editor-bottom-preview-height);
+  height: calc(100% - var(--rb-editor-bottom-preview-height));
 }
 .runebender-canvas.is-hidden {
   visibility: hidden;
@@ -5790,9 +6389,10 @@ onBeforeUnmount(() => {
   position: absolute;
   inset: 0;
   overflow-y: auto;
+  box-sizing: border-box;
   display: grid;
-  grid-auto-rows: 192px;
   gap: 6px;
+  scroll-snap-type: y mandatory;
   background: var(--rb-app-background, #101010);
 }
 
@@ -5802,34 +6402,37 @@ onBeforeUnmount(() => {
  * the glyph grid and the designspace panel. Strip the track, narrow
  * the bar, and color the thumb from the palette. :deep() so the rule
  * reaches scroll areas inside child components (sidebars, panels) too.
- * Firefox uses the inherited scrollbar-width / scrollbar-color set on
- * the host below. */
+ * Firefox uses the inherited scrollbar-width / scrollbar-color in the
+ * Firefox-only feature query below. */
 .runebender-host :deep(::-webkit-scrollbar) {
-  width: 12px;
-  height: 12px;
+  width: 6px;
+  height: 6px;
 }
 .runebender-host :deep(::-webkit-scrollbar-track) {
   background: transparent;
 }
 .runebender-host :deep(::-webkit-scrollbar-thumb) {
-  /* Transparent border + padding-box clip insets the visible thumb
-   * equally on all sides within the 12px track, so it reads as a
-   * slim 6px pill with symmetric 3px margins. With the stage↔sidebar
-   * flex gap removed (see .content), this track is the only gutter
-   * between the grid and the sidebar, so those 3px margins are the
-   * actual visual margins on both sides of the thumb. */
+  /* Reserve exactly one BENTO_GAP for the scrollbar, then inset the
+   * visible thumb so it does not touch either neighboring panel edge. */
   background: var(--rb-panel-outline, #606060);
   border-radius: 999px;
-  border: 3px solid transparent;
+  border: 1.5px solid transparent;
   background-clip: padding-box;
   min-height: 32px;
 }
 .runebender-host :deep(::-webkit-scrollbar-thumb:hover) {
   background: var(--rb-primary-text, #909090);
-  border: 3px solid transparent;
+  border: 1.5px solid transparent;
   background-clip: padding-box;
 }
 .runebender-host :deep(::-webkit-scrollbar-corner) {
   background: transparent;
+}
+
+@supports (-moz-appearance: none) {
+  .runebender-host {
+    scrollbar-width: thin;
+    scrollbar-color: var(--rb-panel-outline, #606060) transparent;
+  }
 }
 </style>

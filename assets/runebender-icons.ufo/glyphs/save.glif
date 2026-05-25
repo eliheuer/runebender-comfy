@@ -1,0 +1,35 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<glyph name="save" format="2">
+  <advance width="24"/>
+  <outline>
+    <contour>
+      <point x="5.0" y="-3.0" type="line"/>
+      <point x="17.0" y="-3.0" type="line"/>
+      <point x="19.0" y="-5.0" type="line"/>
+      <point x="19.0" y="-21.0" type="line"/>
+      <point x="5.0" y="-21.0" type="line"/>
+    </contour>
+    <contour>
+      <point x="8.0" y="-3.0" type="move"/>
+      <point x="8.0" y="-9.0" type="line"/>
+      <point x="16.0" y="-9.0" type="line"/>
+      <point x="16.0" y="-3.0" type="line"/>
+    </contour>
+    <contour>
+      <point x="8.0" y="-21.0" type="move"/>
+      <point x="8.0" y="-14.0" type="line"/>
+      <point x="16.0" y="-14.0" type="line"/>
+      <point x="16.0" y="-21.0" type="line"/>
+    </contour>
+    <contour>
+      <point x="10.0" y="-6.0" type="move"/>
+      <point x="14.0" y="-6.0" type="line"/>
+    </contour>
+  </outline>
+  <lib>
+    <dict>
+      <key>com.runebender.iconRenderMode</key>
+      <string>stroke</string>
+    </dict>
+  </lib>
+</glyph>

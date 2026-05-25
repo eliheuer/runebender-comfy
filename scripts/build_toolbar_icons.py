@@ -51,20 +51,26 @@ def main() -> None:
 
     font = ufoLib2.Font.open(ufo_path)
 
-    entries: list[tuple[str, str, str]] = []
+    entries: list[tuple[str, str, str, str]] = []
     for glyph in font:
+        mode = glyph.lib.get("com.runebender.iconRenderMode", "fill")
         bounds_pen = BoundsPen(font)
         glyph.draw(TransformPen(bounds_pen, UFO_TO_SVG))
         if bounds_pen.bounds is None:
             continue  # empty glyph, skip
         x_min, y_min, x_max, y_max = bounds_pen.bounds
+        if mode == "stroke":
+            x_min -= 2
+            y_min -= 2
+            x_max += 2
+            y_max += 2
         view_box = (
             f"{_fmt(x_min)} {_fmt(y_min)} "
             f"{_fmt(x_max - x_min)} {_fmt(y_max - y_min)}"
         )
         svg_pen = SVGPathPen(font)
         glyph.draw(TransformPen(svg_pen, UFO_TO_SVG))
-        entries.append((glyph.name, view_box, svg_pen.getCommands()))
+        entries.append((glyph.name, view_box, svg_pen.getCommands(), mode))
 
     entries.sort(key=lambda e: e[0])
 
@@ -79,13 +85,17 @@ def main() -> None:
         "  viewBox: string;",
         "  /** SVG path data for the icon outline. */",
         "  d: string;",
+        '  /** Fill closed outlines, or stroke open/path icons. Defaults to "fill". */',
+        '  mode?: "fill" | "stroke";',
         "}",
         "",
         "/** Icon geometry keyed by UFO glyph name. */",
         "export const TOOLBAR_ICONS: Record<string, ToolbarIcon> = {",
     ]
-    for name, view_box, d in entries:
-        lines.append(f'  {name}: {{ viewBox: "{view_box}", d: "{d}" }},')
+    for name, view_box, d, mode in entries:
+        key = repr(name)
+        mode_text = f', mode: "{mode}"' if mode == "stroke" else ""
+        lines.append(f'  {key}: {{ viewBox: "{view_box}", d: "{d}"{mode_text} }},')
     lines.append("};")
     lines.append("")
 

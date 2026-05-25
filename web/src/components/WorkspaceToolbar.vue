@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import GeneratedIcon from "./GeneratedIcon.vue";
+
 // Editor workspace navigation toolbar. This mirrors
 // runebender-xilem's `components/workspace_toolbar.rs`: a compact
 // floating toolbar with a glyph-grid button that closes the editor.
@@ -17,17 +19,7 @@ const emit = defineEmits<{
       aria-label="Glyph Grid"
       @click="emit('glyph-grid')"
     >
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <rect x="4" y="4" width="4" height="4" rx="0.5" />
-        <rect x="10" y="4" width="4" height="4" rx="0.5" />
-        <rect x="16" y="4" width="4" height="4" rx="0.5" />
-        <rect x="4" y="10" width="4" height="4" rx="0.5" />
-        <rect x="10" y="10" width="4" height="4" rx="0.5" />
-        <rect x="16" y="10" width="4" height="4" rx="0.5" />
-        <rect x="4" y="16" width="4" height="4" rx="0.5" />
-        <rect x="10" y="16" width="4" height="4" rx="0.5" />
-        <rect x="16" y="16" width="4" height="4" rx="0.5" />
-      </svg>
+      <GeneratedIcon name="glyph-grid" />
     </button>
   </div>
 </template>
@@ -66,12 +58,4 @@ const emit = defineEmits<{
   color: var(--rb-accent, #66ee88);
 }
 
-svg {
-  width: 32px;
-  height: 32px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5;
-  stroke-linejoin: round;
-}
 </style>

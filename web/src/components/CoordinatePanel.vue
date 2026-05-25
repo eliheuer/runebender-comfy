@@ -70,46 +70,54 @@ function blurOnEnter(event: KeyboardEvent) {
     </div>
 
     <div class="fields">
-      <input
-        class="coord-input"
-        :value="displayNumber(value?.x)"
-        placeholder="X"
-        aria-label="X"
-        inputmode="decimal"
-        :readonly="selectionCount === 0"
-        @change="commitCoordinate('x', $event)"
-        @keydown.enter="blurOnEnter"
-      />
-      <input
-        class="coord-input"
-        :value="displayNumber(value?.y)"
-        placeholder="Y"
-        aria-label="Y"
-        inputmode="decimal"
-        :readonly="selectionCount === 0"
-        @change="commitCoordinate('y', $event)"
-        @keydown.enter="blurOnEnter"
-      />
-      <input
-        class="coord-input"
-        :value="displayDimension(value?.width)"
-        placeholder="W"
-        aria-label="Width"
-        inputmode="decimal"
-        :readonly="selectionCount <= 1"
-        @change="commitCoordinate('width', $event)"
-        @keydown.enter="blurOnEnter"
-      />
-      <input
-        class="coord-input"
-        :value="displayDimension(value?.height)"
-        placeholder="H"
-        aria-label="Height"
-        inputmode="decimal"
-        :readonly="selectionCount <= 1"
-        @change="commitCoordinate('height', $event)"
-        @keydown.enter="blurOnEnter"
-      />
+      <label class="coord-field">
+        <span>X</span>
+        <input
+          class="coord-input"
+          :value="displayNumber(value?.x)"
+          aria-label="X"
+          inputmode="decimal"
+          :readonly="selectionCount === 0"
+          @change="commitCoordinate('x', $event)"
+          @keydown.enter="blurOnEnter"
+        />
+      </label>
+      <label class="coord-field">
+        <span>Y</span>
+        <input
+          class="coord-input"
+          :value="displayNumber(value?.y)"
+          aria-label="Y"
+          inputmode="decimal"
+          :readonly="selectionCount === 0"
+          @change="commitCoordinate('y', $event)"
+          @keydown.enter="blurOnEnter"
+        />
+      </label>
+      <label class="coord-field">
+        <span>W</span>
+        <input
+          class="coord-input"
+          :value="displayDimension(value?.width)"
+          aria-label="Width"
+          inputmode="decimal"
+          :readonly="selectionCount <= 1"
+          @change="commitCoordinate('width', $event)"
+          @keydown.enter="blurOnEnter"
+        />
+      </label>
+      <label class="coord-field">
+        <span>H</span>
+        <input
+          class="coord-input"
+          :value="displayDimension(value?.height)"
+          aria-label="Height"
+          inputmode="decimal"
+          :readonly="selectionCount <= 1"
+          @change="commitCoordinate('height', $event)"
+          @keydown.enter="blurOnEnter"
+        />
+      </label>
     </div>
   </section>
 </template>
@@ -125,17 +133,17 @@ function blurOnEnter(event: KeyboardEvent) {
  */
 
 .coordinate-panel {
-  width: 240px;
-  height: 140px;
+  width: auto;
+  height: auto;
   box-sizing: border-box;
   background: var(--rb-panel-background, #1c1c1c);
   border: 1.5px solid var(--rb-panel-outline, #606060);
   border-radius: 8px;
-  padding: 8px;
+  padding: 8px 8px 8px 14px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 14px;
   pointer-events: auto;
 }
 
@@ -145,27 +153,50 @@ function blurOnEnter(event: KeyboardEvent) {
    translate, so the 3x3 grid stays even — the previous cell+::after
    scheme pushed the middle column/row off-center. */
 .quadrant-picker {
-  width: 64px;
-  height: 64px;
+  width: 58px;
+  height: 58px;
   box-sizing: border-box;
   position: relative;
-  border: 1px solid var(--rb-primary-text, #909090);
-  background:
-    linear-gradient(var(--rb-primary-text, #909090), var(--rb-primary-text, #909090)) 50% 0 / 1px 100% no-repeat,
-    linear-gradient(var(--rb-primary-text, #909090), var(--rb-primary-text, #909090)) 0 50% / 100% 1px no-repeat;
+  border: 1.5px solid var(--rb-panel-outline, #606060);
+}
+
+.quadrant-picker::before,
+.quadrant-picker::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  background: var(--rb-panel-outline, #606060);
+  pointer-events: none;
+}
+
+.quadrant-picker::before {
+  width: 1.5px;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.quadrant-picker::after {
+  height: 1.5px;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .quadrant-dot {
   appearance: none;
   position: absolute;
-  width: 14px;
-  height: 14px;
+  z-index: 1;
+  width: 12px;
+  height: 12px;
   margin: 0;
   padding: 0;
   transform: translate(-50%, -50%);
   border-radius: 50%;
   background: var(--rb-control-background, #303030);
-  border: 1px solid var(--rb-primary-text, #909090);
+  border: 1.5px solid var(--rb-panel-outline, #606060);
   box-sizing: border-box;
   cursor: pointer;
 }
@@ -200,7 +231,7 @@ function blurOnEnter(event: KeyboardEvent) {
   top: 100%;
 }
 .quadrant-dot.active {
-  background: var(--rb-muted-text, #808080);
+  background: #808080;
 }
 .quadrant-dot:hover {
   border-color: var(--rb-accent, #66ee88);
@@ -208,23 +239,56 @@ function blurOnEnter(event: KeyboardEvent) {
 
 .fields {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 8px;
+  grid-template-columns: repeat(2, 66px);
+  column-gap: 6px;
+  row-gap: 6px;
 }
 
-.coord-input {
-  width: 58px;
-  height: 34px;
+.coord-field {
+  width: 66px;
+  height: 30px;
   box-sizing: border-box;
+  margin: 0;
+  padding: 0 8px;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
   background: var(--rb-app-background, #101010);
   border: 1.5px solid var(--rb-panel-outline, #606060);
   border-radius: 6px;
+}
+.coord-field span {
+  color: var(--rb-muted-text, #808080);
+  font: 10px ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.coord-input {
+  appearance: textfield;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
   color: var(--rb-primary-text, #909090);
-  font: 12px ui-monospace, monospace;
-  text-align: center;
-  padding: 0 4px;
+  font: 13px ui-monospace, monospace;
+  text-align: right;
+  outline: none;
+}
+.coord-input::-webkit-outer-spin-button,
+.coord-input::-webkit-inner-spin-button {
+  appearance: none;
+  margin: 0;
 }
 .coord-input::placeholder {
   color: var(--rb-subdued-text, #505050);
+}
+.coord-field:focus-within {
+  border-color: var(--rb-accent, #66ee88);
 }
 </style>
