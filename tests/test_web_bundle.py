@@ -826,6 +826,55 @@ class WebBundleTests(unittest.TestCase):
         cell_css = cell[start:end]
         self.assertIn("scroll-snap-align: start;", cell_css)
 
+    def test_runebender_vue_uses_host_service_for_comfy_routes(self) -> None:
+        source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
+        self.assertIn('inject(runebenderHostKey, browserHost)', source)
+        self.assertNotIn("comfyHost", source)
+        self.assertNotIn('fetch("/runebender/', source)
+        self.assertNotIn("fetch(`/runebender/", source)
+
+        main = (ROOT / "web" / "src" / "main.ts").read_text(encoding="utf-8")
+        self.assertIn('import { browserHost } from "./hosts/browser/browserHost";', main)
+        self.assertIn(".provide(runebenderHostKey, browserHost)", main)
+
+        extension = (ROOT / "web" / "src" / "extension.ts").read_text(encoding="utf-8")
+        self.assertIn('import { comfyHost } from "./hosts/comfy/comfyHost";', extension)
+        self.assertIn("app.provide(runebenderHostKey, comfyHost);", extension)
+        self.assertNotIn('fetch("/runebender/', extension)
+        self.assertNotIn("`/runebender/", extension)
+
+        host = (
+            ROOT / "web" / "src" / "hosts" / "comfy" / "comfyHost.ts"
+        ).read_text(encoding="utf-8")
+        for route in [
+            "/runebender/log",
+            "/runebender/set_state",
+            "/runebender/workspace/",
+            "/runebender/workspaces",
+            "/runebender/workspace/write",
+            "/runebender/choose_source",
+            "/runebender/link_source",
+            "/runebender/workspace/save_as",
+            "/runebender/workspace/invalidate",
+        ]:
+            self.assertIn(route, host)
+
+        interface = (ROOT / "web" / "src" / "host" / "runebenderHost.ts").read_text(
+            encoding="utf-8",
+        )
+        self.assertIn("export type RunebenderHost", interface)
+        self.assertIn("export const runebenderHostKey", interface)
+        self.assertIn("log?(level: string, message: string)", interface)
+        self.assertIn("publishState(payload: RunebenderStatePayload)", interface)
+        self.assertIn("loadWorkspaceSlot(slot: string)", interface)
+        self.assertIn("listWorkspaceSlots()", interface)
+        self.assertIn("workspacePreviewUrl(slot: string, params: URLSearchParams)", interface)
+        self.assertIn("writeWorkspaceFile(path: string, text: string)", interface)
+        self.assertIn('chooseSource(mode: "file" | "folder")', interface)
+        self.assertIn("linkSource(args:", interface)
+        self.assertIn("saveWorkspaceAs(args:", interface)
+        self.assertIn("invalidateWorkspacePath(path: string)", interface)
+
     def test_custom_node_package_registers_without_optional_preview_stack(self) -> None:
         class _Routes:
             def post(self, _path):

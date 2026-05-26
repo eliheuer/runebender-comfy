@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
 // wasm-pack output lives in ../wasm/ (a normal source directory, not
 // /public/). Vite resolves this as a regular ES module; the shim's
 // internal `new URL('..._bg.wasm', import.meta.url)` then resolves
@@ -44,6 +44,8 @@ import TransformPanel, {
 } from "./components/TransformPanel.vue";
 import WelcomePanel from "./components/WelcomePanel.vue";
 import WorkspaceToolbar from "./components/WorkspaceToolbar.vue";
+import { runebenderHostKey } from "./host/runebenderHost";
+import { browserHost } from "./hosts/browser/browserHost";
 
 const props = defineProps<{
   nodeId?: string;
@@ -55,6 +57,7 @@ const props = defineProps<{
   onCloseRequested?: () => void;
 }>();
 
+const runebenderHost = inject(runebenderHostKey, browserHost);
 const currentFontPath = computed(() => props.fontPathRef?.value ?? "");
 const WELCOME_DEMO_GLIF = `<?xml version="1.0" encoding="UTF-8"?>
 <glyph name="R" format="2">
@@ -1005,13 +1008,10 @@ async function publishComfyState(force = false) {
 
   try {
     props.onGlyphDataChange?.(payload);
-    const body = new FormData();
-    body.append("node_id", props.nodeId);
-    body.append("font", currentFontPath.value);
-    body.append("glyph_data", payload);
-    await fetch("/runebender/set_state", {
-      method: "POST",
-      body,
+    await runebenderHost.publishState({
+      nodeId: props.nodeId,
+      font: currentFontPath.value,
+      glyphData: payload,
     });
     lastPublishedComfyState = stateKey;
   } catch (e) {
@@ -3121,18 +3121,11 @@ function resolveUfoRoot(requested: string, roots: string[]): string | null {
 
 async function loadWorkspaceSlot(slot: string) {
   status.value = `loading workspace ${slot}…`;
-  const res = await fetch(`/runebender/workspace/${encodeURIComponent(slot)}`);
-  if (!res.ok) {
+  const data = await runebenderHost.loadWorkspaceSlot(slot);
+  if (!data) {
     status.value = `failed to load workspace ${slot}`;
     return;
   }
-  const data = (await res.json()) as {
-    slot: string;
-    files: Array<{ path: string; text: string }>;
-    linked_source?: boolean;
-    origin_root?: string;
-    origin_source?: string;
-  };
   const files = data.files.map((entry) => {
     const name = entry.path.split("/").pop() ?? entry.path;
     const file = new File([entry.text], name, { type: "text/plain" });
@@ -3989,13 +3982,7 @@ async function persistGlyphData(data: MasterData, glyphName: string): Promise<bo
 
   const slotPath = data.glyphPaths.get(glyphName);
   if (currentFontPath.value && slotPath) {
-    const body = new FormData();
-    body.append("path", slotPath);
-    body.append("text", new TextDecoder().decode(bytes));
-    const res = await fetch("/runebender/workspace/write", {
-      method: "POST",
-      body,
-    });
+    const res = await runebenderHost.writeWorkspaceFile(slotPath, new TextDecoder().decode(bytes));
     await recordWorkspaceWriteResult(res);
     return res.ok;
   }
@@ -4103,21 +4090,8 @@ async function chooseDestinationFolder(): Promise<string | null> {
     return String(path ?? "").trim() || null;
   }
 
-  const body = new FormData();
-  body.append("mode", "folder");
-  const response = await fetch("/runebender/choose_source", {
-    method: "POST",
-    body,
-  });
-  const data = (await response.json().catch(() => ({}))) as {
-    path?: string;
-    error?: string;
-    cancelled?: boolean;
-  };
+  const data = await runebenderHost.chooseSource("folder");
   if (data.cancelled) return null;
-  if (!response.ok) {
-    throw new Error(data.error || `${response.status} ${response.statusText}`);
-  }
   return String(data.path ?? "").trim() || null;
 }
 
@@ -4274,21 +4248,11 @@ async function onSaveAs() {
     const chosen = await requestSaveAsDestination("");
     if (!chosen) return;
     status.value = "saving workspace copy…";
-    const body = new FormData();
-    body.append("slot", currentFontPath.value);
-    body.append("destination", chosen.destination);
-    body.append("relink", chosen.relink ? "true" : "false");
-    const response = await fetch("/runebender/workspace/save_as", {
-      method: "POST",
-      body,
+    const { response, data } = await runebenderHost.saveWorkspaceAs({
+      slot: currentFontPath.value,
+      destination: chosen.destination,
+      relink: chosen.relink,
     });
-    const data = (await response.json().catch(() => ({}))) as {
-      destination?: string;
-      linked_source?: boolean;
-      origin_root?: string;
-      origin_source?: string;
-      error?: string;
-    };
     if (!response.ok) {
       throw new Error(data.error || `${response.status} ${response.statusText}`);
     }
@@ -4308,14 +4272,7 @@ async function onSaveAs() {
 async function invalidateCompiledWorkspacePath(path: string | null): Promise<void> {
   if (!path || !currentFontPath.value) return;
   try {
-    await fetch("/runebender/workspace/invalidate", {
-      method: "POST",
-      body: (() => {
-        const body = new FormData();
-        body.append("path", path);
-        return body;
-      })(),
-    });
+    await runebenderHost.invalidateWorkspacePath(path);
   } catch (error) {
     console.warn("workspace invalidation failed:", error);
   }
@@ -4382,13 +4339,7 @@ async function persistGroupsData(data: MasterData, masterName = activeMasterName
   const text = serializeGroupsPlist(data.groups);
 
   if (currentFontPath.value && data.groupsPath) {
-    const body = new FormData();
-    body.append("path", data.groupsPath);
-    body.append("text", text);
-    const res = await fetch("/runebender/workspace/write", {
-      method: "POST",
-      body,
-    });
+    const res = await runebenderHost.writeWorkspaceFile(data.groupsPath, text);
     await recordWorkspaceWriteResult(res);
     return res.ok;
   }
@@ -4435,13 +4386,10 @@ async function persistDirtyDesignspace(): Promise<boolean> {
   }
 
   if (currentFontPath.value) {
-    const body = new FormData();
-    body.append("path", designspacePath.value);
-    body.append("text", designspaceText.value);
-    const res = await fetch("/runebender/workspace/write", {
-      method: "POST",
-      body,
-    });
+    const res = await runebenderHost.writeWorkspaceFile(
+      designspacePath.value,
+      designspaceText.value,
+    );
     await recordWorkspaceWriteResult(res);
     if (!res.ok) return false;
     designspaceDirty.value = false;
@@ -4475,13 +4423,7 @@ async function persistKerningData(data: MasterData, masterName = activeMasterNam
   const text = serializeKerningPlist(data.kerning);
 
   if (currentFontPath.value && data.kerningPath) {
-    const body = new FormData();
-    body.append("path", data.kerningPath);
-    body.append("text", text);
-    const res = await fetch("/runebender/workspace/write", {
-      method: "POST",
-      body,
-    });
+    const res = await runebenderHost.writeWorkspaceFile(data.kerningPath, text);
     await recordWorkspaceWriteResult(res);
     return res.ok;
   }

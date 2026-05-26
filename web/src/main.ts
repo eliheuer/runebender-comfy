@@ -4,8 +4,12 @@
 
 import { createApp } from "vue";
 import { readDevTestFontFiles } from "./devTestFont";
+import { runebenderHostKey } from "./host/runebenderHost";
+import { browserHost } from "./hosts/browser/browserHost";
 import Runebender from "./Runebender.vue";
 
 createApp(Runebender, {
   initialFiles: readDevTestFontFiles,
-}).mount("#app");
+})
+  .provide(runebenderHostKey, browserHost)
+  .mount("#app");

@@ -7,12 +7,14 @@
 import { app } from "/scripts/app.js";
 import { createApp, ref } from "vue";
 
+import { runebenderHostKey } from "./host/runebenderHost";
+import { comfyHost } from "./hosts/comfy/comfyHost";
 import Runebender from "./Runebender.vue";
 
 const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-24-sort-dblclick-81";
 
-// Mirror our own console output to the ComfyUI terminal via the
-// /runebender/log backend route. Filters to messages prefixed with
+// Mirror our own console output to the ComfyUI terminal through the
+// injected Comfy host. Filters to messages prefixed with
 // "[runebender" so we don't push unrelated browser noise through.
 // Installed BEFORE the first console.info so the "loaded ..." line
 // shows up in the terminal too.
@@ -41,13 +43,7 @@ function installRunebenderLogMirror() {
       .join(" ");
   const forward = (level: string, args: any[]) => {
     try {
-      const body = new FormData();
-      body.append("level", level);
-      body.append("message", formatArgs(args));
-      // keepalive lets the request survive even if the page is
-      // navigating; void-discard so we don't await network on every
-      // console call.
-      void fetch("/runebender/log", { method: "POST", body, keepalive: true }).catch(() => {});
+      comfyHost.log?.(level, formatArgs(args));
     } catch {}
   };
   for (const level of ["log", "info", "warn", "error"] as const) {
@@ -101,21 +97,8 @@ async function chooseSourcePath(mode: "file" | "folder"): Promise<string | null>
     return String(path ?? "").trim() || null;
   }
 
-  const body = new FormData();
-  body.append("mode", mode);
-  const response = await fetch("/runebender/choose_source", {
-    method: "POST",
-    body,
-  });
-  const data = (await response.json().catch(() => ({}))) as {
-    path?: string;
-    error?: string;
-    cancelled?: boolean;
-  };
+  const data = await comfyHost.chooseSource(mode);
   if (data.cancelled) return null;
-  if (!response.ok) {
-    throw new Error(data.error || `${response.status} ${response.statusText}`);
-  }
   return String(data.path ?? "").trim() || null;
 }
 
@@ -655,6 +638,7 @@ function openRunebenderOverlay(options: {
       onGlyphDataChange: options.onGlyphDataChange,
       onCloseRequested: () => cleanup(),
     });
+    app.provide(runebenderHostKey, comfyHost);
     app.config.errorHandler = (err, _instance, info) => {
       showError(`Vue error (${info})`, err);
     };
@@ -827,7 +811,7 @@ app.registerExtension({
           // Cache-bust so the image refreshes after edits.
           t: String(Date.now()),
         });
-        previewImg.src = `/runebender/workspace/${encodeURIComponent(value)}/preview?${params.toString()}`;
+        previewImg.src = comfyHost.workspacePreviewUrl(value, params);
         console.info("[runebender-comfy] preview request", JSON.stringify({
           value,
           visible: visibleSourceValue(),
@@ -839,11 +823,8 @@ app.registerExtension({
 
       const refreshChoices = async () => {
         try {
-          const response = await fetch("/runebender/workspaces");
-          if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-          const data = (await response.json()) as { slots?: string[] };
           const current = localSourceValue();
-          setWorkspaceChoices(data.slots ?? [], current);
+          setWorkspaceChoices(await comfyHost.listWorkspaceSlots(), current);
           setSourceValue(current || "demo");
           syncPreview();
         } catch (error) {
@@ -854,15 +835,11 @@ app.registerExtension({
       const linkSourcePath = async (initialPath?: string) => {
         const sourcePath = initialPath ?? await requestSourcePath(String(sourceWidget?.value ?? ""));
         if (!sourcePath) return;
-        const body = new FormData();
-        body.append("source_path", sourcePath);
-        body.append("source_kind", String(sourceKindWidget?.value ?? "auto"));
-        body.append("workspace_name", String(workspaceNameWidget?.value ?? ""));
-        const response = await fetch("/runebender/link_source", {
-          method: "POST",
-          body,
+        const { response, data } = await comfyHost.linkSource({
+          sourcePath,
+          sourceKind: String(sourceKindWidget?.value ?? "auto"),
+          workspaceName: String(workspaceNameWidget?.value ?? ""),
         });
-        const data = (await response.json().catch(() => ({}))) as { slot?: string; error?: string };
         if (!response.ok) {
           const routeHint = response.status === 404 || response.status === 405
             ? " The browser has the new Runebender bundle, but ComfyUI has not registered the linked-source backend route. Fully restart ComfyUI, then hard-refresh the browser."
