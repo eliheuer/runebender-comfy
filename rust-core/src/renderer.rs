@@ -223,10 +223,10 @@ const TEXT_CURSOR_LINE_PX: f64 = 1.5;
 const TEXT_CURSOR_TRIANGLE_WIDTH_PX: f64 = 24.0;
 const TEXT_CURSOR_TRIANGLE_HEIGHT_PX: f64 = 16.0;
 const TEXT_METRIC_CROSS_SIZE: f64 = 24.0;
-const DESIGN_GRID_MID_MIN_ZOOM: f64 = 0.8;
+const DESIGN_GRID_MID_MIN_ZOOM: f64 = 2.5;
 const DESIGN_GRID_MID_FINE: f64 = 8.0;
 const DESIGN_GRID_MID_COARSE_N: u32 = 4;
-const DESIGN_GRID_CLOSE_MIN_ZOOM: f64 = 4.0;
+const DESIGN_GRID_CLOSE_MIN_ZOOM: f64 = 12.0;
 const DESIGN_GRID_CLOSE_FINE: f64 = 2.0;
 const DESIGN_GRID_CLOSE_COARSE_N: u32 = 4;
 const DESIGN_GRID_FINE_LINE_PX: f64 = 0.5;
@@ -1032,10 +1032,13 @@ impl Renderer {
         }
     }
 
-    /// Draw xilem's zoom-dependent design-space grid behind the glyph.
+    /// Draw the zoom-dependent design-space grid behind the glyph.
     ///
     /// The mid level shows 8-unit spacing with 32-unit coarse lines;
     /// the close level adds a 2-unit grid with 8-unit coarse lines.
+    /// Comfy shows more surrounding canvas than xilem, so both levels
+    /// intentionally appear later to avoid filling the screen with grid
+    /// lines while the glyph is still small.
     fn draw_design_grid(&mut self, state: &EditorState, view: Affine, origin_x: f64) {
         let zoom = state.viewport.zoom;
         if zoom < DESIGN_GRID_MID_MIN_ZOOM {

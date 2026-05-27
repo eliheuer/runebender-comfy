@@ -21,6 +21,7 @@ from .workspace import (
     export_slot_to_directory,
     export_slot_text_files,
     invalidate_workspace_path,
+    refresh_linked_slot_from_source_if_newer,
     source_info_for_slot,
     write_workspace_text_file_with_result,
 )
@@ -110,6 +111,7 @@ async def get_workspace_slot(request):
         raise web.HTTPBadRequest(reason="slot required")
     if slot == "demo":
         _ensure_demo_workspace_fresh()
+    refreshed_from_source = refresh_linked_slot_from_source_if_newer(slot)
     files = export_slot_text_files(slot)
     source_info = source_info_for_slot(slot)
     return web.json_response({
@@ -118,6 +120,7 @@ async def get_workspace_slot(request):
         "linked_source": source_info.linked,
         "origin_root": str(source_info.origin_root) if source_info.origin_root is not None else "",
         "origin_source": str(source_info.origin_source) if source_info.origin_source is not None else "",
+        "refreshed_from_source": refreshed_from_source,
     })
 
 
@@ -181,8 +184,9 @@ class Runebender:
                     "STRING",
                     {
                         "multiline": False,
-                        "default": "demo",
-                        "tooltip": "Use 'demo' for the bundled sample font, or enter an absolute path to a .designspace, .ufo, .glyphs, or .glyphspackage source. Ignored when a FONT wire is connected.",
+                        "default": "",
+                        "placeholder": "/path/to/font.designspace",
+                        "tooltip": "Use 'demo' for the bundled sample font, or enter a .designspace/.ufo path to open a disk source for editing and save-back. Ignored when a FONT wire is connected.",
                     },
                 ),
             },

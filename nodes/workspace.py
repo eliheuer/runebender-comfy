@@ -113,6 +113,24 @@ def list_slots() -> list[str]:
     return slots
 
 
+def source_display_label(slot: str) -> str:
+    source_info = source_info_for_slot(slot)
+    if source_info.origin_source is not None:
+        return source_info.origin_source.name
+    return _clean_slot_name(slot)
+
+
+def list_workspace_choices() -> list[dict[str, str]]:
+    return [
+        {
+            "slot": slot,
+            "label": source_display_label(slot),
+            "origin_source": str(source_info_for_slot(slot).origin_source or ""),
+        }
+        for slot in list_slots()
+    ]
+
+
 def slot_from_name(slot: str) -> WorkspaceSlot | None:
     ensure_workspace()
     slot_dir = _slot_dir(slot)
@@ -154,6 +172,71 @@ def source_info_for_slot(slot: str) -> WorkspaceSourceInfo:
     )
 
 
+def refresh_linked_slot_from_source_if_newer(slot: str) -> bool:
+    """Refresh a linked workspace cache when its disk source changed.
+
+    Linked workspaces are editable caches of real UFO/designspace
+    sources. Saving from Runebender mirrors changes back to disk, but
+    external editors can change the same source while ComfyUI is
+    closed. This detects that case and rebuilds the cache from disk on
+    the next editor open.
+    """
+    ensure_workspace()
+    clean_slot = _clean_slot_name(slot)
+    slot_dir = _slot_dir(clean_slot)
+    manifest = _read_manifest(slot_dir)
+    if manifest.get("origin_mode") != "linked":
+        return False
+    origin_source_raw = manifest.get("origin_source", "")
+    if not origin_source_raw:
+        return False
+    origin_source = Path(origin_source_raw).expanduser().resolve()
+    if not origin_source.exists():
+        return False
+    try:
+        current_snapshot = _linked_source_snapshot_mtime_ns(origin_source)
+    except OSError:
+        return False
+    try:
+        cached_snapshot = int(manifest.get("origin_snapshot_mtime_ns", "0") or "0")
+    except ValueError:
+        cached_snapshot = 0
+    if current_snapshot <= cached_snapshot:
+        return False
+
+    source_kind = manifest.get("origin_kind") or manifest.get("source_kind") or "ufo/designspace"
+    create_slot_from_path(
+        str(origin_source),
+        slot_name=clean_slot,
+        source_kind=source_kind,
+        linked=True,
+    )
+    return True
+
+
+def _linked_slot_for_source(src: Path) -> str | None:
+    ensure_workspace()
+    source = src.expanduser().resolve()
+    if not FONTS_DIR.exists():
+        return None
+    for entry in sorted(FONTS_DIR.iterdir()):
+        if not entry.is_dir():
+            continue
+        manifest = _read_manifest(entry)
+        if manifest.get("origin_mode") != "linked":
+            continue
+        origin_source_raw = manifest.get("origin_source", "")
+        if not origin_source_raw:
+            continue
+        try:
+            origin_source = Path(origin_source_raw).expanduser().resolve()
+        except OSError:
+            continue
+        if origin_source == source:
+            return entry.name
+    return None
+
+
 def create_slot_from_path(
     source_path: str,
     slot_name: str | None = None,
@@ -171,7 +254,9 @@ def create_slot_from_path(
     if linked and source_kind != "ufo/designspace":
         raise ValueError("linked save-back is currently supported only for .designspace and .ufo sources")
 
-    slot = _clean_slot_name((slot_name or "").strip() or make_slot_name(src.name))
+    requested_slot = (slot_name or "").strip()
+    reusable_slot = _linked_slot_for_source(src) if linked and not requested_slot else None
+    slot = _clean_slot_name(requested_slot or reusable_slot or make_slot_name(src.name))
     dest = _slot_dir(slot)
     if dest.exists():
         shutil.rmtree(dest)
@@ -200,6 +285,7 @@ def create_slot_from_path(
             "origin_kind": source_kind,
             "origin_root": str(origin_root),
             "origin_source": str(src),
+            "origin_snapshot_mtime_ns": str(_linked_source_snapshot_mtime_ns(src)),
         })
     _write_manifest(dest, manifest)
 
@@ -535,6 +621,45 @@ def _origin_root_for_source(src: Path) -> Path:
     return src.resolve().parent
 
 
+def _linked_source_snapshot_mtime_ns(src: Path) -> int:
+    src = src.expanduser().resolve()
+    if not src.exists():
+        return 0
+    snapshot = _tree_mtime_ns(src)
+    if src.suffix.lower() != ".designspace":
+        return snapshot
+
+    try:
+        root = ET.parse(src).getroot()
+    except ET.ParseError:
+        return snapshot
+    for source in root.findall(".//source"):
+        filename = (
+            source.get("filename")
+            or source.get("path")
+            or source.findtext("filename")
+            or ""
+        ).strip()
+        if not filename:
+            continue
+        source_path = (src.parent / Path(filename)).resolve()
+        if source_path.exists():
+            snapshot = max(snapshot, _tree_mtime_ns(source_path))
+    return snapshot
+
+
+def _tree_mtime_ns(path: Path) -> int:
+    if path.is_file():
+        return path.stat().st_mtime_ns
+    newest = path.stat().st_mtime_ns
+    for entry in path.rglob("*"):
+        try:
+            newest = max(newest, entry.stat().st_mtime_ns)
+        except OSError:
+            continue
+    return newest
+
+
 def _mirror_linked_source_write(target: Path, text: str) -> Path | None:
     fonts_root = FONTS_DIR.resolve()
     try:
@@ -570,6 +695,12 @@ def _mirror_linked_source_write(target: Path, text: str) -> Path | None:
     source_target.parent.mkdir(parents=True, exist_ok=True)
     text = _normalize_text_for_existing_file(source_target, text)
     source_target.write_text(text, encoding="utf-8")
+    origin_source_raw = manifest.get("origin_source", "")
+    if origin_source_raw:
+        origin_source = Path(origin_source_raw).expanduser().resolve()
+        if origin_source.exists():
+            manifest["origin_snapshot_mtime_ns"] = str(_linked_source_snapshot_mtime_ns(origin_source))
+            _write_manifest(slot_dir, manifest)
     return source_target
 
 

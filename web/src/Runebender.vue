@@ -52,6 +52,7 @@ const props = defineProps<{
   fontPathRef?: { value: string };
   initialFiles?: () => Promise<File[]>;
   onGlyphDataChange?: (value: string) => void;
+  onWorkspaceSaved?: () => void;
   // Host-provided callback. When set (e.g. ComfyUI embedded mode), the
   // editor shows a Close button next to Save and invokes this on click.
   onCloseRequested?: () => void;
@@ -1765,7 +1766,12 @@ function onActiveGlyphUnicodeChange(event: Event) {
       data.glyphUnicodes.delete(currentGlyph.value);
       data.glyphCategories.set(currentGlyph.value, "Other");
     }
-    const svg = glyphSvgWithComponents(bytes, data.glyphBytes);
+    const svg = gridGlyphSvgWithComponents(
+      currentGlyph.value,
+      bytes,
+      data.glyphBytes,
+      data.unitsPerEm,
+    );
     if (svg) data.glyphSvgs.set(currentGlyph.value, svg);
     masterDataMap.value = new Map(masterDataMap.value);
     if (input) input.value = info.unicode ?? "";
@@ -1860,6 +1866,29 @@ function syncCurrentTextSorts(metadata: GlyphMetadata) {
   }
 }
 
+function syncTextSortMetricsToActiveMaster(): boolean {
+  if (!editor || !hasTextBufferSession.value) return false;
+  let changed = false;
+  for (let index = 0; index < textBuffer.value.length; index++) {
+    const sort = textBuffer.value[index];
+    if (sort.kind !== "glyph") continue;
+    const metadata = glyphMetadataMap.value.get(sort.glyphName);
+    if (!metadata) continue;
+    const codepoint = metadata.unicode ? parseInt(metadata.unicode, 16) : sort.codepoint;
+    changed =
+      editor.updateTextGlyph(
+        index,
+        sort.glyphName,
+        Number.isFinite(codepoint) ? codepoint : 0,
+        metadata.width,
+      ) || changed;
+  }
+  if (changed) {
+    refreshTextStateFromEditor();
+  }
+  return changed;
+}
+
 function onActiveGlyphNameChange(event: Event) {
   if (!editor || !currentGlyph.value) return;
   const input = event.target as HTMLInputElement | null;
@@ -1916,7 +1945,7 @@ function onActiveGlyphNameChange(event: Event) {
     data.glyphMarkColors.delete(oldName);
     if (markColor) data.glyphMarkColors.set(newName, markColor);
     data.glyphSvgs.delete(oldName);
-    const svg = glyphSvgWithComponents(bytes, data.glyphBytes);
+    const svg = gridGlyphSvgWithComponents(newName, bytes, data.glyphBytes, data.unitsPerEm);
     if (svg) data.glyphSvgs.set(newName, svg);
 
     replaceGlyphNameInGroups(data.groups, oldName, newName);
@@ -2996,7 +3025,22 @@ function glyphOutlineMapToRecord(map: Map<string, string>): Record<string, strin
   return out;
 }
 
-function glyphSvgWithComponents(bytes: Uint8Array, glyphBytes: Map<string, Uint8Array>): string {
+function gridGlyphSvgWithComponents(
+  name: string,
+  bytes: Uint8Array,
+  glyphBytes: Map<string, Uint8Array>,
+  unitsPerEm: number,
+): string {
+  // Grid thumbnails must use the same em-based viewBox on load and after
+  // edits. The single-glyph SVG helper fits to ink bounds, which makes edited
+  // glyphs visibly resize relative to untouched glyphs.
+  try {
+    const out = glifMapToSvgs(glyphXmlMapJson(glyphBytes), unitsPerEm);
+    const parsed = JSON.parse(out) as Record<string, string>;
+    if (parsed[name]) return parsed[name];
+  } catch (err) {
+    console.warn("[runebender] edited glyph grid SVG refresh failed", err);
+  }
   return glifToSvgWithComponents(bytes, glyphXmlMapJson(glyphBytes)) || glifToSvg(bytes);
 }
 
@@ -3142,8 +3186,11 @@ async function loadWorkspaceSlot(slot: string) {
 
   fontLabel.value = slot;
   sourceSaveLabel.value = data.linked_source
-    ? `Linked ${data.origin_source || data.origin_root || "source"}`
+    ? `Editing ${data.origin_source || data.origin_root || "source"}`
     : "Managed copy (workspace cache)";
+  if (data.refreshed_from_source) {
+    status.value = "reloaded source changes from disk";
+  }
 }
 
 async function loadSingleUfo(
@@ -3418,6 +3465,7 @@ function activateMaster(name: string) {
   }
   // If a Text sort is active, it owns the editable glyph when leaving
   // Text mode and when switching masters, matching xilem's active_sort_name.
+  syncTextSortMetricsToActiveMaster();
   const glyphToReload = textGlyphNameAt(activeTextSortIndex.value) ?? currentGlyph.value;
   if (glyphToReload && canvas.value) {
     const bytes = data.glyphBytes.get(glyphToReload);
@@ -3587,7 +3635,7 @@ function pasteGridGlyph(): boolean {
       } else {
         data.glyphUnicodes.delete(name);
       }
-      const svg = glyphSvgWithComponents(bytes, data.glyphBytes);
+      const svg = gridGlyphSvgWithComponents(name, bytes, data.glyphBytes, data.unitsPerEm);
       if (svg) data.glyphSvgs.set(name, svg);
       if (hasTextBufferSession.value) {
         syncTextSortsForGlyph(name, name, metadata);
@@ -3754,7 +3802,7 @@ function setMarkOnSelected(rgba: string) {
       try {
         const bytes = glifWithMarkColor(originalBytes, rgba);
         data.glyphBytes.set(name, bytes);
-        const svg = glyphSvgWithComponents(bytes, data.glyphBytes);
+        const svg = gridGlyphSvgWithComponents(name, bytes, data.glyphBytes, data.unitsPerEm);
         if (svg) data.glyphSvgs.set(name, svg);
       } catch (e) {
         console.warn("serializing mark color failed:", e);
@@ -3968,6 +4016,7 @@ async function onSave(): Promise<boolean> {
       status.value = `save incomplete${suffix}`;
     }
     queueComfyStateSync(true);
+    props.onWorkspaceSaved?.();
     return unsavedGroups.length === 0 && unsavedKerning.length === 0 && designspaceSaved;
   } catch (e) {
     console.warn("save failed:", e);
@@ -4150,7 +4199,7 @@ function requestSaveAsDestination(defaultValue: string): Promise<SaveAsDestinati
     const relink = document.createElement("input");
     relink.type = "checkbox";
     relink.checked = true;
-    relinkRow.append(relink, document.createTextNode("Use this folder as the linked source after saving"));
+    relinkRow.append(relink, document.createTextNode("Save future edits back to this folder"));
 
     const pickerActions = document.createElement("div");
     pickerActions.style.display = "flex";
@@ -4257,11 +4306,11 @@ async function onSaveAs() {
       throw new Error(data.error || `${response.status} ${response.statusText}`);
     }
     sourceSaveLabel.value = data.linked_source
-      ? `Linked ${data.origin_source || data.origin_root || "source"}`
+      ? `Editing ${data.origin_source || data.origin_root || "source"}`
       : `Exported ${data.destination || chosen.destination}`;
     lastSavedDisplay.value = formatLastSavedDisplay();
     status.value = data.linked_source
-      ? `saved as linked source at ${data.destination || chosen.destination}`
+      ? `saved as editable source at ${data.destination || chosen.destination}`
       : `saved copy to ${data.destination || chosen.destination}`;
   } catch (error) {
     console.warn("save as failed:", error);
@@ -4486,7 +4535,12 @@ function syncCurrentGlyphBytesFromEditor(
     } else {
       data.glyphUnicodes.delete(currentGlyph.value);
     }
-    const svg = glyphSvgWithComponents(bytes, data.glyphBytes);
+    const svg = gridGlyphSvgWithComponents(
+      currentGlyph.value,
+      bytes,
+      data.glyphBytes,
+      data.unitsPerEm,
+    );
     if (svg) data.glyphSvgs.set(currentGlyph.value, svg);
     currentWidth.value = info.width;
     currentContours.value = info.contours;
@@ -5650,7 +5704,7 @@ onBeforeUnmount(() => {
   --rb-glyph-preview:      var(--fg-color, #a0a0a0);
 
   /* Accents / state */
-  --rb-accent:                     var(--p-primary-color, #66ee88);
+  --rb-accent:                     #66ee88;
   --rb-warning:                    #ffdd33;
   --rb-danger:                     var(--p-red-500, #f43f5e);
   --rb-danger-text:                var(--p-button-text-danger-color, #ffe0e0);

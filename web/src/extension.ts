@@ -7,7 +7,7 @@
 import { app } from "/scripts/app.js";
 import { createApp, ref } from "vue";
 
-import { runebenderHostKey } from "./host/runebenderHost";
+import { runebenderHostKey, type WorkspaceChoice } from "./host/runebenderHost";
 import { comfyHost } from "./hosts/comfy/comfyHost";
 import Runebender from "./Runebender.vue";
 
@@ -91,19 +91,22 @@ function looksLikeFontSourcePath(value: string): boolean {
   );
 }
 
-async function chooseSourcePath(mode: "file" | "folder"): Promise<string | null> {
-  if (mode === "folder" && typeof window.electronAPI?.showDirectoryPicker === "function") {
+async function chooseSourcePath(): Promise<string | null> {
+  if (typeof window.electronAPI?.showDirectoryPicker === "function") {
     const path = await window.electronAPI.showDirectoryPicker();
     return String(path ?? "").trim() || null;
   }
 
-  const data = await comfyHost.chooseSource(mode);
+  const data = await comfyHost.chooseSource();
   if (data.cancelled) return null;
   return String(data.path ?? "").trim() || null;
 }
 
 function requestSourcePath(defaultValue: string): Promise<string | null> {
   return new Promise((resolve) => {
+    const initialValue = ["demo", "ufo/designspace"].includes(defaultValue.trim().toLowerCase())
+      ? ""
+      : defaultValue;
     const backdrop = document.createElement("div");
     backdrop.style.position = "fixed";
     backdrop.style.inset = "0";
@@ -123,20 +126,20 @@ function requestSourcePath(defaultValue: string): Promise<string | null> {
     panel.style.font = "13px system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
 
     const title = document.createElement("div");
-    title.textContent = "Link source path";
+    title.textContent = "Open font source";
     title.style.fontSize = "16px";
     title.style.fontWeight = "700";
     title.style.marginBottom = "8px";
 
     const help = document.createElement("div");
-    help.textContent = "Enter a .designspace, .ufo, or folder path. Saves will mirror supported edits back to this source.";
+    help.textContent = "Choose the font source you want Runebender to edit. Saves are written back to this source.";
     help.style.color = "#b8bcc2";
     help.style.marginBottom = "12px";
 
     const input = document.createElement("input");
     input.type = "text";
-    input.value = defaultValue;
-    input.placeholder = "/path/to/font/VirtuaGrotesk.designspace";
+    input.value = initialValue;
+    input.placeholder = "/path/to/font.designspace";
     input.style.boxSizing = "border-box";
     input.style.width = "100%";
     input.style.padding = "10px 12px";
@@ -153,25 +156,16 @@ function requestSourcePath(defaultValue: string): Promise<string | null> {
     pickerActions.style.gap = "8px";
     pickerActions.style.marginTop = "10px";
 
-    const filePicker = document.createElement("button");
-    filePicker.type = "button";
-    filePicker.textContent = "Choose File...";
-    filePicker.style.padding = "8px 12px";
-    filePicker.style.border = "1px solid rgba(255, 255, 255, 0.18)";
-    filePicker.style.borderRadius = "8px";
-    filePicker.style.background = "#2a2d31";
-    filePicker.style.color = "#f1f3f4";
+    const sourcePicker = document.createElement("button");
+    sourcePicker.type = "button";
+    sourcePicker.textContent = "Choose Source...";
+    sourcePicker.style.padding = "8px 12px";
+    sourcePicker.style.border = "1px solid rgba(255, 255, 255, 0.18)";
+    sourcePicker.style.borderRadius = "8px";
+    sourcePicker.style.background = "#2a2d31";
+    sourcePicker.style.color = "#f1f3f4";
 
-    const folderPicker = document.createElement("button");
-    folderPicker.type = "button";
-    folderPicker.textContent = "Choose Folder...";
-    folderPicker.style.padding = "8px 12px";
-    folderPicker.style.border = "1px solid rgba(255, 255, 255, 0.18)";
-    folderPicker.style.borderRadius = "8px";
-    folderPicker.style.background = "#2a2d31";
-    folderPicker.style.color = "#f1f3f4";
-
-    pickerActions.append(filePicker, folderPicker);
+    pickerActions.append(sourcePicker);
 
     const actions = document.createElement("div");
     actions.style.display = "flex";
@@ -190,7 +184,7 @@ function requestSourcePath(defaultValue: string): Promise<string | null> {
 
     const submit = document.createElement("button");
     submit.type = "submit";
-    submit.textContent = "Link";
+    submit.textContent = "Open for Editing";
     submit.style.padding = "8px 14px";
     submit.style.border = "1px solid #66ee88";
     submit.style.borderRadius = "8px";
@@ -212,26 +206,21 @@ function requestSourcePath(defaultValue: string): Promise<string | null> {
     backdrop.addEventListener("click", (event) => {
       if (event.target === backdrop) close(null);
     });
-    const browse = async (mode: "file" | "folder") => {
-      filePicker.disabled = true;
-      folderPicker.disabled = true;
+    const browse = async () => {
+      sourcePicker.disabled = true;
       try {
-        const path = await chooseSourcePath(mode);
+        const path = await chooseSourcePath();
         if (path) input.value = path;
       } catch (error) {
         alert(`Runebender source picker failed: ${error}`);
         console.error("[runebender-comfy] source picker failed:", error);
       } finally {
-        filePicker.disabled = false;
-        folderPicker.disabled = false;
+        sourcePicker.disabled = false;
         input.focus();
       }
     };
-    filePicker.addEventListener("click", () => {
-      void browse("file");
-    });
-    folderPicker.addEventListener("click", () => {
-      void browse("folder");
+    sourcePicker.addEventListener("click", () => {
+      void browse();
     });
     panel.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -456,6 +445,24 @@ function closeActiveOverlay() {
   activeOverlay.cleanup();
 }
 
+const RUNEBENDER_OVERLAY_CLASS = "runebender-overlay-open";
+const RUNEBENDER_OVERLAY_STYLE_ID = "runebender-comfy-overlay-chrome-style";
+
+function ensureRunebenderOverlayChromeStyle() {
+  if (document.getElementById(RUNEBENDER_OVERLAY_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = RUNEBENDER_OVERLAY_STYLE_ID;
+  style.textContent = `
+body.${RUNEBENDER_OVERLAY_CLASS} #graph-canvas-container .ml-1.flex.flex-col.gap-1.pt-1,
+body.${RUNEBENDER_OVERLAY_CLASS} #graph-canvas-container .graph-canvas-panel > *,
+body.${RUNEBENDER_OVERLAY_CLASS} #graph-canvas-container .selection-toolbox {
+  display: none !important;
+  pointer-events: none !important;
+}
+`;
+  document.head.appendChild(style);
+}
+
 // Measure ComfyUI's persistent chrome (top tabs, left/right rails) so the
 // editor overlay can sit inside it rather than covering it. Falls back to
 // conservative defaults if the selectors change in a future ComfyUI build.
@@ -513,10 +520,13 @@ function openRunebenderOverlay(options: {
   nodeId: string;
   fontPathRef: { value: string };
   onGlyphDataChange: (value: string) => void;
+  onWorkspaceSaved?: () => void;
 }) {
   closeActiveOverlay();
 
   const insets = measureComfyChromeInsets();
+  ensureRunebenderOverlayChromeStyle();
+  document.body.classList.add(RUNEBENDER_OVERLAY_CLASS);
 
   const root = document.createElement("div");
   root.setAttribute("data-runebender-overlay", options.nodeId);
@@ -526,7 +536,9 @@ function openRunebenderOverlay(options: {
     `left:${insets.left}px`,
     `right:${insets.right}px`,
     `bottom:${insets.bottom}px`,
-    "z-index:9999",
+    // Stay above the graph canvas, but below ComfyUI's global side-panel
+    // flyouts and theme menus.
+    "z-index:20",
     "display:block",
     "padding:0",
     "margin:0",
@@ -627,6 +639,14 @@ function openRunebenderOverlay(options: {
   window.addEventListener("error", onWindowError);
   window.addEventListener("unhandledrejection", onUnhandledRejection);
 
+  const onDocumentPointerDown = (event: PointerEvent) => {
+    const target = event.target as Element | null;
+    if (!target?.closest(".workflow-tabs-container")) return;
+    console.info("[runebender-comfy] closing editor for workflow tab switch");
+    cleanup();
+  };
+  document.addEventListener("pointerdown", onDocumentPointerDown, true);
+
   // Forward-declared so the Vue app can call it via onCloseRequested.
   let cleanup: () => void = () => {};
 
@@ -636,6 +656,7 @@ function openRunebenderOverlay(options: {
       nodeId: options.nodeId,
       fontPathRef: options.fontPathRef,
       onGlyphDataChange: options.onGlyphDataChange,
+      onWorkspaceSaved: options.onWorkspaceSaved,
       onCloseRequested: () => cleanup(),
     });
     app.provide(runebenderHostKey, comfyHost);
@@ -653,6 +674,7 @@ function openRunebenderOverlay(options: {
   cleanup = () => {
     window.removeEventListener("error", onWindowError);
     window.removeEventListener("unhandledrejection", onUnhandledRejection);
+    document.removeEventListener("pointerdown", onDocumentPointerDown, true);
     document.removeEventListener("keydown", onKeyDown, true);
     try {
       app?.unmount();
@@ -660,6 +682,7 @@ function openRunebenderOverlay(options: {
       console.warn("[runebender-comfy] unmount threw:", err);
     }
     root.remove();
+    document.body.classList.remove(RUNEBENDER_OVERLAY_CLASS);
     if (activeOverlay?.root === root) {
       activeOverlay = null;
     }
@@ -709,7 +732,7 @@ app.registerExtension({
       const visibleSourceValue = () => String(workspaceSelect?.value ?? "").trim();
       const storedSourceValue = () => String(sourceWidget?.value ?? "").trim();
       const localSourceValue = () => {
-        const visible = visibleSourceValue();
+        const visible = normalizeSourceValue(visibleSourceValue());
         const stored = storedSourceValue();
         if (stored && stored !== "demo") return stored;
         if (visible && visible !== "demo") return visible;
@@ -722,24 +745,49 @@ app.registerExtension({
         return localSourceValue();
       };
 
-      const setWorkspaceChoices = (slots: string[], pinnedValue?: string) => {
+      let workspaceChoiceBySlot = new Map<string, WorkspaceChoice>();
+      let workspaceSlotByLabel = new Map<string, string>();
+
+      const normalizeSourceValue = (value: string) => {
+        const source = String(value ?? "").trim() || "demo";
+        return workspaceSlotByLabel.get(source) || source;
+      };
+
+      const displayLabelForSource = (source: string) => {
+        return workspaceChoiceBySlot.get(source)?.label || source;
+      };
+
+      const setWorkspaceChoices = (choices: WorkspaceChoice[], pinnedValue?: string) => {
         if (!workspaceSelect) return;
         const pinned = String(pinnedValue ?? "").trim();
-        workspaceSelect.options.values = Array.from(new Set(
-          ["demo", ...(pinned ? [pinned] : []), ...slots.filter(Boolean)],
-        ));
+        workspaceChoiceBySlot = new Map([["demo", { slot: "demo", label: "demo" }]]);
+        for (const choice of choices) {
+          if (!choice.slot) continue;
+          workspaceChoiceBySlot.set(choice.slot, {
+            slot: choice.slot,
+            label: choice.label || choice.slot,
+            origin_source: choice.origin_source,
+          });
+        }
+        if (pinned && !workspaceChoiceBySlot.has(pinned)) {
+          workspaceChoiceBySlot.set(pinned, { slot: pinned, label: pinned });
+        }
+        workspaceSlotByLabel = new Map(
+          Array.from(workspaceChoiceBySlot.values()).map((choice) => [choice.label, choice.slot]),
+        );
+        workspaceSelect.options.values = Array.from(
+          new Set(Array.from(workspaceChoiceBySlot.values()).map((choice) => choice.label)),
+        );
       };
 
       const setSourceValue = (value: string) => {
-        const source = String(value ?? "").trim() || "demo";
+        const source = normalizeSourceValue(value);
         setWorkspaceChoices(
-          Array.isArray(workspaceSelect?.options?.values)
-            ? workspaceSelect.options.values.map((entry: unknown) => String(entry))
-            : [],
+          Array.from(workspaceChoiceBySlot.values()),
           source,
         );
         if (workspaceSelect) {
-          workspaceSelect.value = source;
+          workspaceSelect.value = displayLabelForSource(source);
         }
         if (sourceWidget && String(sourceWidget.value ?? "") !== source) {
           sourceWidget.value = source;
@@ -795,14 +843,14 @@ app.registerExtension({
       });
 
       let lastPreviewSlot = "";
-      const syncPreview = () => {
+      const syncPreview = (force = false) => {
         const value = currentSourceValue();
         if (!value) {
           lastPreviewSlot = "";
           previewImg.removeAttribute("src");
           return;
         }
-        if (value === lastPreviewSlot && previewImg.src) return;
+        if (!force && value === lastPreviewSlot && previewImg.src) return;
         lastPreviewSlot = value;
         const params = new URLSearchParams({
           text: SPECIMEN_TEXT,
@@ -859,9 +907,7 @@ app.registerExtension({
 
       const ensureEditableWorkspace = async (value: string) => {
         if (!value || value.startsWith("workspace://")) return value;
-        const values = Array.isArray(workspaceSelect.options?.values)
-          ? workspaceSelect.options.values.map((entry: unknown) => String(entry))
-          : [];
+        const values = Array.from(workspaceChoiceBySlot.keys());
         if (values.includes(value)) return value;
         if (value === "demo" || value === "ufo/designspace") return value;
         if (!looksLikeFontSourcePath(value)) return value;
@@ -870,7 +916,7 @@ app.registerExtension({
 
       // Widget order, matching node-based editors (Fusion/Nuke/Houdini):
       //   Font Source (combo)         — the loaded font, visible at a glance
-      //   Import Font Source (button) — bring a new font into the workspace
+      //   Open Font Source (button)   — choose a disk source for edit/save-back
       //   Edit Font Source (button)   — open the full-screen editor
       //   <img> specimen preview      — DOM widget, v1-native
       workspaceSelect = this.addWidget("combo", "Font Source", "demo", (value: any) => {
@@ -881,10 +927,10 @@ app.registerExtension({
       });
       workspaceSelect.serialize = true;
 
-      const importButton = this.addWidget("button", "Import Font Source", null, () => {
+      const importButton = this.addWidget("button", "Open Font Source", null, () => {
         void linkSourcePath().catch((error) => {
-          alert(`Runebender source link failed: ${error}`);
-          console.error("[runebender-comfy] source link failed:", error);
+          alert(`Runebender source open failed: ${error}`);
+          console.error("[runebender-comfy] source open failed:", error);
         });
       }, {});
       importButton.serialize = false;
@@ -904,6 +950,10 @@ app.registerExtension({
             onGlyphDataChange: (value: string) => {
               this.setDirtyCanvas(true, true);
               this.properties.glyph_data = value;
+            },
+            onWorkspaceSaved: () => {
+              syncPreview(true);
+              this.setDirtyCanvas(true, true);
             },
           });
         })().catch((err) => {
@@ -955,7 +1005,7 @@ app.registerExtension({
           origCallback?.(...args);
           const source = String(sourceWidget.value ?? "").trim();
           if (source && workspaceSelect && visibleSourceValue() !== source) {
-            workspaceSelect.value = source;
+            workspaceSelect.value = displayLabelForSource(source);
           }
           syncPreview();
         };

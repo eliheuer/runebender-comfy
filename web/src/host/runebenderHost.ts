@@ -11,6 +11,7 @@ export type WorkspaceSlotPayload = {
   linked_source?: boolean;
   origin_root?: string;
   origin_source?: string;
+  refreshed_from_source?: boolean;
 };
 
 export type ChooseSourceResult = {
@@ -27,8 +28,16 @@ export type SaveWorkspaceAsResult = {
   error?: string;
 };
 
+export type WorkspaceChoice = {
+  slot: string;
+  label: string;
+  origin_source?: string;
+};
+
 export type LinkSourceResult = {
   slot?: string;
+  label?: string;
+  origin_source?: string;
   error?: string;
 };
 
@@ -42,10 +51,10 @@ export type RunebenderHost = {
   log?(level: string, message: string): void;
   publishState(payload: RunebenderStatePayload): Promise<void>;
   loadWorkspaceSlot(slot: string): Promise<WorkspaceSlotPayload | null>;
-  listWorkspaceSlots(): Promise<string[]>;
+  listWorkspaceSlots(): Promise<WorkspaceChoice[]>;
   workspacePreviewUrl(slot: string, params: URLSearchParams): string;
   writeWorkspaceFile(path: string, text: string): Promise<Response>;
-  chooseSource(mode: "file" | "folder"): Promise<ChooseSourceResult>;
+  chooseSource(mode?: "source" | "folder"): Promise<ChooseSourceResult>;
   linkSource(args: {
     sourcePath: string;
     sourceKind: string;

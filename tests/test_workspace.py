@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -324,6 +325,83 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIn('width="720"', original_glif.read_text(encoding="utf-8"))
         self.assertIn('tag="wght"', designspace.read_text(encoding="utf-8"))
 
+    def test_reopening_same_linked_source_reuses_workspace_slot(self) -> None:
+        source_dir = Path(self.tmp.name) / "linked-source"
+        glyphs_dir = source_dir / "Demo.ufo" / "glyphs"
+        glyphs_dir.mkdir(parents=True)
+        (glyphs_dir / "A_.glif").write_text("<glyph name=\"A\"/>", encoding="utf-8")
+        (source_dir / "Demo.ufo" / "metainfo.plist").write_text("<plist/>", encoding="utf-8")
+        designspace = source_dir / "Demo.designspace"
+        designspace.write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<designspace format=\"5\">
+  <sources>
+    <source name=\"Regular\" filename=\"Demo.ufo\"/>
+  </sources>
+</designspace>
+""",
+            encoding="utf-8",
+        )
+
+        first = workspace.create_slot_from_path(str(designspace), linked=True)
+        second = workspace.create_slot_from_path(str(designspace), linked=True)
+
+        self.assertEqual(first, "demo")
+        self.assertEqual(second, first)
+        self.assertEqual(workspace.list_slots(), [first])
+        self.assertEqual(workspace.source_display_label(first), "Demo.designspace")
+        self.assertEqual(
+            workspace.list_workspace_choices(),
+            [
+                {
+                    "slot": "demo",
+                    "label": "Demo.designspace",
+                    "origin_source": str(designspace.resolve()),
+                }
+            ],
+        )
+
+    def test_linked_source_refresh_reloads_external_disk_edits(self) -> None:
+        source_dir = Path(self.tmp.name) / "linked-source"
+        glyphs_dir = source_dir / "Demo.ufo" / "glyphs"
+        glyphs_dir.mkdir(parents=True)
+        original_glif = glyphs_dir / "A_.glif"
+        original_glif.write_text(
+            "<glyph name=\"A\"><advance width=\"600\"/></glyph>",
+            encoding="utf-8",
+        )
+        (source_dir / "Demo.ufo" / "metainfo.plist").write_text("<plist/>", encoding="utf-8")
+        designspace = source_dir / "Demo.designspace"
+        designspace.write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<designspace format=\"5\">
+  <sources>
+    <source name=\"Regular\" filename=\"Demo.ufo\"/>
+  </sources>
+</designspace>
+""",
+            encoding="utf-8",
+        )
+        slot = workspace.create_slot_from_path(str(designspace), "linked-demo", linked=True)
+        workspace_glif = workspace.FONTS_DIR / slot / "Demo.ufo" / "glyphs" / "A_.glif"
+        manifest_path = workspace.FONTS_DIR / slot / workspace.MANIFEST_NAME
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        cached_snapshot = int(manifest["origin_snapshot_mtime_ns"])
+
+        original_glif.write_text(
+            "<glyph name=\"A\"><advance width=\"700\"/></glyph>",
+            encoding="utf-8",
+        )
+        os.utime(original_glif, ns=(cached_snapshot + 1_000_000_000, cached_snapshot + 1_000_000_000))
+
+        self.assertTrue(workspace.refresh_linked_slot_from_source_if_newer(slot))
+
+        self.assertIn('width="700"', workspace_glif.read_text(encoding="utf-8"))
+        refreshed_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(refreshed_manifest["origin_mode"], "linked")
+        self.assertEqual(Path(refreshed_manifest["origin_source"]).resolve(), designspace.resolve())
+        self.assertGreater(int(refreshed_manifest["origin_snapshot_mtime_ns"]), cached_snapshot)
+
     def test_text_writes_normalize_browser_crlf_to_existing_lf_style(self) -> None:
         source_dir = Path(self.tmp.name) / "linked-source"
         glyphs_dir = source_dir / "Demo.ufo" / "glyphs"
@@ -603,6 +681,60 @@ class RunebenderNodeTests(unittest.TestCase):
         self.assertEqual(font, "imported-demo")
         self.assertEqual(glyph_svg, "")
 
+    def test_runebender_source_path_links_disk_source_for_save_back(self) -> None:
+        source_dir = Path(self.tmp.name) / "linked-source"
+        glyphs_dir = source_dir / "Demo.ufo" / "glyphs"
+        glyphs_dir.mkdir(parents=True)
+        original_glif = glyphs_dir / "A_.glif"
+        original_glif.write_text("<glyph name=\"A\"><advance width=\"600\"/></glyph>", encoding="utf-8")
+        (source_dir / "Demo.ufo" / "metainfo.plist").write_text("<plist/>", encoding="utf-8")
+        designspace = source_dir / "Demo.designspace"
+        designspace.write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<designspace format=\"5\">
+  <sources>
+    <source name=\"Regular\" filename=\"Demo.ufo\"/>
+  </sources>
+</designspace>
+""",
+            encoding="utf-8",
+        )
+
+        font, glyph_svg = Runebender().run(
+            source_path=str(designspace),
+            unique_id="missing",
+        )
+
+        self.assertEqual(font, "demo")
+        self.assertEqual(glyph_svg, "")
+        manifest = json.loads((workspace.FONTS_DIR / font / workspace.MANIFEST_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(manifest["origin_mode"], "linked")
+        self.assertEqual(Path(manifest["origin_root"]).resolve(), source_dir.resolve())
+
+        result = workspace.write_workspace_text_file_with_result(
+            f"{font}/Demo.ufo/glyphs/A_.glif",
+            "<glyph name=\"A\"><advance width=\"720\"/></glyph>",
+        )
+
+        self.assertEqual(result.source_path.resolve(), original_glif.resolve())  # type: ignore[union-attr]
+        self.assertIn('width="720"', original_glif.read_text(encoding="utf-8"))
+
+        reopened_font, _reopened_svg = Runebender().run(
+            source_path=str(designspace),
+            unique_id="missing-again",
+        )
+        self.assertEqual(reopened_font, font)
+        self.assertEqual(workspace.list_slots(), [font])
+
+    def test_runebender_demo_source_stays_managed_copy(self) -> None:
+        font, _glyph_svg = Runebender().run(
+            source_path="demo",
+            unique_id="missing",
+        )
+
+        manifest = json.loads((workspace.FONTS_DIR / font / workspace.MANIFEST_NAME).read_text(encoding="utf-8"))
+        self.assertNotIn("origin_mode", manifest)
+
 
 class FontNodeTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -645,6 +777,13 @@ class FontNodeTests(unittest.TestCase):
                 },
             ),
         )
+
+    def test_runebender_source_path_defaults_to_placeholder_not_demo_text(self) -> None:
+        input_types = Runebender.INPUT_TYPES()
+
+        source_options = input_types["required"]["source_path"][1]
+        self.assertEqual(source_options["default"], "")
+        self.assertEqual(source_options["placeholder"], "/path/to/font.designspace")
 
     def test_loaded_workspace_slot_is_returned_without_reimporting(self) -> None:
         slot_dir = workspace.FONTS_DIR / "imported-demo"
@@ -773,9 +912,44 @@ class FontImportRouteTests(unittest.TestCase):
 
         self.assertTrue(payload["success"])
         self.assertEqual(payload["slot"], "linked-demo")
+        self.assertEqual(payload["label"], "Demo.designspace")
+        self.assertEqual(Path(payload["origin_source"]).resolve(), designspace.resolve())
         self.assertEqual(manifest["origin_mode"], "linked")
         self.assertEqual(Path(manifest["origin_root"]).resolve(), source_dir.resolve())
         self.assertTrue((workspace.FONTS_DIR / "linked-demo" / "Demo.ufo" / "glyphs" / "A_.glif").exists())
+
+    def test_workspaces_route_reports_display_labels(self) -> None:
+        from nodes.font import list_workspaces
+
+        source_dir = Path(self.tmp.name) / "linked"
+        glyphs_dir = source_dir / "Demo.ufo" / "glyphs"
+        glyphs_dir.mkdir(parents=True)
+        (glyphs_dir / "A_.glif").write_text("<glyph name=\"A\"/>", encoding="utf-8")
+        (source_dir / "Demo.ufo" / "metainfo.plist").write_text("<plist/>", encoding="utf-8")
+        designspace = source_dir / "Demo.designspace"
+        designspace.write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<designspace format=\"5\">
+  <sources>
+    <source name=\"Regular\" filename=\"Demo.ufo\"/>
+  </sources>
+</designspace>
+""",
+            encoding="utf-8",
+        )
+        workspace.create_slot_from_path(str(designspace), "linked-demo", linked=True)
+
+        payload = asyncio.run(list_workspaces(types.SimpleNamespace()))
+
+        self.assertIn({"slot": "demo", "label": "demo", "origin_source": ""}, payload["choices"])
+        self.assertIn(
+            {
+                "slot": "linked-demo",
+                "label": "Demo.designspace",
+                "origin_source": str(designspace.resolve()),
+            },
+            payload["choices"],
+        )
 
     def test_import_source_path_route_creates_managed_copy_slot(self) -> None:
         from nodes.font import import_source_path
@@ -1012,6 +1186,49 @@ class WorkspaceInvalidateRouteTests(unittest.TestCase):
         self.assertTrue(payload["linked_source"])
         self.assertEqual(Path(payload["origin_root"]).resolve(), source_dir.resolve())
         self.assertEqual(Path(payload["origin_source"]).resolve(), designspace.resolve())
+        self.assertFalse(payload["refreshed_from_source"])
+
+    def test_workspace_route_refreshes_newer_linked_source_before_loading(self) -> None:
+        from nodes.runebender import get_workspace_slot
+
+        source_dir = Path(self.tmp.name) / "linked-refresh"
+        glyphs_dir = source_dir / "Demo.ufo" / "glyphs"
+        glyphs_dir.mkdir(parents=True)
+        original_glif = glyphs_dir / "A_.glif"
+        original_glif.write_text(
+            "<glyph name=\"A\"><advance width=\"600\"/></glyph>",
+            encoding="utf-8",
+        )
+        (source_dir / "Demo.ufo" / "metainfo.plist").write_text("<plist/>", encoding="utf-8")
+        designspace = source_dir / "Demo.designspace"
+        designspace.write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<designspace format=\"5\">
+  <sources>
+    <source name=\"Regular\" filename=\"Demo.ufo\"/>
+  </sources>
+</designspace>
+""",
+            encoding="utf-8",
+        )
+        workspace.create_slot_from_path(str(designspace), "linked-demo", linked=True)
+        manifest_path = workspace.FONTS_DIR / "linked-demo" / workspace.MANIFEST_NAME
+        cached_snapshot = int(json.loads(manifest_path.read_text(encoding="utf-8"))["origin_snapshot_mtime_ns"])
+        original_glif.write_text(
+            "<glyph name=\"A\"><advance width=\"710\"/></glyph>",
+            encoding="utf-8",
+        )
+        os.utime(original_glif, ns=(cached_snapshot + 1_000_000_000, cached_snapshot + 1_000_000_000))
+
+        class _Request:
+            match_info = {"slot": "linked-demo"}
+
+        payload = asyncio.run(get_workspace_slot(_Request()))
+
+        self.assertTrue(payload["refreshed_from_source"])
+        glif_files = [entry for entry in payload["files"] if entry["path"].endswith("A_.glif")]
+        self.assertEqual(len(glif_files), 1)
+        self.assertIn('width="710"', glif_files[0]["text"])
 
     def test_linked_workspace_routes_round_trip_glif_and_designspace_to_source(self) -> None:
         from nodes.font import link_source
@@ -1093,12 +1310,12 @@ class WorkspaceInvalidateRouteTests(unittest.TestCase):
         self.assertEqual(Path(designspace_payload["source_path"]).resolve(), designspace.resolve())
         self.assertIn('tag="wght"', designspace.read_text(encoding="utf-8"))
 
-    def test_macos_source_picker_route_returns_chosen_file_path(self) -> None:
+    def test_macos_source_picker_route_returns_chosen_source_path(self) -> None:
         from nodes.font import choose_source
 
         class _Request:
             async def post(self):
-                return {"mode": "file"}
+                return {"mode": "source"}
 
         completed = mock.Mock(returncode=0, stdout="/tmp/Demo.designspace\n", stderr="")
         with mock.patch("nodes.font.sys.platform", "darwin"), \
@@ -1107,7 +1324,9 @@ class WorkspaceInvalidateRouteTests(unittest.TestCase):
 
         self.assertEqual(payload["path"], "/tmp/Demo.designspace")
         run.assert_called_once()
+        self.assertEqual(run.call_args.args[0][:2], ["osascript", "-e"])
         self.assertIn("choose file", run.call_args.args[0][2])
+        self.assertIn("font source", run.call_args.args[0][2])
 
     def test_macos_source_picker_route_returns_chosen_folder_path(self) -> None:
         from nodes.font import choose_source
@@ -1123,6 +1342,7 @@ class WorkspaceInvalidateRouteTests(unittest.TestCase):
 
         self.assertEqual(payload["path"], "/tmp/Demo.ufo/")
         run.assert_called_once()
+        self.assertEqual(run.call_args.args[0][:2], ["osascript", "-e"])
         self.assertIn("choose folder", run.call_args.args[0][2])
 
     def test_macos_source_picker_route_reports_cancelled_selection(self) -> None:
@@ -1130,7 +1350,7 @@ class WorkspaceInvalidateRouteTests(unittest.TestCase):
 
         class _Request:
             async def post(self):
-                return {"mode": "folder"}
+                return {}
 
         completed = mock.Mock(returncode=1, stdout="", stderr="User canceled. (-128)")
         with mock.patch("nodes.font.sys.platform", "darwin"), \
@@ -1146,7 +1366,7 @@ class WorkspaceInvalidateRouteTests(unittest.TestCase):
 
         class _Request:
             async def post(self):
-                return {"mode": "folder"}
+                return {}
 
         with mock.patch("nodes.font.sys.platform", "linux"), self.assertRaises(Exception):
             asyncio.run(choose_source(_Request()))

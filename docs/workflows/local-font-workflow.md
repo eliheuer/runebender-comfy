@@ -61,7 +61,7 @@ Runebender -> Compile Font -> Font Preview
    one-node smoke graph, or add a `Runebender` node manually.
 5. Load a font with `Runebender`, edit it, then send the same `FONT`
    wire into `Compile Font` and `Font Preview`. For source files you
-   want to edit on disk, either click `Link Source Path...` or paste an
+   want to edit on disk, either click `Open Font Source...` or paste an
    absolute/relative `.designspace` or `.ufo` path into `source_path`
    and click `Edit`; Runebender will link the source before opening the
    editor.
@@ -75,9 +75,12 @@ the `demo` workspace alias resolves to it automatically.
 
 - UFO/designspace is the default editable path.
 - `Import Folder...` copies a source into the local workspace cache.
-- `Link Source Path...` creates a workspace cache that mirrors saved
+- `Open Font Source...` creates a workspace cache that mirrors saved
   UFO/designspace edits back to the original disk source.
-- If `Link Source Path...` reports `404` or `405`, the browser has a
+- Linked sources are checked when the editor opens. If the original
+  disk source is newer than the cached workspace, Runebender refreshes
+  the cache from disk before loading the glyphs.
+- If `Open Font Source...` reports `404` or `405`, the browser has a
   newer bundle than the running Python backend. Fully stop and restart
   ComfyUI, then hard-refresh the browser.
 - The grid sidebar includes a raw Designspace XML panel for

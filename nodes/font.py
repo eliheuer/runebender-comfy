@@ -22,7 +22,15 @@ from aiohttp import web
 from server import PromptServer
 
 from .font_preview import render_preview_png, render_workspace_preview_png
-from .workspace import compile_slot, create_slot_from_path, list_slots, locate_source_root, resolve_slot, slot_from_name
+from .workspace import (
+    compile_slot,
+    create_slot_from_path,
+    list_workspace_choices,
+    locate_source_root,
+    resolve_slot,
+    source_display_label,
+    slot_from_name,
+)
 
 
 def _preview_log(message: str, /, **fields) -> None:
@@ -122,6 +130,8 @@ async def link_source(request):
         {
             "success": True,
             "slot": slot,
+            "label": source_display_label(slot),
+            "origin_source": str(candidate),
             "source_root": str(candidate),
             "source_kind": slot_info.source_kind if slot_info else "ufo/designspace",
         }
@@ -169,16 +179,16 @@ async def import_source_path(request):
 @routes.post("/runebender/choose_source")
 async def choose_source(request):
     data = await request.post()
-    mode = str(data.get("mode", "file")).strip().lower()
-    if mode not in {"file", "folder"}:
-        raise web.HTTPBadRequest(reason="mode must be 'file' or 'folder'")
+    mode = str(data.get("mode", "source")).strip().lower()
+    if mode not in {"source", "folder"}:
+        raise web.HTTPBadRequest(reason="mode must be 'source' or 'folder'")
     if sys.platform != "darwin":
         raise web.HTTPBadRequest(reason="native source picker is currently available only on macOS")
 
-    if mode == "folder":
-        script = 'POSIX path of (choose folder with prompt "Choose a folder containing a font source")'
+    if mode == "source":
+        script = 'POSIX path of (choose file with prompt "Choose a font source")'
     else:
-        script = 'POSIX path of (choose file with prompt "Choose a .designspace, .glyphs, or font source file")'
+        script = 'POSIX path of (choose folder with prompt "Choose a destination folder")'
     result = subprocess.run(
         ["osascript", "-e", script],
         text=True,
@@ -195,7 +205,12 @@ async def choose_source(request):
 
 @routes.get("/runebender/workspaces")
 async def list_workspaces(request):
-    return web.json_response({"slots": ["demo", *list_slots()]})
+    choices = [{"slot": "demo", "label": "demo", "origin_source": ""}]
+    choices.extend(list_workspace_choices())
+    return web.json_response({
+        "slots": [choice["slot"] for choice in choices],
+        "choices": choices,
+    })
 
 
 @routes.get("/runebender/workspace/{slot}/preview")
@@ -360,7 +375,12 @@ class Font:
         return (resolve_font_source(source_path, source_kind, workspace_name),)
 
 
-def resolve_font_source(source_path: str, source_kind: str = "auto", workspace_name: str = "") -> str:
+def resolve_font_source(
+    source_path: str,
+    source_kind: str = "auto",
+    workspace_name: str = "",
+    link_source_paths: bool = True,
+) -> str:
     """Resolve a user-entered source_path into a workspace slot.
 
     Centralized so both the (legacy) Font node and the merged Runebender
@@ -370,6 +390,8 @@ def resolve_font_source(source_path: str, source_kind: str = "auto", workspace_n
     if not source_path:
         source_path = "demo"
 
+    original_source_path = source_path
+    is_demo_alias = source_path.lower() in {"demo", "ufo/designspace"}
     if source_path.lower() == "demo" or source_path.lower() == "ufo/designspace":
         source_path = str(DEMO_SOURCE_PATH)
     elif source_path.startswith("workspace://"):
@@ -383,12 +405,26 @@ def resolve_font_source(source_path: str, source_kind: str = "auto", workspace_n
         located = locate_source_root(candidate)
         if located is not None:
             source_path = str(located)
+            candidate = Path(source_path).expanduser()
 
     source_kind = (source_kind or "auto").strip().lower()
     if source_kind in {"", "auto"}:
         source_kind = None
     workspace_name = (workspace_name or "").strip()
-    slot = create_slot_from_path(source_path, workspace_name or None, source_kind=source_kind)
+    should_link = (
+        link_source_paths
+        and not is_demo_alias
+        and not str(original_source_path).startswith("workspace://")
+        and candidate.exists()
+        and candidate.suffix.lower() in {".designspace", ".ufo"}
+        and (source_kind is None or source_kind == "ufo/designspace")
+    )
+    slot = create_slot_from_path(
+        source_path,
+        workspace_name or None,
+        source_kind=source_kind,
+        linked=should_link,
+    )
     # Eagerly produce the TTF via fontc so the drawbot-skia preview
     # and any downstream FONT consumer can find it immediately.
     # Best-effort: a compile failure leaves the workspace usable (the

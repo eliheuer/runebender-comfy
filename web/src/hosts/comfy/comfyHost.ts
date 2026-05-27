@@ -34,8 +34,20 @@ export const comfyHost: RunebenderHost = {
   async listWorkspaceSlots() {
     const response = await fetch("/runebender/workspaces");
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-    const data = (await response.json()) as { slots?: string[] };
-    return data.slots ?? [];
+    const data = (await response.json()) as {
+      slots?: string[];
+      choices?: Array<{ slot?: string; label?: string; origin_source?: string }>;
+    };
+    if (Array.isArray(data.choices)) {
+      return data.choices
+        .map((choice) => ({
+          slot: String(choice.slot ?? "").trim(),
+          label: String(choice.label ?? choice.slot ?? "").trim(),
+          origin_source: String(choice.origin_source ?? "").trim(),
+        }))
+        .filter((choice) => choice.slot);
+    }
+    return (data.slots ?? []).map((slot) => ({ slot, label: slot }));
   },
 
   workspacePreviewUrl(slot, params) {
@@ -54,7 +66,7 @@ export const comfyHost: RunebenderHost = {
 
   async chooseSource(mode) {
     const body = new FormData();
-    body.append("mode", mode);
+    if (mode) body.append("mode", mode);
     const response = await fetch("/runebender/choose_source", {
       method: "POST",
       body,

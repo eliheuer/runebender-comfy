@@ -27,6 +27,53 @@ class WebBundleTests(unittest.TestCase):
             body = source[start:next_function if next_function >= 0 else len(source)]
             self.assertNotIn("reshapeTextBuffer();", body, name)
 
+    def test_editor_save_refreshes_comfy_node_specimen_preview(self) -> None:
+        editor_source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
+        extension_source = (ROOT / "web" / "src" / "extension.ts").read_text(encoding="utf-8")
+
+        save_start = editor_source.index("async function onSave()")
+        save_end = editor_source.index("\nasync function persistGlyphData", save_start)
+        save_body = editor_source[save_start:save_end]
+        self.assertIn("props.onWorkspaceSaved?.();", save_body)
+        self.assertLess(save_body.index("queueComfyStateSync(true);"), save_body.index("props.onWorkspaceSaved?.();"))
+
+        self.assertIn("onWorkspaceSaved?: () => void;", editor_source)
+        self.assertIn("onWorkspaceSaved?: () => void;", extension_source)
+        self.assertIn("onWorkspaceSaved: options.onWorkspaceSaved", extension_source)
+        self.assertIn("const syncPreview = (force = false)", extension_source)
+        self.assertIn("if (!force && value === lastPreviewSlot && previewImg.src) return;", extension_source)
+        self.assertIn("onWorkspaceSaved: () =>", extension_source)
+        self.assertIn("syncPreview(true);", extension_source)
+
+    def test_workflow_tab_switch_closes_global_editor_overlay(self) -> None:
+        extension_source = (ROOT / "web" / "src" / "extension.ts").read_text(encoding="utf-8")
+        self.assertIn("const onDocumentPointerDown = (event: PointerEvent)", extension_source)
+        self.assertIn('target?.closest(".workflow-tabs-container")', extension_source)
+        self.assertIn("closing editor for workflow tab switch", extension_source)
+        self.assertIn('document.addEventListener("pointerdown", onDocumentPointerDown, true);', extension_source)
+        self.assertIn('document.removeEventListener("pointerdown", onDocumentPointerDown, true);', extension_source)
+
+    def test_master_switch_refreshes_text_sort_metrics_from_active_master(self) -> None:
+        source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
+
+        self.assertIn("function syncTextSortMetricsToActiveMaster()", source)
+        sync_start = source.index("function syncTextSortMetricsToActiveMaster()")
+        sync_end = source.index("\nfunction onActiveGlyphNameChange", sync_start)
+        sync_body = source[sync_start:sync_end]
+        self.assertIn("glyphMetadataMap.value.get(sort.glyphName)", sync_body)
+        self.assertIn("metadata.width", sync_body)
+        self.assertIn("editor.updateTextGlyph(", sync_body)
+        self.assertIn("refreshTextStateFromEditor();", sync_body)
+
+        master_start = source.index("function activateMaster(name: string)")
+        master_end = source.index("\nfunction onSelectMaster", master_start)
+        master_body = source[master_start:master_end]
+        self.assertIn("syncTextSortMetricsToActiveMaster();", master_body)
+        self.assertLess(
+            master_body.index("syncTextSortMetricsToActiveMaster();"),
+            master_body.index("const glyphToReload ="),
+        )
+
     def test_text_metrics_and_kerning_edits_do_not_force_arabic_reshaping(self) -> None:
         source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
         for name in [
@@ -198,7 +245,7 @@ class WebBundleTests(unittest.TestCase):
     def test_active_glyph_edit_updates_only_active_text_sort_like_xilem(self) -> None:
         source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
         start = source.index("function syncCurrentTextSorts")
-        end = source.index("\nfunction onActiveGlyphNameChange", start)
+        end = source.index("\nfunction syncTextSortMetricsToActiveMaster", start)
         body = source[start:end]
 
         self.assertIn("activeTextSortIndex.value === null", body)
@@ -632,6 +679,14 @@ class WebBundleTests(unittest.TestCase):
         )
         self.assertIn("--rb-canvas-text-cursor:        #ffaa33;", source)
 
+    def test_design_grid_levels_appear_later_to_reduce_canvas_noise(self) -> None:
+        renderer = (ROOT / "rust-core" / "src" / "renderer.rs").read_text(encoding="utf-8")
+        self.assertIn("const DESIGN_GRID_MID_MIN_ZOOM: f64 = 2.5;", renderer)
+        self.assertIn("const DESIGN_GRID_CLOSE_MIN_ZOOM: f64 = 12.0;", renderer)
+        self.assertIn("intentionally appear later to avoid filling the screen with grid", renderer)
+        self.assertNotIn("const DESIGN_GRID_MID_MIN_ZOOM: f64 = 0.8;", renderer)
+        self.assertNotIn("const DESIGN_GRID_CLOSE_MIN_ZOOM: f64 = 4.0;", renderer)
+
     def test_text_direction_toolbar_uses_xilem_shared_toolbar_constants(self) -> None:
         source = (ROOT / "web" / "src" / "components" / "TextDirectionToolbar.vue").read_text(
             encoding="utf-8"
@@ -661,9 +716,10 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn("border: 1.5px solid", button_block)
         self.assertIn("border-radius: 6px;", button_block)
 
-    def test_text_preview_inventory_keeps_component_aware_svgs_after_edits(self) -> None:
+    def test_text_preview_inventory_keeps_grid_scaled_svgs_after_edits(self) -> None:
         source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
-        self.assertIn("function glyphSvgWithComponents", source)
+        self.assertIn("function gridGlyphSvgWithComponents", source)
+        self.assertIn("glifMapToSvgs(glyphXmlMapJson(glyphBytes), unitsPerEm)", source)
         self.assertIn("glifToSvgWithComponents(bytes, glyphXmlMapJson(glyphBytes)) || glifToSvg(bytes)", source)
         self.assertNotIn("const svg = glifToSvg(bytes);", source)
 
@@ -677,7 +733,9 @@ class WebBundleTests(unittest.TestCase):
             start = source.index(f"function {name}")
             end = source.index(next_anchor, start)
             body = source[start:end]
-            self.assertIn("glyphSvgWithComponents(bytes, data.glyphBytes)", body, name)
+            self.assertIn("gridGlyphSvgWithComponents(", body, name)
+            self.assertIn("data.glyphBytes", body, name)
+            self.assertIn("data.unitsPerEm", body, name)
 
         paste_start = source.index("function pasteGridGlyph")
         paste_end = source.index("\nfunction selectedGridGlyphNames", paste_start)
@@ -863,14 +921,16 @@ class WebBundleTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.assertIn("export type RunebenderHost", interface)
+        self.assertIn("export type WorkspaceChoice", interface)
         self.assertIn("export const runebenderHostKey", interface)
         self.assertIn("log?(level: string, message: string)", interface)
         self.assertIn("publishState(payload: RunebenderStatePayload)", interface)
         self.assertIn("loadWorkspaceSlot(slot: string)", interface)
-        self.assertIn("listWorkspaceSlots()", interface)
+        self.assertIn("refreshed_from_source?: boolean", interface)
+        self.assertIn("listWorkspaceSlots(): Promise<WorkspaceChoice[]>", interface)
         self.assertIn("workspacePreviewUrl(slot: string, params: URLSearchParams)", interface)
         self.assertIn("writeWorkspaceFile(path: string, text: string)", interface)
-        self.assertIn('chooseSource(mode: "file" | "folder")', interface)
+        self.assertIn('chooseSource(mode?: "source" | "folder")', interface)
         self.assertIn("linkSource(args:", interface)
         self.assertIn("saveWorkspaceAs(args:", interface)
         self.assertIn("invalidateWorkspacePath(path: string)", interface)
@@ -946,9 +1006,9 @@ class WebBundleTests(unittest.TestCase):
         # import + edit buttons. Matches the comfyfont-style UX the
         # user requested.
         self.assertIn("Font Source", bundle)
-        self.assertIn("Import Font Source", bundle)
+        self.assertIn("Open Font Source", bundle)
         self.assertIn("Edit Font Source", bundle)
-        self.assertNotIn("Open Font Source", bundle)
+        self.assertNotIn("Import Font Source", bundle)
         self.assertNotIn("Import Copy Folder...", bundle)
         self.assertNotIn("Link Source Path...", bundle)
         self.assertNotIn("Import Copy File...", bundle)
@@ -961,6 +1021,7 @@ class WebBundleTests(unittest.TestCase):
         # Grid thumbnail SVGs must come from one batched WASM call
         # (glifMapToSvgs) not 600+ per-glyph crossings.
         self.assertIn("glifMapToSvgs", bundle)
+        self.assertIn("edited glyph grid SVG refresh failed", bundle)
         # Console mirror posts [runebender...] messages to /runebender/log
         # so they show up in the ComfyUI terminal too.
         self.assertIn("/runebender/log", bundle)
@@ -980,26 +1041,25 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn("visible:", bundle)
         self.assertIn("stored:", bundle)
         self.assertIn("upstream:", bundle)
-        self.assertIn("Link source path", bundle)
+        self.assertIn("Open font source", bundle)
+        self.assertIn("Open for Editing", bundle)
         self.assertIn("Save workspace as", bundle)
         self.assertIn("Managed copy (workspace cache)", bundle)
+        self.assertIn("reloaded source changes from disk", bundle)
         self.assertIn("runebender/workspace/save_as", bundle)
-        self.assertIn("Choose File...", bundle)
-        self.assertIn("Choose Folder...", bundle)
-        self.assertIn("runebender/choose_source", bundle)
-        self.assertIn("showDirectoryPicker", bundle)
-        self.assertIn("Link source path", bundle)
-        self.assertIn("Save workspace as", bundle)
-        self.assertIn("Managed copy (workspace cache)", bundle)
-        self.assertIn("runebender/workspace/save_as", bundle)
-        self.assertIn("Choose File...", bundle)
-        self.assertIn("Choose Folder...", bundle)
+        self.assertIn("Choose Source...", bundle)
+        self.assertNotIn("Choose File...", bundle)
         self.assertIn("runebender/choose_source", bundle)
         self.assertIn("showDirectoryPicker", bundle)
         self.assertNotIn("window.prompt", bundle)
         self.assertIn("Designspace", bundle)
         self.assertIn("Fully restart ComfyUI", bundle)
         self.assertIn("console.info(`[runebender-comfy] loaded", bundle)
+        self.assertIn("z-index:20", bundle)
+        self.assertIn("runebender-overlay-open", bundle)
+        self.assertIn("#graph-canvas-container .selection-toolbox", bundle)
+        self.assertIn("#graph-canvas-container .graph-canvas-panel > *", bundle)
+        self.assertNotIn("z-index:9999", bundle)
         self.assertIn("JSON.stringify(", bundle)
         self.assertIn("glyph_data", bundle)
         self.assertNotIn("onConnectionsChange", bundle)
@@ -1016,7 +1076,7 @@ class WebBundleTests(unittest.TestCase):
         self.assertEqual(len(workflow["nodes"]), 1)
         node = workflow["nodes"][0]
         self.assertEqual(node["type"], "Runebender")
-        self.assertEqual(node["widgets_values"], ["demo", "auto", ""])
+        self.assertEqual(node["widgets_values"], ["", "auto", ""])
         self.assertEqual([output["type"] for output in node["outputs"]], ["FONT", "STRING"])
 
 
