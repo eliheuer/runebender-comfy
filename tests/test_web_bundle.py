@@ -55,14 +55,68 @@ class WebBundleTests(unittest.TestCase):
 
     def test_editor_render_requests_coalesce_without_postponing_frame(self) -> None:
         source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
-        start = source.index("function requestRender()")
+        start = source.index("function requestRender(")
         end = source.index("\nasync function loadDevTestFont", start)
         body = source[start:end]
 
         self.assertIn("if (raf !== null) return;", body)
+        self.assertIn("rafNeedsDerivedState ||= options.refreshDerivedState !== false;", body)
+        self.assertIn("const refreshDerivedState = rafNeedsDerivedState;", body)
         self.assertIn("raf = null;", body)
+        self.assertIn("rafNeedsDerivedState = false;", body)
         self.assertIn("editor?.render();", body)
+        self.assertIn("if (refreshDerivedState)", body)
         self.assertNotIn("cancelAnimationFrame(raf);", body)
+
+    def test_empty_render_overlays_do_not_churn_reactive_state(self) -> None:
+        source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
+
+        compat_start = source.index("function refreshCompatibilityMarkers()")
+        compat_end = source.index("\nfunction refreshMeasureState", compat_start)
+        compat_body = source[compat_start:compat_end]
+        self.assertIn("compatMarkers.value.length > 0", compat_body)
+
+        measure_start = source.index("function refreshMeasureState()")
+        measure_end = source.index("\nfunction measureLabelsFromInfo", measure_start)
+        measure_body = source[measure_start:measure_end]
+        self.assertIn('activeTool.value !== "Measure"', measure_body)
+        self.assertIn("if (measureInfo.value)", measure_body)
+        self.assertIn("measureInfo.value = undefined;", measure_body)
+        self.assertLess(
+            measure_body.index('activeTool.value !== "Measure"'),
+            measure_body.index("editor.measureInfo()"),
+        )
+
+    def test_selection_state_refresh_avoids_identical_reactive_assignments(self) -> None:
+        source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
+        self.assertIn("function sameSelectionBounds(", source)
+        self.assertIn("function setSelectionState(", source)
+
+        refresh_start = source.index("function refreshSelectionState()")
+        refresh_end = source.index("\nfunction sameSelectionBounds", refresh_start)
+        refresh_body = source[refresh_start:refresh_end]
+        self.assertIn("setSelectionState(", refresh_body)
+        self.assertNotIn("selectedBounds.value =", refresh_body)
+
+        setter_start = source.index("function setSelectionState(")
+        setter_end = source.index("\nfunction updateCompatibilityErrors", setter_start)
+        setter_body = source[setter_start:setter_end]
+        self.assertIn("selectionCount.value !== nextSelectionCount", setter_body)
+        self.assertIn("selectedContourCount.value !== nextSelectedContourCount", setter_body)
+        self.assertIn("!sameSelectionBounds(selectedBounds.value, nextBounds)", setter_body)
+
+    def test_pointer_hover_avoids_work_for_tools_without_hover_state(self) -> None:
+        source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
+        start = source.index("function onPointerMove(")
+        end = source.index("\nfunction onPointerUp", start)
+        body = source[start:end]
+
+        self.assertIn("const pointerActive = e.buttons !== 0;", body)
+        self.assertIn("if (pointerActive) {\n    refreshMeasureState();\n  }", body)
+        self.assertIn('activeTool.value === "Text" && pointerActive', body)
+        self.assertIn('activeTool.value === "Measure"', body)
+        self.assertLess(body.index("if (\n    !pointerActive"), body.index("editor.pointerMove("))
+        self.assertLess(body.index("if (\n    !pointerActive"), body.index("requestRender();"))
 
     def test_arrow_nudge_uses_fast_render_path_and_defers_heavy_sync(self) -> None:
         source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
@@ -71,15 +125,32 @@ class WebBundleTests(unittest.TestCase):
         nudge_end = source.index("\nfunction applyEditorHistoryChange", nudge_start)
         nudge_body = source[nudge_start:nudge_end]
         self.assertIn("editor.nudgeSelection(dx, dy, shift, ctrl, independent)", nudge_body)
-        self.assertIn("requestRender();", nudge_body)
+        self.assertIn("requestRender({ refreshDerivedState: false });", nudge_body)
         self.assertIn("scheduleDeferredGlyphSync(glyphName, masterName);", nudge_body)
         self.assertNotIn("syncCurrentGlyphBytesFromEditor();", nudge_body)
+        self.assertNotIn("refreshSelectionState();", nudge_body)
+        self.assertIn("finishNudgeSelection(): void;", source)
+        self.assertIn("editor?.finishNudgeSelection();", source)
 
         key_start = source.index("function onKeyDown(")
         key_end = source.index("\nfunction onKeyUp", key_start)
         key_body = source[key_start:key_end]
         self.assertIn("applyEditorNudge(nudge[0], nudge[1], e.shiftKey, meta, e.altKey)", key_body)
         self.assertNotIn("editor.nudgeSelection(", key_body)
+
+    def test_wasm_nudge_reuses_one_undo_snapshot_per_burst(self) -> None:
+        source = (ROOT / "rust-core" / "src" / "wasm_api.rs").read_text(encoding="utf-8")
+        self.assertIn("pending_nudge_snapshot: Option<EditorState>", source)
+        self.assertIn("fn commit_pending_nudge_snapshot(&mut self)", source)
+        self.assertIn("pub fn finish_nudge_selection(&mut self)", source)
+
+        start = source.index("pub fn nudge_selection(")
+        end = source.index("\n    #[wasm_bindgen(js_name = finishNudgeSelection)]", start)
+        body = source[start:end]
+        self.assertIn("if self.state.selection.is_empty()", body)
+        self.assertIn("if self.pending_nudge_snapshot.is_none()", body)
+        self.assertIn("self.pending_nudge_snapshot = Some(self.state.clone());", body)
+        self.assertNotIn("self.undo.add_undo_group", body)
 
     def test_master_switch_refreshes_text_sort_metrics_from_active_master(self) -> None:
         source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")

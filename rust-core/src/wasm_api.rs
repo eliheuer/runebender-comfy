@@ -601,9 +601,7 @@ fn anatomy_svg_from_bezpath_and_contours(
     // Its fit must include off-curve handles and point marker geometry,
     // not just the outline's path bounds, otherwise large glyphs clip at
     // panel edges even though the editor canvas has viewport padding.
-    let padding = (smooth_radius
-        .max(offcurve_radius)
-        .max(corner_half)
+    let padding = (smooth_radius.max(offcurve_radius).max(corner_half)
         + outline_stroke
         + handle_stroke
         + 4.0)
@@ -712,6 +710,26 @@ pub struct GlyphEditor {
     /// onto the undo stack on the matching pointerup. `None` between
     /// strokes.
     pending_snapshot: Option<EditorState>,
+    /// Snapshot of `state` before a keyboard nudge burst. Repeated
+    /// arrow-key events reuse this one snapshot so large glyphs do not
+    /// clone the full editor state on every key repeat.
+    pending_nudge_snapshot: Option<EditorState>,
+}
+
+impl GlyphEditor {
+    fn commit_pending_nudge_snapshot(&mut self) {
+        let Some(snapshot) = self.pending_nudge_snapshot.take() else {
+            return;
+        };
+        if self.state.edit_revision() != snapshot.edit_revision() {
+            self.undo.add_undo_group(snapshot);
+        }
+    }
+
+    fn discrete_edit_snapshot(&mut self) -> EditorState {
+        self.commit_pending_nudge_snapshot();
+        self.state.clone()
+    }
 }
 
 #[wasm_bindgen]
@@ -732,6 +750,7 @@ impl GlyphEditor {
             undo: UndoState::new(),
             point_clipboard: None,
             pending_snapshot: None,
+            pending_nudge_snapshot: None,
         })
     }
 
@@ -746,6 +765,7 @@ impl GlyphEditor {
         self.undo.clear();
         self.point_clipboard = None;
         self.pending_snapshot = None;
+        self.pending_nudge_snapshot = None;
         Ok(())
     }
 
@@ -760,6 +780,7 @@ impl GlyphEditor {
         self.undo.clear();
         self.point_clipboard = None;
         self.pending_snapshot = None;
+        self.pending_nudge_snapshot = None;
         Ok(())
     }
 
@@ -781,6 +802,7 @@ impl GlyphEditor {
         self.undo.clear();
         self.point_clipboard = None;
         self.pending_snapshot = None;
+        self.pending_nudge_snapshot = None;
         Ok(())
     }
 
@@ -1083,7 +1105,7 @@ impl GlyphEditor {
     #[wasm_bindgen(js_name = insertInactiveTextGlyph)]
     pub fn insert_inactive_text_glyph(&mut self, name: &str, codepoint: u32, advance_width: f64) {
         let codepoint = text_codepoint_from_wasm(codepoint);
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         self.state.has_text_session = true;
         self.state
             .insert_inactive_text_glyph(name, codepoint, advance_width);
@@ -1095,7 +1117,7 @@ impl GlyphEditor {
         let Some(char) = text_codepoint_from_wasm(codepoint) else {
             return false;
         };
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         if self.state.insert_text_character(char) {
             self.state.has_text_session = true;
             self.undo.add_undo_group(snapshot);
@@ -1121,7 +1143,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = insertTextLineBreak)]
     pub fn insert_text_line_break(&mut self) {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         self.state.has_text_session = true;
         self.state.insert_text_line_break();
         self.undo.add_undo_group(snapshot);
@@ -1129,7 +1151,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = deleteTextBeforeCursor)]
     pub fn delete_text_before_cursor(&mut self) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         if self.state.delete_text_before_cursor() {
             self.undo.add_undo_group(snapshot);
             true
@@ -1140,7 +1162,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = deleteTextAfterCursor)]
     pub fn delete_text_after_cursor(&mut self) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         if self.state.delete_text_after_cursor() {
             self.undo.add_undo_group(snapshot);
             true
@@ -1183,6 +1205,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = pointerDown)]
     pub fn pointer_down(&mut self, x: f64, y: f64, button: u32, mods: u32) {
+        self.commit_pending_nudge_snapshot();
         // Snapshot before mutating, but only for left-button strokes —
         // middle-button drags only pan and shouldn't pollute undo.
         if button == 0 {
@@ -1224,6 +1247,7 @@ impl GlyphEditor {
         let revision = self.state.edit_revision();
         self.mouse.cancel(&mut self.tool, &mut self.state);
         self.pending_snapshot = None;
+        self.pending_nudge_snapshot = None;
         self.state.edit_revision() != revision
     }
 
@@ -1265,7 +1289,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = setStartPointAt)]
     pub fn set_start_point_at(&mut self, x: f64, y: f64) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         let design = self.state.screen_to_glyph_design(Point::new(x, y));
         let radius = 8.0 / self.state.viewport.zoom.max(1e-6);
         if self.state.set_start_point_at(design, radius) {
@@ -1279,7 +1303,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = reverseContourAt)]
     pub fn reverse_contour_at(&mut self, x: f64, y: f64) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         let design = self.state.screen_to_glyph_design(Point::new(x, y));
         let radius = 8.0 / self.state.viewport.zoom.max(1e-6);
         if self.state.reverse_contour_at(design, radius) {
@@ -1293,7 +1317,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = moveContour)]
     pub fn move_contour(&mut self, path_index: usize, direction: &str) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         let delta = match direction {
             "up" => -1,
             "down" => 1,
@@ -1331,6 +1355,7 @@ impl GlyphEditor {
     }
 
     pub fn undo(&mut self) -> bool {
+        self.commit_pending_nudge_snapshot();
         if let Some(prev) = self.undo.undo(self.state.clone()) {
             self.state = prev;
             true
@@ -1340,6 +1365,7 @@ impl GlyphEditor {
     }
 
     pub fn redo(&mut self) -> bool {
+        self.commit_pending_nudge_snapshot();
         if let Some(next) = self.undo.redo(self.state.clone()) {
             self.state = next;
             true
@@ -1350,7 +1376,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = flipSelectionHorizontal)]
     pub fn flip_selection_horizontal(&mut self) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         if self.state.flip_selection_horizontal() {
             self.undo.add_undo_group(snapshot);
             self.pending_snapshot = None;
@@ -1362,7 +1388,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = flipSelectionVertical)]
     pub fn flip_selection_vertical(&mut self) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         if self.state.flip_selection_vertical() {
             self.undo.add_undo_group(snapshot);
             self.pending_snapshot = None;
@@ -1374,7 +1400,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = rotateSelectionClockwise)]
     pub fn rotate_selection_clockwise(&mut self) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         if self.state.rotate_selection(-90.0) {
             self.undo.add_undo_group(snapshot);
             self.pending_snapshot = None;
@@ -1386,7 +1412,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = rotateSelectionCounterClockwise)]
     pub fn rotate_selection_counter_clockwise(&mut self) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         if self.state.rotate_selection(90.0) {
             self.undo.add_undo_group(snapshot);
             self.pending_snapshot = None;
@@ -1398,7 +1424,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = duplicateSelection)]
     pub fn duplicate_selection(&mut self) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         if self.state.duplicate_selection() {
             self.undo.add_undo_group(snapshot);
             self.pending_snapshot = None;
@@ -1410,7 +1436,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = duplicateRepeatSelection)]
     pub fn duplicate_repeat_selection(&mut self) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         if self.state.duplicate_repeat_selection() {
             self.undo.add_undo_group(snapshot);
             self.pending_snapshot = None;
@@ -1422,7 +1448,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = reverseContours)]
     pub fn reverse_contours(&mut self) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         if self.state.reverse_contours() {
             self.undo.add_undo_group(snapshot);
             self.pending_snapshot = None;
@@ -1434,7 +1460,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = convertHyperToCubic)]
     pub fn convert_hyper_to_cubic(&mut self) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         if self.state.convert_hyper_to_cubic() {
             self.undo.add_undo_group(snapshot);
             self.pending_snapshot = None;
@@ -1446,7 +1472,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = setAdvanceWidth)]
     pub fn set_advance_width(&mut self, width: f64) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         if self.state.set_advance_width(width) {
             self.undo.add_undo_group(snapshot);
             self.pending_snapshot = None;
@@ -1468,7 +1494,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = setLeftSidebearing)]
     pub fn set_left_sidebearing(&mut self, value: f64) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         if self.state.set_left_sidebearing(value) {
             self.undo.add_undo_group(snapshot);
             self.pending_snapshot = None;
@@ -1480,7 +1506,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = setRightSidebearing)]
     pub fn set_right_sidebearing(&mut self, value: f64) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         if self.state.set_right_sidebearing(value) {
             self.undo.add_undo_group(snapshot);
             self.pending_snapshot = None;
@@ -1504,7 +1530,7 @@ impl GlyphEditor {
         let Some(clipboard) = self.point_clipboard.clone() else {
             return false;
         };
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         if self.state.paste_paths(&clipboard) {
             self.undo.add_undo_group(snapshot);
             self.pending_snapshot = None;
@@ -1516,7 +1542,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = deleteSelection)]
     pub fn delete_selection(&mut self) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         if self.state.delete_selection() {
             self.undo.add_undo_group(snapshot);
             self.pending_snapshot = None;
@@ -1528,7 +1554,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = togglePointType)]
     pub fn toggle_point_type(&mut self) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         if self.state.toggle_point_type() {
             self.undo.add_undo_group(snapshot);
             self.pending_snapshot = None;
@@ -1541,7 +1567,7 @@ impl GlyphEditor {
     #[wasm_bindgen(js_name = togglePointTypeAt)]
     pub fn toggle_point_type_at(&mut self, x: f64, y: f64) -> bool {
         const MIN_CLICK_DISTANCE: f64 = 10.0;
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         let screen = Point::new(x, y);
         let design = self.state.screen_to_glyph_design(screen);
         let radius = MIN_CLICK_DISTANCE / self.state.viewport.zoom.max(1e-6);
@@ -1556,7 +1582,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = unionSelection)]
     pub fn union_selection(&mut self) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         if self.state.boolean_selection(linesweeper::BinaryOp::Union) {
             self.undo.add_undo_group(snapshot);
             self.pending_snapshot = None;
@@ -1568,7 +1594,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = subtractSelection)]
     pub fn subtract_selection(&mut self) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         if self
             .state
             .boolean_selection(linesweeper::BinaryOp::Difference)
@@ -1583,7 +1609,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = intersectSelection)]
     pub fn intersect_selection(&mut self) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         if self
             .state
             .boolean_selection(linesweeper::BinaryOp::Intersection)
@@ -1598,7 +1624,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = excludeSelection)]
     pub fn exclude_selection(&mut self) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         if self.state.boolean_selection(linesweeper::BinaryOp::Xor) {
             self.undo.add_undo_group(snapshot);
             self.pending_snapshot = None;
@@ -1610,7 +1636,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = moveSelectionReference)]
     pub fn move_selection_reference(&mut self, axis: &str, value: f64) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         if self.state.move_selection_reference(axis, value) {
             self.undo.add_undo_group(snapshot);
             self.pending_snapshot = None;
@@ -1622,7 +1648,7 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = resizeSelectionReference)]
     pub fn resize_selection_reference(&mut self, axis: &str, value: f64) -> bool {
-        let snapshot = self.state.clone();
+        let snapshot = self.discrete_edit_snapshot();
         if self.state.resize_selection_reference(axis, value) {
             self.undo.add_undo_group(snapshot);
             self.pending_snapshot = None;
@@ -1641,14 +1667,23 @@ impl GlyphEditor {
         ctrl: bool,
         independent: bool,
     ) -> bool {
-        let snapshot = self.state.clone();
+        if self.state.selection.is_empty() {
+            return false;
+        }
+        if self.pending_nudge_snapshot.is_none() {
+            self.pending_nudge_snapshot = Some(self.state.clone());
+        }
         if self.state.nudge_selection(dx, dy, shift, ctrl, independent) {
-            self.undo.add_undo_group(snapshot);
             self.pending_snapshot = None;
             true
         } else {
             false
         }
+    }
+
+    #[wasm_bindgen(js_name = finishNudgeSelection)]
+    pub fn finish_nudge_selection(&mut self) {
+        self.commit_pending_nudge_snapshot();
     }
 
     /// Number of currently selected entities. Useful for status UI.

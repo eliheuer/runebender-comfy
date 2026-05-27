@@ -690,6 +690,7 @@ type Editor = {
     ctrl: boolean,
     independent: boolean,
   ): boolean;
+  finishNudgeSelection(): void;
   setAdvanceWidth(width: number): boolean;
   leftSidebearing(): number;
   rightSidebearing(): number;
@@ -721,6 +722,7 @@ type SaveAsDestination = {
 
 let editor: Editor | null = null;
 let raf: number | null = null;
+let rafNeedsDerivedState = false;
 let resizeObserver: ResizeObserver | null = null;
 let themeObserver: MutationObserver | null = null;
 let comfySyncTimer: number | null = null;
@@ -804,16 +806,21 @@ watch(
   },
 );
 
-function requestRender() {
+function requestRender(options: { refreshDerivedState?: boolean } = {}) {
   if (!editor || (viewMode.value !== "editor" && glyphNames.value.length > 0)) return;
+  rafNeedsDerivedState ||= options.refreshDerivedState !== false;
   if (raf !== null) return;
   raf = requestAnimationFrame(() => {
+    const refreshDerivedState = rafNeedsDerivedState;
     raf = null;
+    rafNeedsDerivedState = false;
     if (!editor || (viewMode.value !== "editor" && glyphNames.value.length > 0)) return;
     editor?.render();
-    refreshBackgroundImageFrame();
-    refreshSelectionState();
-    refreshCompatibilityMarkers();
+    if (refreshDerivedState) {
+      refreshBackgroundImageFrame();
+      refreshSelectionState();
+      refreshCompatibilityMarkers();
+    }
   });
 }
 
@@ -1025,13 +1032,11 @@ async function publishComfyState(force = false) {
 
 function refreshSelectionState() {
   if (!editor) {
-    selectionCount.value = 0;
-    selectedContourCount.value = 0;
-    selectedBounds.value = undefined;
+    setSelectionState(0, 0, undefined);
     return;
   }
   const bounds = editor.selectionBounds();
-  selectedBounds.value =
+  const nextBounds =
     bounds.length >= 5
       ? {
           count: bounds[0],
@@ -1041,8 +1046,41 @@ function refreshSelectionState() {
           height: bounds[4],
         }
       : undefined;
-  selectionCount.value = selectedBounds.value?.count ?? editor.selectionCount();
-  selectedContourCount.value = editor.selectedContourCount();
+  setSelectionState(
+    nextBounds?.count ?? editor.selectionCount(),
+    editor.selectedContourCount(),
+    nextBounds,
+  );
+}
+
+function sameSelectionBounds(
+  a: SelectionBounds | undefined,
+  b: SelectionBounds | undefined,
+): boolean {
+  if (!a || !b) return a === b;
+  return (
+    a.count === b.count &&
+    a.x === b.x &&
+    a.y === b.y &&
+    a.width === b.width &&
+    a.height === b.height
+  );
+}
+
+function setSelectionState(
+  nextSelectionCount: number,
+  nextSelectedContourCount: number,
+  nextBounds: SelectionBounds | undefined,
+) {
+  if (selectionCount.value !== nextSelectionCount) {
+    selectionCount.value = nextSelectionCount;
+  }
+  if (selectedContourCount.value !== nextSelectedContourCount) {
+    selectedContourCount.value = nextSelectedContourCount;
+  }
+  if (!sameSelectionBounds(selectedBounds.value, nextBounds)) {
+    selectedBounds.value = nextBounds;
+  }
 }
 
 function updateCompatibilityErrors() {
@@ -1078,7 +1116,9 @@ function updateCompatibilityErrors() {
 
 function refreshCompatibilityMarkers() {
   if (!editor || viewMode.value !== "editor" || compatErrors.value.length === 0) {
-    compatMarkers.value = [];
+    if (compatMarkers.value.length > 0) {
+      compatMarkers.value = [];
+    }
     return;
   }
   compatMarkers.value = compatErrors.value.flatMap((error) => {
@@ -1095,8 +1135,10 @@ function refreshCompatibilityMarkers() {
 }
 
 function refreshMeasureState() {
-  if (!editor) {
-    measureInfo.value = undefined;
+  if (!editor || activeTool.value !== "Measure") {
+    if (measureInfo.value) {
+      measureInfo.value = undefined;
+    }
     return;
   }
   const info = editor.measureInfo();
@@ -2456,9 +2498,22 @@ function onPointerMove(e: PointerEvent) {
   if (!editor) return;
   const c = canvasCoords(e);
   if (!c) return;
+  const pointerActive = e.buttons !== 0;
+  if (
+    !pointerActive &&
+    (activeTool.value === "Knife" ||
+      activeTool.value === "Measure" ||
+      activeTool.value === "Shapes" ||
+      activeTool.value === "Text" ||
+      activeTool.value === "Preview")
+  ) {
+    return;
+  }
   editor.pointerMove(c[0], c[1], modBits(e));
-  refreshMeasureState();
-  if (activeTool.value === "Text") {
+  if (pointerActive) {
+    refreshMeasureState();
+  }
+  if (activeTool.value === "Text" && pointerActive) {
     refreshTextStateFromEditor();
     syncTextKerningModelFromEditor(true);
   }
@@ -3905,6 +3960,7 @@ function flushDeferredGlyphSync(): boolean {
     window.clearTimeout(deferredGlyphSyncTimer);
     deferredGlyphSyncTimer = null;
   }
+  editor?.finishNudgeSelection();
   return syncCurrentGlyphBytesFromEditor();
 }
 
@@ -3918,7 +3974,9 @@ function scheduleDeferredGlyphSync(glyphName: string, masterName: string) {
   deferredGlyphSyncTimer = window.setTimeout(() => {
     deferredGlyphSyncTimer = null;
     if (currentGlyph.value !== glyphName || activeMasterName.value !== masterName) return;
+    editor?.finishNudgeSelection();
     syncCurrentGlyphBytesFromEditor();
+    refreshSelectionState();
   }, 120);
 }
 
@@ -3936,8 +3994,7 @@ function applyEditorNudge(
   if (!changed) return false;
 
   markGlyphDirty(glyphName);
-  refreshSelectionState();
-  requestRender();
+  requestRender({ refreshDerivedState: false });
   scheduleDeferredGlyphSync(glyphName, masterName);
   return true;
 }
