@@ -53,6 +53,34 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn('document.addEventListener("pointerdown", onDocumentPointerDown, true);', extension_source)
         self.assertIn('document.removeEventListener("pointerdown", onDocumentPointerDown, true);', extension_source)
 
+    def test_editor_render_requests_coalesce_without_postponing_frame(self) -> None:
+        source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
+        start = source.index("function requestRender()")
+        end = source.index("\nasync function loadDevTestFont", start)
+        body = source[start:end]
+
+        self.assertIn("if (raf !== null) return;", body)
+        self.assertIn("raf = null;", body)
+        self.assertIn("editor?.render();", body)
+        self.assertNotIn("cancelAnimationFrame(raf);", body)
+
+    def test_arrow_nudge_uses_fast_render_path_and_defers_heavy_sync(self) -> None:
+        source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
+        self.assertIn("function applyEditorNudge(", source)
+        nudge_start = source.index("function applyEditorNudge(")
+        nudge_end = source.index("\nfunction applyEditorHistoryChange", nudge_start)
+        nudge_body = source[nudge_start:nudge_end]
+        self.assertIn("editor.nudgeSelection(dx, dy, shift, ctrl, independent)", nudge_body)
+        self.assertIn("requestRender();", nudge_body)
+        self.assertIn("scheduleDeferredGlyphSync(glyphName, masterName);", nudge_body)
+        self.assertNotIn("syncCurrentGlyphBytesFromEditor();", nudge_body)
+
+        key_start = source.index("function onKeyDown(")
+        key_end = source.index("\nfunction onKeyUp", key_start)
+        key_body = source[key_start:key_end]
+        self.assertIn("applyEditorNudge(nudge[0], nudge[1], e.shiftKey, meta, e.altKey)", key_body)
+        self.assertNotIn("editor.nudgeSelection(", key_body)
+
     def test_master_switch_refreshes_text_sort_metrics_from_active_master(self) -> None:
         source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
 

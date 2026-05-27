@@ -720,10 +720,11 @@ type SaveAsDestination = {
 };
 
 let editor: Editor | null = null;
-let raf = 0;
+let raf: number | null = null;
 let resizeObserver: ResizeObserver | null = null;
 let themeObserver: MutationObserver | null = null;
 let comfySyncTimer: number | null = null;
+let deferredGlyphSyncTimer: number | null = null;
 let lastPublishedComfyState = "";
 
 onMounted(async () => {
@@ -805,8 +806,10 @@ watch(
 
 function requestRender() {
   if (!editor || (viewMode.value !== "editor" && glyphNames.value.length > 0)) return;
-  cancelAnimationFrame(raf);
+  if (raf !== null) return;
   raf = requestAnimationFrame(() => {
+    raf = null;
+    if (!editor || (viewMode.value !== "editor" && glyphNames.value.length > 0)) return;
     editor?.render();
     refreshBackgroundImageFrame();
     refreshSelectionState();
@@ -3451,6 +3454,7 @@ function extractUnitsPerEm(fontInfoBytes: Uint8Array): number {
 /// it from the new master's bytes so the canvas tracks the switch.
 function activateMaster(name: string) {
   if (!masterDataMap.value.has(name)) return;
+  flushDeferredGlyphSync();
   activeMasterName.value = name;
   const data = masterDataMap.value.get(name);
   if (!data || !editor) return;
@@ -3713,6 +3717,9 @@ function loadGlyphIntoEditor(
   options: { fitCanvas?: boolean; seedTextBuffer?: boolean; preserveHistory?: boolean } = {},
 ) {
   if (!editor || !canvas.value) return;
+  if (currentGlyph.value && currentGlyph.value !== name) {
+    flushDeferredGlyphSync();
+  }
   const data = activeMasterData.value;
   if (!data) return;
   const bytes = data.glyphBytes.get(name);
@@ -3816,6 +3823,7 @@ function setMarkOnSelected(rgba: string) {
 }
 
 function backToGrid() {
+  flushDeferredGlyphSync();
   if (editor?.pointerCancel()) {
     syncEditorMutationAfterWasmChange();
   }
@@ -3892,6 +3900,48 @@ function syncEditorMutationAfterWasmChange(): boolean {
   return true;
 }
 
+function flushDeferredGlyphSync(): boolean {
+  if (deferredGlyphSyncTimer !== null) {
+    window.clearTimeout(deferredGlyphSyncTimer);
+    deferredGlyphSyncTimer = null;
+  }
+  return syncCurrentGlyphBytesFromEditor();
+}
+
+function scheduleDeferredGlyphSync(glyphName: string, masterName: string) {
+  if (deferredGlyphSyncTimer !== null) {
+    window.clearTimeout(deferredGlyphSyncTimer);
+  }
+  // Keyboard repeat needs xilem-like "move then paint" latency. Keep
+  // GLIF serialization, SVG refresh, compatibility checks, and Comfy
+  // state sync off the immediate keydown path.
+  deferredGlyphSyncTimer = window.setTimeout(() => {
+    deferredGlyphSyncTimer = null;
+    if (currentGlyph.value !== glyphName || activeMasterName.value !== masterName) return;
+    syncCurrentGlyphBytesFromEditor();
+  }, 120);
+}
+
+function applyEditorNudge(
+  dx: number,
+  dy: number,
+  shift: boolean,
+  ctrl: boolean,
+  independent: boolean,
+): boolean {
+  if (!editor || !currentGlyph.value || !activeMasterName.value) return false;
+  const glyphName = currentGlyph.value;
+  const masterName = activeMasterName.value;
+  const changed = editor.nudgeSelection(dx, dy, shift, ctrl, independent);
+  if (!changed) return false;
+
+  markGlyphDirty(glyphName);
+  refreshSelectionState();
+  requestRender();
+  scheduleDeferredGlyphSync(glyphName, masterName);
+  return true;
+}
+
 function applyEditorHistoryChange(change: () => boolean): boolean {
   if (!editor || !currentGlyph.value) return false;
   if (!change()) return false;
@@ -3963,7 +4013,7 @@ async function onSave(): Promise<boolean> {
   try {
     status.value = "saving…";
     mirroredSaveWrites.value = 0;
-    if (currentGlyph.value && editor && !syncCurrentGlyphBytesFromEditor()) {
+    if (currentGlyph.value && editor && !flushDeferredGlyphSync()) {
       status.value = "save failed";
       return false;
     }
@@ -5093,9 +5143,7 @@ function onKeyDown(e: KeyboardEvent) {
     }
     if (
       selectionCount.value > 0 &&
-      applyEditorMutation(() =>
-        editor.nudgeSelection(nudge[0], nudge[1], e.shiftKey, meta, e.altKey),
-      )
+      applyEditorNudge(nudge[0], nudge[1], e.shiftKey, meta, e.altKey)
     ) {
       e.preventDefault();
       return;
@@ -5130,7 +5178,11 @@ function onKeyUp(e: KeyboardEvent) {
 }
 
 onBeforeUnmount(() => {
-  cancelAnimationFrame(raf);
+  if (raf !== null) {
+    cancelAnimationFrame(raf);
+    raf = null;
+  }
+  flushDeferredGlyphSync();
   if (comfySyncTimer !== null) {
     clearTimeout(comfySyncTimer);
     comfySyncTimer = null;
