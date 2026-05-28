@@ -6,7 +6,7 @@ Nodes:
                  Glyphs/glyphspackage as alternates
   CompileFont  — compile a workspace when a backend exists
   FontPreview  — simple specimen renderer for a FONT reference
-  FontSpecimen — scriptable specimen renderer with IMAGE + MASK outputs
+  DrawBot Skia — scriptable DrawBot renderer with IMAGE + MASK outputs
   ForkFont     — deep-copy a workspace under a new name
   DesignBot    — DrawBot/Processing-style 2D graphics scripting
 """
@@ -24,10 +24,18 @@ from .nodes.fork_font import ForkFont
 from .nodes.runebender import Runebender
 from .nodes.designbot import DesignBot
 
+
+class LegacyComfyFontDrawBot(FontSpecimen):
+    """Compatibility shim for workflows saved with the old comfyfont DrawBot."""
+
+    DEPRECATED = True
+
+
 NODE_CLASS_MAPPINGS = {
     "CompileFont": CompileFont,
     "FontPreview": FontPreview,
     "FontSpecimen": FontSpecimen,
+    "ComfyFontDrawBot": LegacyComfyFontDrawBot,
     "ForkFont": ForkFont,
     "Runebender": Runebender,
     "DesignBot": DesignBot,
@@ -36,7 +44,8 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "CompileFont": "Compile Font",
     "FontPreview": "Font Preview",
-    "FontSpecimen": "Specimen",
+    "FontSpecimen": "DrawBot Skia",
+    "ComfyFontDrawBot": "DrawBot Skia (legacy)",
     "ForkFont": "Fork Font",
     "Runebender": "Runebender",
     "DesignBot": "DesignBot",

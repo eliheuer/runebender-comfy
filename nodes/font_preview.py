@@ -16,7 +16,7 @@ from pathlib import Path
 import plistlib
 import xml.etree.ElementTree as ET
 
-from .workspace import compiled_path
+from .workspace import compiled_path, resolve_slot
 
 # drawbot-skia uses module-level global state for the active canvas.
 # Serialize render calls so two concurrent preview requests can't
@@ -649,5 +649,11 @@ class FontPreview:
             font_path = compiled_path(font)
         except Exception:
             font_path = None
-        img = render_specimen_image(font_path, text, width, height)
+        try:
+            slot_dir = resolve_slot(font)
+            png = render_workspace_preview_png(slot_dir, text, width, height, ttf_path=font_path)
+            _np, Image, _image_draw, _image_font, _torch = _image_stack()
+            img = Image.open(BytesIO(png))
+        except Exception:
+            img = render_specimen_image(font_path, text, width, height)
         return (_pil_to_tensor(img),)

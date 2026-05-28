@@ -11,7 +11,7 @@ import { runebenderHostKey, type WorkspaceChoice } from "./host/runebenderHost";
 import { comfyHost } from "./hosts/comfy/comfyHost";
 import Runebender from "./Runebender.vue";
 
-const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-24-sort-dblclick-81";
+const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-28-pointerfix-83";
 
 // Mirror our own console output to the ComfyUI terminal through the
 // injected Comfy host. Filters to messages prefixed with
@@ -238,123 +238,6 @@ function requestSourcePath(defaultValue: string): Promise<string | null> {
   });
 }
 
-function installGlobalLinkTrace() {
-  if (window.__runebenderGlobalLinkTraceInstalled) return;
-  window.__runebenderGlobalLinkTraceInstalled = true;
-
-  const LG = window.LiteGraph;
-  if (!LG) {
-    console.warn("[runebender-comfy] LiteGraph global missing — global trace skipped");
-    return;
-  }
-
-  const nodeProto = LG.LGraphNode?.prototype;
-  const graphProto = LG.LGraph?.prototype;
-
-  if (nodeProto?.disconnectInput) {
-    const orig = nodeProto.disconnectInput;
-    nodeProto.disconnectInput = function (slot: any, ...args: any[]) {
-      const slotIndex = typeof slot === "string" ? this.findInputSlot?.(slot) : slot;
-      const input = this.inputs?.[slotIndex];
-      if (input?.name === "font" || slot === "font") {
-        console.warn("[runebender-comfy] PROTO disconnectInput on font slot", {
-          nodeId: this.id,
-          nodeTitle: this.title,
-          comfyClass: this.comfyClass,
-          slot,
-          slotIndex,
-          link: input?.link ?? null,
-          stack: new Error().stack,
-        });
-      }
-      return orig.apply(this, [slot, ...args]);
-    };
-  }
-
-  if (nodeProto?.disconnectOutput) {
-    const orig = nodeProto.disconnectOutput;
-    nodeProto.disconnectOutput = function (slot: any, ...args: any[]) {
-      const slotIndex = typeof slot === "string" ? this.findOutputSlot?.(slot) : slot;
-      const output = this.outputs?.[slotIndex];
-      if (output?.name === "font" || slot === "font") {
-        console.warn("[runebender-comfy] PROTO disconnectOutput on font slot", {
-          nodeId: this.id,
-          nodeTitle: this.title,
-          comfyClass: this.comfyClass,
-          slot,
-          slotIndex,
-          links: output?.links ? [...output.links] : [],
-          stack: new Error().stack,
-        });
-      }
-      return orig.apply(this, [slot, ...args]);
-    };
-  }
-
-  if (graphProto?.removeLink) {
-    const orig = graphProto.removeLink;
-    graphProto.removeLink = function (link_id: any) {
-      const link = this.links?.[link_id];
-      const originNode = link ? this.getNodeById?.(link.origin_id) : null;
-      const targetNode = link ? this.getNodeById?.(link.target_id) : null;
-      const isFontLink =
-        link?.type === "FONT" ||
-        originNode?.outputs?.[link?.origin_slot]?.name === "font" ||
-        targetNode?.inputs?.[link?.target_slot]?.name === "font";
-      if (isFontLink) {
-        console.warn("[runebender-comfy] GRAPH removeLink on FONT link", {
-          link_id,
-          link,
-          origin: originNode ? { id: originNode.id, comfyClass: originNode.comfyClass } : null,
-          target: targetNode ? { id: targetNode.id, comfyClass: targetNode.comfyClass } : null,
-          stack: new Error().stack,
-        });
-      }
-      return orig.apply(this, [link_id]);
-    };
-  }
-
-  console.info("[runebender-comfy] global FONT link trace installed");
-}
-
-function installSlotLinkSensor(node: any, slotKind: "input" | "output", label: string) {
-  const slots = slotKind === "input" ? node.inputs : node.outputs;
-  if (!Array.isArray(slots)) return;
-  for (const slot of slots) {
-    if (slot?.name !== "font") continue;
-    if (slot.__runebenderLinkSensorInstalled) continue;
-    slot.__runebenderLinkSensorInstalled = true;
-    const linkKey = slotKind === "input" ? "link" : "links";
-    let stored = slot[linkKey];
-    Object.defineProperty(slot, linkKey, {
-      configurable: true,
-      enumerable: true,
-      get() {
-        return stored;
-      },
-      set(value) {
-        const before = stored;
-        stored = value;
-        const cleared =
-          slotKind === "input"
-            ? before != null && value == null
-            : (Array.isArray(before) && before.length > 0) &&
-              (!Array.isArray(value) || value.length === 0);
-        if (cleared) {
-          console.warn(`[runebender-comfy] ${label} ${slotKind} font slot ${linkKey} cleared`, {
-            nodeId: node.id,
-            before,
-            value,
-            stack: new Error().stack,
-          });
-        }
-      },
-    });
-  }
-}
-
-installGlobalLinkTrace();
-
 function logNodeSockets(node: any, label: string) {
   const payload = {
     id: node.id,
@@ -391,45 +274,101 @@ function resolveConnectedFontValue(node: any): string {
   return "";
 }
 
-function traceFontInputDisconnects(node: any, label: string) {
-  if (node.__runebenderFontInputTraceInstalled) return;
-  if (typeof node.disconnectInput !== "function") return;
-  node.__runebenderFontInputTraceInstalled = true;
-  const originalDisconnectInput = node.disconnectInput;
-  node.disconnectInput = function (slot: any, ...args: any[]) {
-    const slotIndex = typeof slot === "string" ? this.findInputSlot?.(slot) : slot;
-    const input = this.inputs?.[slotIndex];
-    if (slot === "font" || input?.name === "font") {
-      console.warn(`[runebender-comfy] ${label} font input disconnect requested`, {
-        slot,
-        slotIndex,
-        link: input?.link ?? null,
-        stack: new Error().stack,
-      });
-      logNodeSockets(this, `${label} before font input disconnect`);
-    }
-    return originalDisconnectInput.call(this, slot, ...args);
-  };
+async function fetchDrawBotPresetSource(name: string): Promise<string | null> {
+  try {
+    return await comfyHost.drawBotPresetSource(name);
+  } catch (error) {
+    console.warn("[runebender-comfy] drawbot preset fetch failed:", error);
+    return null;
+  }
 }
 
-function traceFontOutputDisconnects(node: any, label: string) {
-  if (node.__runebenderFontOutputTraceInstalled) return;
-  if (typeof node.disconnectOutput !== "function") return;
-  node.__runebenderFontOutputTraceInstalled = true;
-  const originalDisconnectOutput = node.disconnectOutput;
-  node.disconnectOutput = function (slot: any, ...args: any[]) {
-    const slotIndex = typeof slot === "string" ? this.findOutputSlot?.(slot) : slot;
-    const output = this.outputs?.[slotIndex];
-    if (slot === "font" || output?.name === "font") {
-      console.warn(`[runebender-comfy] ${label} font output disconnect requested`, {
-        slot,
-        slotIndex,
-        links: output?.links ?? [],
-        stack: new Error().stack,
-      });
-      logNodeSockets(this, `${label} before font output disconnect`);
-    }
-    return originalDisconnectOutput.call(this, slot, ...args);
+function setWidgetStringValue(widget: any, value: string) {
+  widget.value = value;
+  if (widget.inputEl) widget.inputEl.value = value;
+}
+
+function installScriptTextareaBehavior(textarea: HTMLTextAreaElement, widget: any) {
+  if ((textarea as any).__runebenderScriptEditorInstalled) return;
+  (textarea as any).__runebenderScriptEditorInstalled = true;
+  textarea.spellcheck = false;
+  textarea.autocapitalize = "off";
+  textarea.autocomplete = "off";
+  textarea.wrap = "off";
+  textarea.style.fontFamily = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+  textarea.style.fontSize = "12px";
+  textarea.style.lineHeight = "1.45";
+  textarea.style.tabSize = "4";
+  textarea.style.whiteSpace = "pre";
+  textarea.style.overflow = "auto";
+  textarea.style.resize = "vertical";
+  textarea.style.minHeight = "220px";
+  textarea.style.background = "#101010";
+  textarea.style.color = "#d8d8d8";
+  textarea.style.borderColor = "#606060";
+  textarea.style.caretColor = "#66ee88";
+  textarea.addEventListener("keydown", (event) => {
+    if (event.key !== "Tab") return;
+    event.preventDefault();
+    const start = textarea.selectionStart ?? 0;
+    const end = textarea.selectionEnd ?? start;
+    const value = textarea.value;
+    const indent = "    ";
+    textarea.value = `${value.slice(0, start)}${indent}${value.slice(end)}`;
+    textarea.selectionStart = textarea.selectionEnd = start + indent.length;
+    setWidgetStringValue(widget, textarea.value);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+function attachFontSpecimenPresetSync(node: any) {
+  if (node.comfyClass === "ComfyFontDrawBot") {
+    node.title = "DrawBot Skia";
+    node.constructor.title = "DrawBot Skia";
+    node.constructor.category = "Runebender / Font";
+  }
+  const presetWidget = node.widgets?.find((widget: any) => widget.name === "preset");
+  const scriptWidget = node.widgets?.find((widget: any) =>
+    widget.name === "custom_script" || widget.name === "script_override"
+  );
+  if (!presetWidget || !scriptWidget) return;
+
+  const pollForTextarea = window.setInterval(() => {
+    const textarea = scriptWidget.inputEl as HTMLTextAreaElement | undefined;
+    if (!textarea) return;
+    window.clearInterval(pollForTextarea);
+    installScriptTextareaBehavior(textarea, scriptWidget);
+  }, 100);
+
+  const presetValues = presetWidget.options?.values ?? [];
+  const normalizePreset = () => {
+    if (!presetValues.length) return;
+    if (presetValues.includes(presetWidget.value)) return;
+    const match = presetValues.find((value: string) => value.toLowerCase() === String(presetWidget.value).toLowerCase());
+    if (match) presetWidget.value = match;
+  };
+
+  const loadPresetIntoScript = async (value: string, force = false) => {
+    normalizePreset();
+    if (!force && String(scriptWidget.value ?? "").trim()) return;
+    const source = await fetchDrawBotPresetSource(value);
+    if (source != null) setWidgetStringValue(scriptWidget, source);
+  };
+
+  normalizePreset();
+  void loadPresetIntoScript(String(presetWidget.value ?? ""));
+
+  const originalCallback = presetWidget.callback;
+  presetWidget.callback = function (value: string, ...args: any[]) {
+    originalCallback?.call(this, value, ...args);
+    void loadPresetIntoScript(String(value ?? ""), true);
+  };
+
+  const originalConfigure = node.onConfigure;
+  node.onConfigure = function (info: any) {
+    originalConfigure?.call(this, info);
+    normalizePreset();
+    void loadPresetIntoScript(String(presetWidget.value ?? ""));
   };
 }
 
@@ -702,6 +641,11 @@ function openRunebenderOverlay(options: {
 
 app.registerExtension({
   name: "runebender-comfy.Runebender",
+  nodeCreated(node: any) {
+    if (node.comfyClass === "FontSpecimen" || node.comfyClass === "ComfyFontDrawBot") {
+      attachFontSpecimenPresetSync(node);
+    }
+  },
   async beforeRegisterNodeDef(nodeType: any, nodeData: any) {
     if (nodeData.name !== "Runebender") return;
 
@@ -716,10 +660,6 @@ app.registerExtension({
       onCreated?.apply(this, arguments);
       console.log(`[runebender-comfy] ${RUNEBENDER_BUNDLE_FINGERPRINT} Runebender node active`);
       logNodeSockets(this, "Runebender node sockets");
-      traceFontInputDisconnects(this, "Runebender node");
-      traceFontOutputDisconnects(this, "Runebender node");
-      installSlotLinkSensor(this, "input", "Runebender node");
-      installSlotLinkSensor(this, "output", "Runebender node");
       this.properties ??= {};
       this.properties.glyph_data ??= "";
 
@@ -814,6 +754,11 @@ app.registerExtension({
         "border-radius:6px",
         "padding:4px",
         "box-sizing:border-box",
+        // Display-only specimen. Without this the <img> captures pointer
+        // events over the canvas it overlays, swallowing wire drags (and
+        // node grabs) that cross it — so no link can be dragged to/from a
+        // socket beneath or beside it. Make it transparent to the mouse.
+        "pointer-events:none",
       ].join(";");
 
       // Latin specimen sent as a single string. The backend picks the

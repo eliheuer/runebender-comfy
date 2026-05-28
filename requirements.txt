@@ -2,3 +2,4 @@
 numpy
 Pillow
 torch
+drawbot-skia @ git+https://github.com/eliheuer/drawbot-skia.git

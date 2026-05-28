@@ -45,7 +45,7 @@ from nodes.font import Font
 from nodes.compile_font import CompileFont
 from nodes import font_preview
 from nodes.font_preview import FontPreview
-from nodes.font_specimen import FontSpecimen
+from nodes.font_specimen import FontSpecimen, load_presets
 from nodes.fork_font import ForkFont
 from nodes.designbot import DesignBot, _script_for_render
 
@@ -1571,14 +1571,49 @@ class FontPreviewNodeTests(unittest.TestCase):
         self.assertIn("0041", parsed["unicodes"])
         self.assertEqual(len(parsed["polygons"]), 1)
 
+    def test_font_preview_renders_from_workspace_source_without_compiled_font(self) -> None:
+        class _FakeImg:
+            def convert(self, _mode):
+                return self
+
+        class _FakeImageModule:
+            @staticmethod
+            def open(_bio):
+                return _FakeImg()
+
+        with mock.patch("nodes.font_preview.compiled_path", side_effect=FileNotFoundError), \
+             mock.patch("nodes.font_preview.resolve_slot", return_value=Path("/tmp/font-slot")), \
+             mock.patch("nodes.font_preview.render_workspace_preview_png", return_value=b"png"), \
+             mock.patch("nodes.font_preview._image_stack", return_value=(object(), _FakeImageModule, object(), object(), object())), \
+             mock.patch("nodes.font_preview._pil_to_tensor", return_value="tensor"):
+            image, = FontPreview().run("demo", "Aa", 256, 128)
+
+        self.assertEqual(image, "tensor")
+
 
 class FontSpecimenNodeTests(unittest.TestCase):
     def test_font_specimen_exposes_scriptable_image_and_mask_outputs(self) -> None:
         input_types = FontSpecimen.INPUT_TYPES()
 
-        self.assertEqual(input_types["required"]["font"], ("FONT",))
+        self.assertEqual(input_types["required"]["font"][0], "FONT")
+        self.assertTrue(input_types["required"]["font"][1]["forceInput"])
+        self.assertIn("Specimen", input_types["required"]["preset"][0])
         self.assertEqual(FontSpecimen.RETURN_TYPES, ("IMAGE", "MASK"))
         self.assertIn("custom_script", input_types["optional"])
+        self.assertIn("DrawBot Python", input_types["optional"]["custom_script"][1]["tooltip"])
+
+    def test_font_specimen_loads_drawbot_presets_from_disk(self) -> None:
+        presets = load_presets()
+
+        self.assertIn("Specimen", presets)
+        self.assertIn("Waterfall", presets)
+        self.assertIn("font_path", presets["Custom"])
+        self.assertNotIn("helpers", presets)
+
+    def test_font_specimen_uses_runebender_drawbot_skia_fork(self) -> None:
+        requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+
+        self.assertIn("drawbot-skia @ git+https://github.com/eliheuer/drawbot-skia.git", requirements)
 
     def test_font_specimen_renders_image_and_mask_tensors(self) -> None:
         class _FakeImg:
@@ -1588,49 +1623,8 @@ class FontSpecimenNodeTests(unittest.TestCase):
             def getchannel(self, _name):
                 return self
 
-        class _FakeDraw:
-            def textbbox(self, _xy, _text, font=None):
-                return (0, 0, 64, 32)
-
-            def text(self, *_args, **_kwargs):
-                return None
-
-            def multiline_text(self, *_args, **_kwargs):
-                return None
-
-            def rectangle(self, *_args, **_kwargs):
-                return None
-
-        class _FakeImageModule:
-            @staticmethod
-            def new(_mode, _size, _color):
-                return _FakeImg()
-
-            @staticmethod
-            def alpha_composite(_base, _overlay):
-                return _FakeImg()
-
-        class _FakeImageDrawModule:
-            @staticmethod
-            def Draw(_img):
-                return _FakeDraw()
-
-        class _FakeImageFontModule:
-            @staticmethod
-            def truetype(_path, size=None):
-                return object()
-
-            @staticmethod
-            def load_default():
-                return object()
-
-        class _FakeTorch:
-            @staticmethod
-            def from_numpy(_arr):
-                return "tensor"
-
         with mock.patch("nodes.font_specimen.compiled_path", return_value=Path("/tmp/font.ttf")), \
-             mock.patch("nodes.font_specimen._image_stack", return_value=(object(), _FakeImageModule, _FakeImageDrawModule, _FakeImageFontModule, _FakeTorch)), \
+             mock.patch("nodes.font_specimen._render_drawbot", return_value=_FakeImg()), \
              mock.patch("nodes.font_specimen._image_to_tensor", return_value="tensor"), \
              mock.patch("nodes.font_specimen._mask_to_tensor", return_value="tensor"):
             image, mask = FontSpecimen().run("demo", "glyph", "A", 256, 128)

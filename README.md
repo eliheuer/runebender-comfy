@@ -22,7 +22,7 @@ full type-design toolchain is still in progress.
   import button for selecting a local UFO/designspace bundle from disk.
   When `glyphsLib` is installed, the import path normalizes Glyphs into
   UFO/designspace inside the workspace.
-- **Specimen** — DrawBot-style specimen renderer with `IMAGE` + `MASK`
+- **DrawBot** — DrawBot-style specimen renderer with `IMAGE` + `MASK`
   outputs for scripted type specimens and previews.
 - **Compile Font** — materializes a compiled artifact for a workspace
   when a backend exists. The workspace auto-materializes a
@@ -213,6 +213,17 @@ automatically from the workspace's editable source when needed.
 
 To import Glyphs files into the default UFO/designspace workspace
 shape, install `glyphsLib` in the ComfyUI Python environment.
+
+To render `DrawBot` node scripts, install this project's DrawBot
+engine dependency in the ComfyUI Python environment:
+
+```bash
+pip install 'drawbot-skia @ git+https://github.com/eliheuer/drawbot-skia.git'
+```
+
+The `DrawBot` node consumes a `FONT` wire, exposes DrawBot preset
+scripts in an editable `custom_script` field, and outputs `IMAGE` +
+`MASK` tensors that can be wired to ComfyUI's normal image save nodes.
 
 The `Load Font` node includes an import button that copies a local
 UFO/designspace bundle into the workspace and binds the resulting

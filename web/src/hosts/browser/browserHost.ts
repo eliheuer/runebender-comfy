@@ -28,6 +28,10 @@ export const browserHost: RunebenderHost = {
     return "";
   },
 
+  async drawBotPresetSource() {
+    return null;
+  },
+
   async writeWorkspaceFile() {
     return unavailable();
   },

@@ -53,6 +53,7 @@ export type RunebenderHost = {
   loadWorkspaceSlot(slot: string): Promise<WorkspaceSlotPayload | null>;
   listWorkspaceSlots(): Promise<WorkspaceChoice[]>;
   workspacePreviewUrl(slot: string, params: URLSearchParams): string;
+  drawBotPresetSource(name: string): Promise<string | null>;
   writeWorkspaceFile(path: string, text: string): Promise<Response>;
   chooseSource(mode?: "source" | "folder"): Promise<ChooseSourceResult>;
   linkSource(args: {

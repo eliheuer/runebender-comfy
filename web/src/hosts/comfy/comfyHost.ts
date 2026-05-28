@@ -54,6 +54,11 @@ export const comfyHost: RunebenderHost = {
     return `/runebender/workspace/${encodeURIComponent(slot)}/preview?${params.toString()}`;
   },
 
+  async drawBotPresetSource(name) {
+    const response = await fetch(`/runebender/drawbot_preset?name=${encodeURIComponent(name)}`);
+    return response.ok ? await response.text() : null;
+  },
+
   async writeWorkspaceFile(path, text) {
     const body = new FormData();
     body.append("path", path);

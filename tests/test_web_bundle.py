@@ -1003,7 +1003,7 @@ class WebBundleTests(unittest.TestCase):
         start = source.index(".runebender-host :deep(::-webkit-scrollbar-thumb) {")
         end = source.index("\n}", start)
         scrollbar_thumb_css = source[start:end]
-        self.assertIn("border: 1.5px solid transparent;", scrollbar_thumb_css)
+        self.assertIn("border: 2.25px solid transparent;", scrollbar_thumb_css)
         self.assertIn("background-clip: padding-box;", scrollbar_thumb_css)
 
         self.assertIn("@supports (-moz-appearance: none)", source)
@@ -1049,6 +1049,7 @@ class WebBundleTests(unittest.TestCase):
             "/runebender/link_source",
             "/runebender/workspace/save_as",
             "/runebender/workspace/invalidate",
+            "/runebender/drawbot_preset",
         ]:
             self.assertIn(route, host)
 
@@ -1064,6 +1065,7 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn("refreshed_from_source?: boolean", interface)
         self.assertIn("listWorkspaceSlots(): Promise<WorkspaceChoice[]>", interface)
         self.assertIn("workspacePreviewUrl(slot: string, params: URLSearchParams)", interface)
+        self.assertIn("drawBotPresetSource(name: string)", interface)
         self.assertIn("writeWorkspaceFile(path: string, text: string)", interface)
         self.assertIn('chooseSource(mode?: "source" | "folder")', interface)
         self.assertIn("linkSource(args:", interface)
@@ -1106,12 +1108,15 @@ class WebBundleTests(unittest.TestCase):
         self.assertEqual(module.WEB_DIRECTORY, "./web/dist")
         self.assertEqual(
             set(module.NODE_CLASS_MAPPINGS),
-            {"CompileFont", "FontPreview", "FontSpecimen", "ForkFont", "Runebender", "DesignBot"},
+            {"CompileFont", "FontPreview", "FontSpecimen", "ComfyFontDrawBot", "ForkFont", "Runebender", "DesignBot"},
         )
         self.assertEqual(
             set(module.NODE_DISPLAY_NAME_MAPPINGS),
             set(module.NODE_CLASS_MAPPINGS),
         )
+        self.assertEqual(module.NODE_DISPLAY_NAME_MAPPINGS["FontSpecimen"], "DrawBot Skia")
+        self.assertEqual(module.NODE_DISPLAY_NAME_MAPPINGS["ComfyFontDrawBot"], "DrawBot Skia (legacy)")
+        self.assertTrue(module.NODE_CLASS_MAPPINGS["ComfyFontDrawBot"].DEPRECATED)
         self.assertTrue(all(cls.CATEGORY.startswith("Runebender") for cls in module.NODE_CLASS_MAPPINGS.values()))
 
     def test_comfy_web_directory_points_to_built_dist(self) -> None:
@@ -1149,10 +1154,13 @@ class WebBundleTests(unittest.TestCase):
         self.assertNotIn("Import Copy File...", bundle)
         self.assertNotIn("Refresh Workspaces", bundle)
         self.assertIn("Close editor", bundle)
-        self.assertIn("font input disconnect requested", bundle)
+        self.assertNotIn("font input disconnect requested", bundle)
+        self.assertNotIn("Object.defineProperty(slot, linkKey", bundle)
+        self.assertNotIn("global FONT link trace installed", bundle)
+        self.assertNotIn("GRAPH removeLink on FONT link", bundle)
         self.assertIn("runebender/link_source", bundle)
         self.assertIn("workspace/invalidate", bundle)
-        self.assertIn("rb-bundle-2026-05-24-sort-dblclick-81", bundle)
+        self.assertIn("rb-bundle-2026-05-28-drawbot-skia-82", bundle)
         # Grid thumbnail SVGs must come from one batched WASM call
         # (glifMapToSvgs) not 600+ per-glyph crossings.
         self.assertIn("glifMapToSvgs", bundle)
@@ -1183,6 +1191,16 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn("reloaded source changes from disk", bundle)
         self.assertIn("runebender/workspace/save_as", bundle)
         self.assertIn("Choose Source...", bundle)
+        self.assertIn("runebender/drawbot_preset", bundle)
+        extension_source = (ROOT / "web" / "src" / "extension.ts").read_text(encoding="utf-8")
+        self.assertIn("attachFontSpecimenPresetSync", extension_source)
+        self.assertIn('node.comfyClass === "ComfyFontDrawBot"', extension_source)
+        self.assertIn('node.title = "DrawBot Skia"', extension_source)
+        self.assertIn('widget.name === "script_override"', extension_source)
+        self.assertIn("installScriptTextareaBehavior", extension_source)
+        self.assertIn('textarea.spellcheck = false;', extension_source)
+        self.assertIn('event.key !== "Tab"', extension_source)
+        self.assertNotIn("scriptWidget.computeSize", extension_source)
         self.assertNotIn("Choose File...", bundle)
         self.assertIn("runebender/choose_source", bundle)
         self.assertIn("showDirectoryPicker", bundle)
