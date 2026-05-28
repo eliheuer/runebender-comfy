@@ -479,7 +479,11 @@ def _append_qcurve(path, points) -> None:
 
 
 def _pick_preview_ufo(slot_dir: Path) -> Path | None:
-    ufo_dirs = sorted(path for path in slot_dir.iterdir() if path.is_dir() and path.suffix.lower() == ".ufo")
+    ufo_dirs = sorted(
+        path
+        for path in slot_dir.rglob("*.ufo")
+        if path.is_dir() and not any(parent.suffix.lower() == ".glyphspackage" for parent in path.parents)
+    )
     if not ufo_dirs:
         return None
     for path in ufo_dirs:

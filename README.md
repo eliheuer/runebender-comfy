@@ -57,6 +57,26 @@ The Rust core deliberately skips Xilem — for an embedded canvas inside
 an existing JS host (ComfyUI's Vue frontend), Vello + Kurbo via
 `wasm-bindgen` is the right layer.
 
+## Google Fonts Sidebar Data
+
+The glyph-grid sidebar mirrors Glyphs-style categories, languages, and
+filters. Google Fonts language/glyphset filters are generated from local
+upstream checkouts:
+
+- `/Users/eli/GF/repos/lang` → <https://github.com/googlefonts/lang>
+- `/Users/eli/GF/repos/glyphsets` → <https://github.com/googlefonts/glyphsets>
+
+Regenerate the vendored sidebar manifest after updating those repos:
+
+```sh
+cd web
+pnpm gf-sidebar
+```
+
+The generated data lives in `web/src/gfSidebarData.generated.ts` and
+uses Google Fonts glyphset names such as `GF Latin Core` and
+`GF Latin Plus`.
+
 ## Theming
 
 The editor's Vue chrome (panels, toolbars, sidebars, grid view) inherits

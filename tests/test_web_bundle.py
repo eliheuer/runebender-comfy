@@ -53,6 +53,28 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn('document.addEventListener("pointerdown", onDocumentPointerDown, true);', extension_source)
         self.assertIn('document.removeEventListener("pointerdown", onDocumentPointerDown, true);', extension_source)
 
+    def test_grid_keyboard_selection_paints_before_reactive_sidebar_work(self) -> None:
+        source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
+
+        nav_start = source.index("function navigateGridSelection")
+        nav_end = source.index("\nfunction copyGridGlyph", nav_start)
+        nav_body = source[nav_start:nav_end]
+        self.assertIn("pendingGridSelectionName || selectedGlyph.value", nav_body)
+        self.assertIn("setPrimarySelectedGlyphFromKeyboard(names[nextIndex], nextIndex);", nav_body)
+
+        fast_start = source.index("function setPrimarySelectedGlyphFromKeyboard")
+        fast_end = source.index("\nfunction selectGlyph", fast_start)
+        fast_body = source[fast_start:fast_end]
+        self.assertLess(
+            fast_body.index("applyImmediateGridSelection(previousIndex, index);"),
+            fast_body.index("requestAnimationFrame(() => {"),
+        )
+        self.assertIn("classList.add(\"selected\")", source)
+        self.assertIn("classList.remove(\"selected\")", source)
+        self.assertIn("let pendingGridScrollRaf", source)
+        self.assertIn("if (pendingGridScrollRaf !== null) return;", source)
+        self.assertIn("cancelAnimationFrame(pendingGridSelectionRaf);", source)
+
     def test_editor_render_requests_coalesce_without_postponing_frame(self) -> None:
         source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
         start = source.index("function requestRender(")
@@ -67,6 +89,20 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn("editor?.render();", body)
         self.assertIn("if (refreshDerivedState)", body)
         self.assertNotIn("cancelAnimationFrame(raf);", body)
+
+    def test_glyph_sidebar_uses_generated_google_fonts_data(self) -> None:
+        sidebar_source = (ROOT / "web" / "src" / "glyphSidebarData.ts").read_text(encoding="utf-8")
+        generated_source = (ROOT / "web" / "src" / "gfSidebarData.generated.ts").read_text(encoding="utf-8")
+        package_source = (ROOT / "web" / "package.json").read_text(encoding="utf-8")
+        readme_source = (ROOT / "README.md").read_text(encoding="utf-8")
+
+        self.assertIn('import { GF_GLYPHSETS } from "./gfSidebarData.generated";', sidebar_source)
+        self.assertIn("glyphNames?: readonly string[];", sidebar_source)
+        self.assertIn('"id": "GF_Latin_Core"', generated_source)
+        self.assertIn('"id": "GF_Arabic_Core"', generated_source)
+        self.assertIn('"gf-sidebar": "cd .. && node scripts/generate-gf-sidebar-data.mjs"', package_source)
+        self.assertIn("/Users/eli/GF/repos/glyphsets", readme_source)
+        self.assertIn("https://github.com/googlefonts/glyphsets", readme_source)
 
     def test_empty_render_overlays_do_not_churn_reactive_state(self) -> None:
         source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")

@@ -69,6 +69,22 @@ geometry once the dependency graph allows it.
 constraints: drag/drop, WebGPU canvas lifecycle, wasm-pack output,
 ComfyUI widget registration, and Vite packaging.
 
+## Google Fonts Sidebar Data
+
+The glyph-grid sidebar should use the local Google Fonts upstream
+checkouts under `/Users/eli/GF/repos` for language and glyphset data:
+
+- `lang`: <https://github.com/googlefonts/lang>
+- `glyphsets`: <https://github.com/googlefonts/glyphsets>
+
+Do not hand-maintain Google Fonts character sets in Vue. Regenerate
+`web/src/gfSidebarData.generated.ts` with
+`scripts/generate-gf-sidebar-data.mjs`, which reads the upstream
+`glyphsets` YAML definitions and generated Glyphs-compatible
+nice-name lists. This keeps Runebender's sidebar filters aligned with
+Google Fonts names like `GF Latin Core` while still shipping a local,
+versioned manifest in the web bundle.
+
 ## Theme Direction
 
 The long-term theme shape is a checked-in semantic theme definition

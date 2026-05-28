@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from nodes import workspace
+from nodes import font_preview, workspace
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -269,6 +269,68 @@ class WorkspaceTests(unittest.TestCase):
 
         self.assertTrue((slot_dir / "Demo.designspace").exists())
         self.assertTrue((slot_dir / "Demo.ufo" / "glyphs" / "A_.glif").exists())
+
+    def test_designspace_import_copies_nested_referenced_ufo_sources(self) -> None:
+        source_dir = Path(self.tmp.name) / "nested-sources"
+        glyphs_dir = source_dir / "masters" / "Demo.ufo" / "glyphs"
+        glyphs_dir.mkdir(parents=True)
+        (source_dir / "masters" / "Demo.ufo" / "metainfo.plist").write_text("<plist/>", encoding="utf-8")
+        (glyphs_dir / "contents.plist").write_text("<plist/>", encoding="utf-8")
+        (glyphs_dir / "A_.glif").write_text("<glyph name=\"A\"/>", encoding="utf-8")
+        designspace = source_dir / "Demo.designspace"
+        designspace.write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<designspace format=\"5\">
+  <sources>
+    <source name=\"Regular\" filename=\"masters/Demo.ufo\"/>
+  </sources>
+</designspace>
+""",
+            encoding="utf-8",
+        )
+
+        slot = workspace.create_slot_from_path(str(designspace), "nested-designspace-import")
+        slot_dir = workspace.FONTS_DIR / slot
+
+        self.assertTrue((slot_dir / "Demo.designspace").exists())
+        self.assertTrue((slot_dir / "masters" / "Demo.ufo" / "glyphs" / "A_.glif").exists())
+
+    def test_export_glyphspackage_preserves_nested_designspace_source_paths(self) -> None:
+        slot_dir = self._make_slot("nested-demo")
+        masters_dir = slot_dir / "masters"
+        masters_dir.mkdir()
+        shutil.move(str(slot_dir / "Demo.ufo"), str(masters_dir / "Demo.ufo"))
+        (slot_dir / "Demo.designspace").write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<designspace format=\"5\">
+  <sources>
+    <source name=\"Regular\" filename=\"masters/Demo.ufo\"/>
+  </sources>
+</designspace>
+""",
+            encoding="utf-8",
+        )
+        slot_info = workspace.slot_from_name("nested-demo")
+        self.assertIsNotNone(slot_info)
+
+        package_dir = workspace.export_glyphspackage(slot_dir, slot_info)  # type: ignore[arg-type]
+
+        self.assertTrue((package_dir / "sources" / "Demo.designspace").exists())
+        self.assertTrue((package_dir / "sources" / "masters" / "Demo.ufo" / "glyphs" / "A_.glif").exists())
+        config_text = (package_dir / "sources" / "config.yaml").read_text(encoding="utf-8")
+        self.assertIn("- sources/Demo.designspace", config_text)
+        self.assertIn("- sources/masters/Demo.ufo", config_text)
+
+    def test_preview_ufo_picker_finds_nested_designspace_masters(self) -> None:
+        slot_dir = self._make_slot("nested-preview")
+        masters_dir = slot_dir / "masters"
+        masters_dir.mkdir()
+        shutil.move(str(slot_dir / "Demo.ufo"), str(masters_dir / "Demo.ufo"))
+
+        self.assertEqual(
+            font_preview._pick_preview_ufo(slot_dir),  # type: ignore[attr-defined]
+            masters_dir / "Demo.ufo",
+        )
 
     def test_linked_designspace_write_mirrors_back_to_original_source(self) -> None:
         source_dir = Path(self.tmp.name) / "linked-source"

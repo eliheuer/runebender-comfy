@@ -24,6 +24,15 @@ import init, {
 import CategorySidebar, {
   type Category,
 } from "./components/CategorySidebar.vue";
+import {
+  CATEGORY_GROUPS,
+  SIDEBAR_FILTERS,
+  SIDEBAR_LANGUAGE_GROUPS,
+  type GlyphSidebarFilter,
+  type SidebarBuiltinFilter,
+  type SidebarCharacterFilter,
+  type SidebarSearchMode,
+} from "./glyphSidebarData";
 import CoordinatePanel from "./components/CoordinatePanel.vue";
 import type { CoordinateQuadrant } from "./components/CoordinatePanel.vue";
 import EditModeToolbar from "./components/EditModeToolbar.vue";
@@ -142,6 +151,11 @@ const currentGlyph = ref<string>("");
 const fontLabel = ref<string>("");
 const viewMode = ref<"grid" | "editor">("grid");
 const selectedCategory = ref<Category>("All");
+const selectedSidebarFilter = ref<GlyphSidebarFilter>({ kind: "all" });
+const sidebarSearchQuery = ref("");
+const sidebarSearchMode = ref<SidebarSearchMode>("all");
+const sidebarSearchMatchCase = ref(false);
+const sidebarSearchRegex = ref(false);
 // Live metadata for the info sidebar — read from the wasm editor
 // after each setGlyphGlif call. -1 / 0 means "no glyph loaded yet".
 const currentWidth = ref<number>(-1);
@@ -151,6 +165,10 @@ const currentContours = ref<number>(0);
 // is the glyph currently loaded into the editor.
 const selectedGlyph = ref<string>("");
 const selectedGlyphs = ref<Set<string>>(new Set());
+let pendingGridSelectionName = "";
+let pendingGridSelectionRaf: number | null = null;
+let pendingGridScrollIndex = -1;
+let pendingGridScrollRaf: number | null = null;
 const currentLeftSidebearing = ref<number>(0);
 const currentRightSidebearing = ref<number>(0);
 // Active tool in the editor view. Tool implementations land
@@ -427,14 +445,13 @@ const designspaceSummary = computed(() => {
   }
 });
 
-// Names filtered by the active category. The grid renders this list
-// instead of glyphNames directly.
-const filteredGlyphNames = computed(() => {
-  if (selectedCategory.value === "All") return glyphNames.value;
-  return glyphNames.value.filter(
-    (n) => (glyphCategories.value.get(n) ?? "Other") === selectedCategory.value,
-  );
-});
+// Names filtered by the Glyphs-style sidebar. The grid renders this
+// list instead of glyphNames directly.
+const filteredGlyphNames = computed(() =>
+  glyphNames.value.filter(
+    (name) => glyphMatchesSidebarFilter(name) && glyphMatchesSidebarSearch(name),
+  ),
+);
 
 const glyphGridColumns = computed(() => {
   // Mirrors xilem's AppState::grid_columns constants.
@@ -516,8 +533,188 @@ const categoryCounts = computed<Record<string, number>>(() => {
     const c = glyphCategories.value.get(n) ?? "Other";
     counts[c] = (counts[c] ?? 0) + 1;
   }
+  for (const group of CATEGORY_GROUPS) {
+    counts[sidebarFilterKey({ kind: "category", category: group.category })] =
+      counts[group.category] ?? 0;
+    for (const sub of group.subfilters ?? []) {
+      counts[
+        sidebarFilterKey({
+          kind: "category",
+          category: group.category,
+          subcategory: sub.id,
+        })
+      ] = glyphNames.value.filter((name) =>
+        glyphMatchesCategorySubfilter(name, group.category, sub.id),
+      ).length;
+    }
+  }
+  for (const group of SIDEBAR_LANGUAGE_GROUPS) {
+    for (const filter of group.filters) {
+      counts[sidebarFilterKey({ kind: "language", id: filter.id })] =
+        glyphNames.value.filter((name) => glyphMatchesCharacterFilter(name, filter)).length;
+    }
+  }
+  for (const filter of SIDEBAR_FILTERS) {
+    const key =
+      filter.source === "google-fonts-glyphsets"
+        ? sidebarFilterKey({ kind: "gfGlyphset", id: filter.id })
+        : sidebarFilterKey({ kind: "builtin", id: filter.id });
+    counts[key] = glyphNames.value.filter((name) => glyphMatchesBuiltinFilter(name, filter))
+      .length;
+  }
   return counts;
 });
+
+function sidebarFilterKey(filter: GlyphSidebarFilter): string {
+  if (filter.kind === "all") return "all";
+  if (filter.kind === "category") {
+    return filter.subcategory
+      ? `category:${filter.category}:${filter.subcategory}`
+      : `category:${filter.category}`;
+  }
+  return `${filter.kind}:${filter.id}`;
+}
+
+function glyphCodepoints(name: string): number[] {
+  const value = glyphUnicodes.value.get(name) ?? "";
+  return value
+    .split(/[\s,]+/)
+    .map((hex) => Number.parseInt(hex.replace(/^U\+/i, ""), 16))
+    .filter((cp) => Number.isFinite(cp));
+}
+
+function glyphMatchesCharacterFilter(
+  name: string,
+  filter: SidebarCharacterFilter | SidebarBuiltinFilter,
+): boolean {
+  if (filter.glyphNames?.includes(name)) return true;
+  const codepoints = glyphCodepoints(name);
+  if (codepoints.length === 0) return false;
+  if (filter.chars) {
+    const chars = new Set(Array.from(filter.chars));
+    if (codepoints.some((cp) => chars.has(String.fromCodePoint(cp)))) return true;
+  }
+  if (filter.ranges) {
+    return codepoints.some((cp) =>
+      filter.ranges?.some(([start, end]) => cp >= start && cp <= end),
+    );
+  }
+  return false;
+}
+
+function glyphMatchesCategorySubfilter(
+  name: string,
+  category: Category,
+  subcategory: string,
+): boolean {
+  if ((glyphCategories.value.get(name) ?? "Other") !== category) return false;
+  const lowerName = name.toLowerCase();
+  const codepoints = glyphCodepoints(name);
+  const first = codepoints[0];
+  switch (subcategory) {
+    case "uppercase":
+      return !!first && String.fromCodePoint(first).toUpperCase() === String.fromCodePoint(first);
+    case "lowercase":
+      return !!first && String.fromCodePoint(first).toLowerCase() === String.fromCodePoint(first);
+    case "ligature":
+      return name.includes("_") || lowerName.includes("liga");
+    case "decimal":
+      return codepoints.some((cp) => cp >= 0x30 && cp <= 0x39);
+    case "fraction":
+      return /fraction|\.dnom|\.numr/.test(lowerName) || "¼½¾⅓⅔⁄".includes(String.fromCodePoint(first || 0));
+    case "superior-inferior":
+      return /\.sups|\.subs|superior|inferior|\.numr|\.dnom/.test(lowerName);
+    case "space":
+      return ["space", "nbspace", "nonbreakingspace"].includes(lowerName) || first === 0x20 || first === 0xa0;
+    case "line":
+      return lowerName.includes("line") || first === 0x2028 || first === 0x2029;
+    case "quote":
+      return /quote|quotedbl|guillemet|single/.test(lowerName) || "'\"‘’“”«»".includes(String.fromCodePoint(first || 0));
+    case "dash":
+      return /dash|hyphen|minus/.test(lowerName) || "-–—−".includes(String.fromCodePoint(first || 0));
+    case "paren":
+      return /paren|bracket|brace/.test(lowerName) || "()[]{}".includes(String.fromCodePoint(first || 0));
+    case "currency":
+      return /dollar|cent|sterling|yen|euro|currency|peso|rupee|won/.test(lowerName);
+    case "math":
+      return /plus|minus|equal|less|greater|divide|multiply|integral|summation/.test(lowerName);
+    case "arrow":
+      return lowerName.includes("arrow") || codepoints.some((cp) => cp >= 0x2190 && cp <= 0x21ff);
+    case "nonspacing":
+      return lowerName.includes("comb") || lowerName.includes("mark");
+    case "spacing":
+      return !lowerName.includes("comb") && !lowerName.includes("mark");
+    default:
+      return true;
+  }
+}
+
+function glyphMatchesBuiltinFilter(name: string, filter: SidebarBuiltinFilter): boolean {
+  if (filter.source === "google-fonts-glyphsets") {
+    return glyphMatchesCharacterFilter(name, filter);
+  }
+  switch (filter.id) {
+    case "exporting":
+      return true;
+    case "incompatible":
+      return compatErrors.value.length > 0 && name === currentGlyph.value;
+    default:
+      return true;
+  }
+}
+
+function glyphMatchesSidebarFilter(name: string): boolean {
+  const filter = selectedSidebarFilter.value;
+  if (filter.kind === "all") return true;
+  if (filter.kind === "category") {
+    if (filter.subcategory) {
+      return glyphMatchesCategorySubfilter(name, filter.category, filter.subcategory);
+    }
+    return (glyphCategories.value.get(name) ?? "Other") === filter.category;
+  }
+  if (filter.kind === "language") {
+    const languageFilter = SIDEBAR_LANGUAGE_GROUPS.flatMap((group) => group.filters).find(
+      (item) => item.id === filter.id,
+    );
+    return languageFilter ? glyphMatchesCharacterFilter(name, languageFilter) : false;
+  }
+  if (filter.kind === "gfGlyphset") {
+    const gfFilter = SIDEBAR_FILTERS.find((item) => item.id === filter.id);
+    return gfFilter ? glyphMatchesCharacterFilter(name, gfFilter) : false;
+  }
+  if (filter.kind === "builtin") {
+    const builtin = SIDEBAR_FILTERS.find((item) => item.id === filter.id);
+    return builtin ? glyphMatchesBuiltinFilter(name, builtin) : false;
+  }
+  return true;
+}
+
+function glyphMatchesSidebarSearch(name: string): boolean {
+  const query = sidebarSearchQuery.value.trim();
+  if (!query) return true;
+  const unicode = glyphUnicodes.value.get(name) ?? "";
+  const chars = glyphCodepoints(name)
+    .map((cp) => String.fromCodePoint(cp))
+    .join("");
+  const haystacks =
+    sidebarSearchMode.value === "name"
+      ? [name]
+      : sidebarSearchMode.value === "unicode"
+        ? [unicode, chars]
+        : [name, unicode, chars];
+  if (sidebarSearchRegex.value) {
+    try {
+      const regex = new RegExp(query, sidebarSearchMatchCase.value ? "" : "i");
+      return haystacks.some((value) => regex.test(value));
+    } catch {
+      return true;
+    }
+  }
+  const needle = sidebarSearchMatchCase.value ? query : query.toLowerCase();
+  return haystacks.some((value) =>
+    (sidebarSearchMatchCase.value ? value : value.toLowerCase()).includes(needle),
+  );
+}
 
 const selectedMetadata = computed(() =>
   selectedGlyph.value ? glyphMetadataMap.value.get(selectedGlyph.value) : undefined,
@@ -3113,6 +3310,8 @@ async function loadGlifFiles(
   selectedGlyph.value = "";
   selectedGlyphs.value = new Set();
   selectedCategory.value = "All";
+  selectedSidebarFilter.value = { kind: "all" };
+  sidebarSearchQuery.value = "";
   hasTextBufferSession.value = false;
   textBuffer.value = [];
   textCursor.value = 0;
@@ -3574,8 +3773,9 @@ function ensureGridSelection() {
   setPrimarySelectedGlyph(names[0] ?? "");
 }
 
-function onSelectCategory(category: Category) {
-  selectedCategory.value = category;
+function onSelectSidebarFilter(filter: GlyphSidebarFilter) {
+  selectedSidebarFilter.value = filter;
+  selectedCategory.value = filter.kind === "category" ? filter.category : "All";
   if (gridView.value) {
     gridView.value.scrollTop = 0;
   }
@@ -3583,9 +3783,36 @@ function onSelectCategory(category: Category) {
 }
 
 function setPrimarySelectedGlyph(name: string) {
+  pendingGridSelectionName = "";
+  if (pendingGridSelectionRaf !== null) {
+    cancelAnimationFrame(pendingGridSelectionRaf);
+    pendingGridSelectionRaf = null;
+  }
+  if (pendingGridScrollRaf !== null) {
+    cancelAnimationFrame(pendingGridScrollRaf);
+    pendingGridScrollRaf = null;
+    pendingGridScrollIndex = -1;
+  }
   selectedGlyph.value = name;
   selectedGlyphs.value = new Set(name ? [name] : []);
   scrollSelectedGlyphIntoView();
+}
+
+function setPrimarySelectedGlyphFromKeyboard(name: string, index: number) {
+  const previousIndex = filteredGlyphNames.value.indexOf(
+    pendingGridSelectionName || selectedGlyph.value,
+  );
+  applyImmediateGridSelection(previousIndex, index);
+  pendingGridSelectionName = name;
+  scrollGlyphIndexIntoView(index);
+  if (pendingGridSelectionRaf !== null) return;
+  pendingGridSelectionRaf = requestAnimationFrame(() => {
+    pendingGridSelectionRaf = null;
+    const next = pendingGridSelectionName;
+    pendingGridSelectionName = "";
+    selectedGlyph.value = next;
+    selectedGlyphs.value = new Set(next ? [next] : []);
+  });
 }
 
 function selectGlyph(name: string, event?: MouseEvent) {
@@ -3628,20 +3855,45 @@ function gridColumnCount(): number {
 function scrollSelectedGlyphIntoView() {
   const index = filteredGlyphNames.value.indexOf(selectedGlyph.value);
   if (index < 0) return;
-  requestAnimationFrame(() => {
+  scrollGlyphIndexIntoView(index);
+}
+
+function scrollGlyphIndexIntoView(index: number) {
+  pendingGridScrollIndex = index;
+  if (pendingGridScrollRaf !== null) return;
+  pendingGridScrollRaf = requestAnimationFrame(() => {
+    pendingGridScrollRaf = null;
+    const nextIndex = pendingGridScrollIndex;
+    pendingGridScrollIndex = -1;
     const cell = gridView.value?.querySelector<HTMLElement>(
-      `[data-glyph-index="${index}"]`,
+      `[data-glyph-index="${nextIndex}"]`,
     );
     cell?.scrollIntoView({ block: "nearest", inline: "nearest" });
   });
+}
+
+function applyImmediateGridSelection(previousIndex: number, nextIndex: number) {
+  const grid = gridView.value;
+  if (!grid) return;
+  if (previousIndex >= 0 && previousIndex !== nextIndex) {
+    grid
+      .querySelector<HTMLElement>(`[data-glyph-index="${previousIndex}"]`)
+      ?.classList.remove("selected");
+  }
+  if (nextIndex >= 0) {
+    grid
+      .querySelector<HTMLElement>(`[data-glyph-index="${nextIndex}"]`)
+      ?.classList.add("selected");
+  }
 }
 
 function navigateGridSelection(direction: "left" | "right" | "up" | "down"): boolean {
   const names = filteredGlyphNames.value;
   if (names.length === 0) return false;
   const columns = gridColumnCount();
-  const current = selectedGlyph.value
-    ? names.indexOf(selectedGlyph.value)
+  const currentName = pendingGridSelectionName || selectedGlyph.value;
+  const current = currentName
+    ? names.indexOf(currentName)
     : -1;
   const delta =
     direction === "left"
@@ -3653,13 +3905,13 @@ function navigateGridSelection(direction: "left" | "right" | "up" | "down"): boo
           : columns;
   const nextIndex =
     current < 0 ? 0 : Math.min(names.length - 1, Math.max(0, current + delta));
-  setPrimarySelectedGlyph(names[nextIndex]);
+  setPrimarySelectedGlyphFromKeyboard(names[nextIndex], nextIndex);
   return true;
 }
 
 function copyGridGlyph(): boolean {
   const data = activeMasterData.value;
-  const name = selectedGlyph.value;
+  const name = currentPrimarySelectedGlyph();
   const bytes = name && data?.glyphBytes.get(name);
   if (!bytes) return false;
   gridGlyphClipboard.value = new Uint8Array(bytes);
@@ -3730,7 +3982,12 @@ function selectedGridGlyphNames(): string[] {
     activeMasterData.value?.glyphBytes.has(name),
   );
   if (names.length > 0) return names;
-  return selectedGlyph.value ? [selectedGlyph.value] : [];
+  const primary = currentPrimarySelectedGlyph();
+  return primary ? [primary] : [];
+}
+
+function currentPrimarySelectedGlyph(): string {
+  return pendingGridSelectionName || selectedGlyph.value;
 }
 
 function handleGridKeyDown(e: KeyboardEvent): boolean {
@@ -3760,8 +4017,10 @@ function handleGridKeyDown(e: KeyboardEvent): boolean {
   if (direction) {
     return navigateGridSelection(direction);
   }
-  if (e.key === "Enter" && selectedGlyph.value) {
-    openGlyph(selectedGlyph.value);
+  const primary = currentPrimarySelectedGlyph();
+  if (e.key === "Enter" && primary) {
+    setPrimarySelectedGlyph(primary);
+    openGlyph(primary);
     return true;
   }
   return false;
@@ -5239,6 +5498,14 @@ onBeforeUnmount(() => {
     cancelAnimationFrame(raf);
     raf = null;
   }
+  if (pendingGridSelectionRaf !== null) {
+    cancelAnimationFrame(pendingGridSelectionRaf);
+    pendingGridSelectionRaf = null;
+  }
+  if (pendingGridScrollRaf !== null) {
+    cancelAnimationFrame(pendingGridScrollRaf);
+    pendingGridScrollRaf = null;
+  }
   flushDeferredGlyphSync();
   if (comfySyncTimer !== null) {
     clearTimeout(comfySyncTimer);
@@ -5299,20 +5566,23 @@ onBeforeUnmount(() => {
     />
 
     <!-- Content row: left rail switches based on view mode
-         (categories+marks in grid, tool palette in editor). The
+         (glyph navigation in grid, tool palette in editor). The
          stage holds the canvas + grid. Right sidebar shows glyph
          info whenever a font is loaded. -->
     <div class="content">
       <div v-if="glyphNames.length > 0 && viewMode === 'grid'" class="left-col">
           <CategorySidebar
-            :selected="selectedCategory"
+            v-model:search-query="sidebarSearchQuery"
+            v-model:search-mode="sidebarSearchMode"
+            v-model:search-match-case="sidebarSearchMatchCase"
+            v-model:search-regex="sidebarSearchRegex"
+            :selected="selectedSidebarFilter"
             :counts="categoryCounts"
-            @select="onSelectCategory"
-          />
-          <MarkColorPanel
-            :active="selectedGlyph ? glyphMarkColors.get(selectedGlyph) : ''"
-            :enabled="!!selectedGlyph"
-            @set="setMarkOnSelected"
+            :total-count="glyphNames.length"
+            :category-groups="CATEGORY_GROUPS"
+            :language-groups="SIDEBAR_LANGUAGE_GROUPS"
+            :filters="SIDEBAR_FILTERS"
+            @select="onSelectSidebarFilter"
           />
       </div>
 
@@ -5760,6 +6030,11 @@ onBeforeUnmount(() => {
           :name="selectedGlyph"
           :svg="selectedAnatomySvg"
         />
+        <MarkColorPanel
+          :active="selectedGlyph ? glyphMarkColors.get(selectedGlyph) : ''"
+          :enabled="!!selectedGlyph"
+          @set="setMarkOnSelected"
+        />
         <!-- Designspace XML panel hidden for now — not needed yet. The
              state and save plumbing (designspaceText, onDesignspaceTextInput,
              persistDesignspace) are left intact so it can be re-enabled
@@ -5805,12 +6080,12 @@ onBeforeUnmount(() => {
   --rb-panel-outline:      var(--border-color, #606060);
 
   /* Text */
-  --rb-primary-text:       var(--fg-color, #909090);
-  --rb-secondary-text:     color-mix(in srgb, var(--rb-primary-text) 78%, transparent);
-  --rb-muted-text:         color-mix(in srgb, var(--rb-primary-text) 60%, transparent);
+  --rb-primary-text:       #909090;
+  --rb-secondary-text:     #808080;
+  --rb-muted-text:         #808080;
   --rb-subdued-text:       color-mix(in srgb, var(--rb-primary-text) 35%, transparent);
-  --rb-overlay-text:       var(--content-fg, #d0d0d0);
-  --rb-glyph-preview:      var(--fg-color, #a0a0a0);
+  --rb-overlay-text:       var(--rb-primary-text);
+  --rb-glyph-preview:      var(--rb-muted-text);
 
   /* Accents / state */
   --rb-accent:                     #66ee88;
@@ -5879,17 +6154,14 @@ onBeforeUnmount(() => {
   gap: 0;
 }
 
-/* Left column: categories stretch, mark colors fixed at the bottom. */
+/* Left column: glyph navigation. */
 .left-col {
   display: flex;
   flex-direction: column;
-  gap: 6px;
   flex-shrink: 0;
-  margin-right: 6px;
+  width: 286px;
+  margin-right: 0;
 }
-/* Categories panel grows to fill the column height, pushing the
-   mark-color picker to the very bottom (like xilem). The mark-color
-   panel keeps its natural size. */
 .left-col > :deep(.category-sidebar) {
   flex: 1;
   min-height: 0;
@@ -5901,10 +6173,13 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 6px;
   flex-shrink: 0;
-  width: 320px;
+  width: 228px;
 }
 .right-col > :deep(.info-sidebar) {
   width: auto;
+  flex-shrink: 0;
+}
+.right-col > :deep(.mark-color-panel) {
   flex-shrink: 0;
 }
 
@@ -6521,13 +6796,13 @@ onBeforeUnmount(() => {
    * visible thumb so it does not touch either neighboring panel edge. */
   background: var(--rb-panel-outline, #606060);
   border-radius: 999px;
-  border: 1.5px solid transparent;
+  border: 2.25px solid transparent;
   background-clip: padding-box;
   min-height: 32px;
 }
 .runebender-host :deep(::-webkit-scrollbar-thumb:hover) {
   background: var(--rb-primary-text, #909090);
-  border: 1.5px solid transparent;
+  border: 2.25px solid transparent;
   background-clip: padding-box;
 }
 .runebender-host :deep(::-webkit-scrollbar-corner) {

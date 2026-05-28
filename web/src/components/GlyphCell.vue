@@ -6,8 +6,7 @@
 // Colors come from xilem's theme.rs:
 //   GRID_CELL_BACKGROUND          #1C1C1C
 //   GRID_CELL_OUTLINE / BASE_F    #606060
-//   GRID_CELL_SELECTED_OUTLINE    #66EE88
-//   GRID_GLYPH_COLOR / BASE_J     #A0A0A0
+//   GRID_CELL_SELECTED_OUTLINE    #FFFFFF
 //   GRID_CELL_TEXT / BASE_H       #808080
 
 import { computed } from "vue";
@@ -85,11 +84,17 @@ const cellStyle = computed(() => {
 .cell:hover {
   border-color: var(--rb-accent, #66ee88);
 }
+.cell:focus {
+  outline: none;
+}
+.cell:focus-visible {
+  border-color: var(--rb-grid-selected, #ffffff);
+}
 .cell.marked:not(.selected):not(:hover) {
   border-color: var(--mark-color);
 }
 .cell.selected {
-  border-color: var(--rb-accent, #66ee88);
+  border-color: var(--rb-grid-selected, #ffffff);
 }
 
 .cell-glyph {
@@ -97,12 +102,15 @@ const cellStyle = computed(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--rb-glyph-preview, #a0a0a0);
+  color: var(--rb-muted-text, #808080);
   padding: 8px;
   min-height: 0;
 }
 .cell.marked:not(.selected):not(:hover) .cell-glyph {
   color: var(--mark-color);
+}
+.cell.selected .cell-glyph {
+  color: var(--rb-grid-selected, #ffffff);
 }
 /* The grid SVG carries a constant em-based viewBox (same vertical
    extent for every glyph) and a per-glyph horizontal extent. Scaling
@@ -137,6 +145,9 @@ const cellStyle = computed(() => {
 .cell:hover .cell-name {
   color: var(--rb-accent, #66ee88);
 }
+.cell.selected .cell-name {
+  color: var(--rb-grid-selected, #ffffff);
+}
 .cell-unicode {
   font: 16px ui-sans-serif, system-ui, sans-serif;
   color: var(--rb-muted-text, #808080);
@@ -151,5 +162,8 @@ const cellStyle = computed(() => {
 .cell.selected .cell-unicode,
 .cell:hover .cell-unicode {
   color: var(--rb-accent, #66ee88);
+}
+.cell.selected .cell-unicode {
+  color: var(--rb-grid-selected, #ffffff);
 }
 </style>

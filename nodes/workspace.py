@@ -419,8 +419,11 @@ def export_glyphspackage(slot_dir: Path, slot_info: WorkspaceSlot, force: bool =
         raise FileNotFoundError(f"No source files found in slot: {slot_info.name!r}")
 
     copied_sources: list[str] = []
+    source_base_dir = slot_dir
+    if slot_info.source_kind == "glyphspackage" and slot_info.source_path is not None:
+        source_base_dir = _glyphspackage_source_root(slot_info.source_path)
     for entry in source_entries:
-        copied = _copy_source_entry(entry, sources_dir)
+        copied = _copy_source_entry(entry, sources_dir, base_dir=source_base_dir)
         copied_sources.append(str(copied.relative_to(package_dir)))
 
     config = _glyphspackage_config(slot_info, copied_sources)
@@ -788,11 +791,25 @@ def _copy_sibling_pair(src: Path, dest: Path) -> None:
 
 
 def _copy_designspace_sources(src: Path, dest: Path) -> None:
+    for source_path in _designspace_source_paths(src):
+        filename = source_path.relative_to(src.parent)
+        target = dest / filename
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if source_path.is_dir():
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(source_path, target)
+        else:
+            shutil.copy2(source_path, target)
+
+
+def _designspace_source_paths(src: Path) -> list[Path]:
     try:
         root = ET.parse(src).getroot()
     except ET.ParseError:
-        return
+        return []
 
+    paths: list[Path] = []
     for source in root.findall(".//source"):
         filename = (
             source.get("filename")
@@ -805,14 +822,8 @@ def _copy_designspace_sources(src: Path, dest: Path) -> None:
         source_path = (src.parent / Path(filename)).resolve()
         if not source_path.exists():
             continue
-        target = dest / Path(filename)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if source_path.is_dir():
-            if target.exists():
-                shutil.rmtree(target)
-            shutil.copytree(source_path, target)
-        else:
-            shutil.copy2(source_path, target)
+        paths.append(source_path)
+    return paths
 
 
 def _infer_source_kind(source: Path | None) -> str | None:
@@ -934,6 +945,9 @@ def _collect_source_entries(slot_dir: Path, slot_info: WorkspaceSlot) -> list[Pa
             add(path)
         elif path.is_file() and path.suffix.lower() in {".designspace", ".glyphs", ".plist", ".fea", ".txt", ".md", ".json", ".yaml", ".yml"}:
             add(path)
+            if path.suffix.lower() == ".designspace":
+                for source_path in _designspace_source_paths(path):
+                    add(source_path)
 
     if not entries and slot_info.source_path is not None:
         add(slot_info.source_path)
@@ -945,8 +959,16 @@ def _glyphspackage_source_root(source_path: Path) -> Path:
     return sources_dir if sources_dir.is_dir() else source_path
 
 
-def _copy_source_entry(src: Path, sources_dir: Path) -> Path:
-    target = sources_dir / src.name
+def _copy_source_entry(src: Path, sources_dir: Path, base_dir: Path | None = None) -> Path:
+    if base_dir is not None:
+        try:
+            rel = src.resolve().relative_to(base_dir.resolve())
+        except ValueError:
+            rel = Path(src.name)
+    else:
+        rel = Path(src.name)
+    target = sources_dir / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
     if src.is_dir():
         shutil.copytree(src, target)
     else:

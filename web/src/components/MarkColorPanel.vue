@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Bottom-left mark-color picker. Mirrors runebender-xilem's
+// Mark-color picker. Mirrors runebender-xilem's
 // `components/mark_color_panel.rs` — seven preset swatches in the
 // same order as xilem's `theme::mark::COLORS`, plus a clear (X)
 // button. The shared palette + RGBA-to-CSS conversion live in
@@ -70,7 +70,7 @@ defineEmits<{
  */
 
 .mark-color-panel {
-  width: 220px;
+  width: 100%;
   height: 66px;
   box-sizing: border-box;
   background: var(--rb-panel-background, #1c1c1c);
@@ -97,7 +97,8 @@ defineEmits<{
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  padding-left: 8px;
+  justify-content: center;
+  padding: 0 8px;
 }
 
 .swatch {
