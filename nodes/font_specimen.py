@@ -184,7 +184,6 @@ class FontSpecimen:
             "required": {
                 "font": ("FONT", {"forceInput": True}),
                 "preset": (preset_names, {"default": preset_names[0]}),
-                "input_text": ("STRING", {"multiline": True, "default": ""}),
                 "width": ("INT", {"default": 2048, "min": 64, "max": 8192, "step": 8}),
                 "height": ("INT", {"default": 2048, "min": 64, "max": 8192, "step": 8}),
             },
@@ -204,8 +203,11 @@ class FontSpecimen:
     RETURN_NAMES = ("image", "mask")
     FUNCTION = "run"
 
-    def run(self, font: str, preset: str, input_text: str, width: int, height: int, custom_script: str = ""):
+    def run(self, font: str, preset: str, width: int, height: int, custom_script: str = ""):
         font_path = _resolve_drawbot_font_path(font)
         script = _script_for_preset(preset, custom_script)
-        img = _render_drawbot(script, font_path, width, height, input_text)
+        # input_text widget removed; presets still reference `input_text` and
+        # fall back to their own defaults (e.g. `input_text or "A"`), so pass
+        # an empty string to keep that contract working.
+        img = _render_drawbot(script, font_path, width, height, "")
         return (_image_to_tensor(img), _mask_to_tensor(img))

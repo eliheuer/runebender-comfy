@@ -11,7 +11,7 @@ import { runebenderHostKey, type WorkspaceChoice } from "./host/runebenderHost";
 import { comfyHost } from "./hosts/comfy/comfyHost";
 import Runebender from "./Runebender.vue";
 
-const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-28-pointerfix-83";
+const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-28-codemirror-84";
 
 // Mirror our own console output to the ComfyUI terminal through the
 // injected Comfy host. Filters to messages prefixed with
@@ -286,38 +286,127 @@ async function fetchDrawBotPresetSource(name: string): Promise<string | null> {
 function setWidgetStringValue(widget: any, value: string) {
   widget.value = value;
   if (widget.inputEl) widget.inputEl.value = value;
+  // Keep the CodeMirror view (if mounted) in sync with programmatic changes
+  // such as preset loads — but only when it differs, so we don't reset the
+  // cursor on every keystroke-driven round trip.
+  const cm = widget.__runebenderCM;
+  if (cm && cm.getValue() !== value) cm.setValue(value);
 }
 
-function installScriptTextareaBehavior(textarea: HTMLTextAreaElement, widget: any) {
-  if ((textarea as any).__runebenderScriptEditorInstalled) return;
-  (textarea as any).__runebenderScriptEditorInstalled = true;
-  textarea.spellcheck = false;
-  textarea.autocapitalize = "off";
-  textarea.autocomplete = "off";
-  textarea.wrap = "off";
-  textarea.style.fontFamily = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-  textarea.style.fontSize = "12px";
-  textarea.style.lineHeight = "1.45";
-  textarea.style.tabSize = "4";
-  textarea.style.whiteSpace = "pre";
-  textarea.style.overflow = "auto";
-  textarea.style.resize = "vertical";
-  textarea.style.minHeight = "220px";
-  textarea.style.background = "#101010";
-  textarea.style.color = "#d8d8d8";
-  textarea.style.borderColor = "#606060";
-  textarea.style.caretColor = "#66ee88";
-  textarea.addEventListener("keydown", (event) => {
-    if (event.key !== "Tab") return;
-    event.preventDefault();
-    const start = textarea.selectionStart ?? 0;
-    const end = textarea.selectionEnd ?? start;
-    const value = textarea.value;
-    const indent = "    ";
-    textarea.value = `${value.slice(0, start)}${indent}${value.slice(end)}`;
-    textarea.selectionStart = textarea.selectionEnd = start + indent.length;
-    setWidgetStringValue(widget, textarea.value);
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+// CodeMirror 5 (vendored under web/public/vendor/codemirror, copied into
+// dist/ by Vite) gives the DrawBot script widget Python syntax highlighting
+// and line numbers, matching the old comfyfont DrawBot editor. Loaded once,
+// lazily, via <script>/<link> tags resolved relative to this bundle's URL
+// (same trick as injectRunebenderStyles).
+let codeMirrorReady: Promise<void> | null = null;
+function loadCodeMirror(): Promise<void> {
+  if (codeMirrorReady) return codeMirrorReady;
+  codeMirrorReady = new Promise<void>((resolve) => {
+    const base = new URL("./vendor/codemirror/", import.meta.url).href;
+    for (const css of ["codemirror.css", "theme-preschool.css"]) {
+      const href = base + css;
+      if (!document.querySelector(`link[href="${href}"]`)) {
+        const link = Object.assign(document.createElement("link"), { rel: "stylesheet", href });
+        document.head.appendChild(link);
+      }
+    }
+    const loadScript = (src: string, cb: () => void) => {
+      if (document.querySelector(`script[src="${src}"]`)) { cb(); return; }
+      const s = document.createElement("script");
+      s.src = src;
+      s.onload = cb;
+      s.onerror = () => { console.error("[runebender-comfy] failed to load", src); resolve(); };
+      document.head.appendChild(s);
+    };
+    loadScript(base + "codemirror.js", () => loadScript(base + "python.js", () => resolve()));
+  });
+  return codeMirrorReady;
+}
+
+// The script widget's underlying <textarea>: widget.inputEl (deprecated) on
+// older ComfyUI, widget.element on newer builds.
+function scriptTextareaEl(widget: any): HTMLTextAreaElement | undefined {
+  if (widget.inputEl instanceof HTMLTextAreaElement) return widget.inputEl;
+  const el = widget.element;
+  if (el instanceof HTMLTextAreaElement) return el;
+  return el?.querySelector?.("textarea") ?? undefined;
+}
+
+// Mount a CodeMirror editor over the (now-hidden) script textarea. Strategy
+// ported from comfyfont: a position:fixed overlay whose rect is synced to the
+// textarea's getBoundingClientRect via rAF, so it follows ComfyUI's canvas
+// pan/zoom/resize without reaching into litegraph's coordinate system. The
+// textarea stays in layout (opacity 0, pointer-events none) so its value
+// plumbing — and getBoundingClientRect — keep working.
+async function mountScriptEditor(widget: any, textarea: HTMLTextAreaElement) {
+  if (widget.__runebenderCM) return;
+  await loadCodeMirror();
+  const CM = (window as any).CodeMirror;
+  if (!CM) {
+    console.error("[runebender-comfy] CodeMirror unavailable");
+    return;
+  }
+  if (widget.__runebenderCM) return; // another mount won the race during await
+
+  const wrapper = document.createElement("div");
+  Object.assign(wrapper.style, {
+    position: "fixed",
+    zIndex: "1000",
+    overflow: "hidden",
+    boxSizing: "border-box",
+  });
+  document.body.appendChild(wrapper);
+
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+
+  const editor = CM(wrapper, {
+    value: String(widget.value ?? ""),
+    mode: "python",
+    theme: "preschool",
+    lineNumbers: true,
+    fixedGutter: true,
+    indentUnit: 4,
+    tabSize: 4,
+    indentWithTabs: false,
+    lineWrapping: false,
+    scrollbarStyle: "null",
+    extraKeys: {
+      Tab: (cm: any) => cm.execCommand("indentMore"),
+      "Shift-Tab": (cm: any) => cm.execCommand("indentLess"),
+    },
+  });
+  widget.__runebenderCM = editor;
+
+  let lastW = 0;
+  let lastH = 0;
+  const syncLoop = () => {
+    if (!textarea.isConnected) {
+      wrapper.remove();
+      widget.__runebenderCM = null;
+      return;
+    }
+    const rect = textarea.getBoundingClientRect();
+    Object.assign(wrapper.style, {
+      top: `${rect.top}px`,
+      left: `${rect.left}px`,
+      width: `${rect.width}px`,
+      height: `${rect.height}px`,
+    });
+    if (rect.width > 0 && (rect.width !== lastW || rect.height !== lastH)) {
+      lastW = rect.width;
+      lastH = rect.height;
+      editor.setSize(rect.width, rect.height);
+      editor.refresh();
+    }
+    requestAnimationFrame(syncLoop);
+  };
+  requestAnimationFrame(syncLoop);
+
+  editor.on("change", () => {
+    const src = editor.getValue();
+    widget.value = src;
+    textarea.value = src;
   });
 }
 
@@ -334,10 +423,10 @@ function attachFontSpecimenPresetSync(node: any) {
   if (!presetWidget || !scriptWidget) return;
 
   const pollForTextarea = window.setInterval(() => {
-    const textarea = scriptWidget.inputEl as HTMLTextAreaElement | undefined;
+    const textarea = scriptTextareaEl(scriptWidget);
     if (!textarea) return;
     window.clearInterval(pollForTextarea);
-    installScriptTextareaBehavior(textarea, scriptWidget);
+    void mountScriptEditor(scriptWidget, textarea);
   }, 100);
 
   const presetValues = presetWidget.options?.values ?? [];

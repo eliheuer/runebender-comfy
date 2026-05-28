@@ -1160,7 +1160,12 @@ class WebBundleTests(unittest.TestCase):
         self.assertNotIn("GRAPH removeLink on FONT link", bundle)
         self.assertIn("runebender/link_source", bundle)
         self.assertIn("workspace/invalidate", bundle)
-        self.assertIn("rb-bundle-2026-05-28-drawbot-skia-82", bundle)
+        self.assertIn("rb-bundle-2026-05-28-codemirror-84", bundle)
+        # DrawBot script widget uses a vendored CodeMirror 5 editor
+        # (Python highlighting + line numbers), like the old comfyfont node.
+        # String literals survive minification; local names do not.
+        self.assertIn("vendor/codemirror/", bundle)
+        self.assertIn("preschool", bundle)
         # Grid thumbnail SVGs must come from one batched WASM call
         # (glifMapToSvgs) not 600+ per-glyph crossings.
         self.assertIn("glifMapToSvgs", bundle)
@@ -1197,9 +1202,13 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn('node.comfyClass === "ComfyFontDrawBot"', extension_source)
         self.assertIn('node.title = "DrawBot Skia"', extension_source)
         self.assertIn('widget.name === "script_override"', extension_source)
-        self.assertIn("installScriptTextareaBehavior", extension_source)
-        self.assertIn('textarea.spellcheck = false;', extension_source)
-        self.assertIn('event.key !== "Tab"', extension_source)
+        # DrawBot script editor is now CodeMirror 5 (vendored), replacing the
+        # old plain-textarea behavior (installScriptTextareaBehavior).
+        self.assertIn("mountScriptEditor", extension_source)
+        self.assertIn("loadCodeMirror", extension_source)
+        self.assertIn('theme: "preschool"', extension_source)
+        self.assertIn("vendor/codemirror/", extension_source)
+        self.assertNotIn("installScriptTextareaBehavior", extension_source)
         self.assertNotIn("scriptWidget.computeSize", extension_source)
         self.assertNotIn("Choose File...", bundle)
         self.assertIn("runebender/choose_source", bundle)

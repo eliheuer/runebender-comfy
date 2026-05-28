@@ -1627,7 +1627,9 @@ class FontSpecimenNodeTests(unittest.TestCase):
              mock.patch("nodes.font_specimen._render_drawbot", return_value=_FakeImg()), \
              mock.patch("nodes.font_specimen._image_to_tensor", return_value="tensor"), \
              mock.patch("nodes.font_specimen._mask_to_tensor", return_value="tensor"):
-            image, mask = FontSpecimen().run("demo", "glyph", "A", 256, 128)
+            # run(font, preset, width, height, custom_script="") — input_text
+            # widget was removed; presets fall back to their own defaults.
+            image, mask = FontSpecimen().run("demo", "glyph", 256, 128)
 
         self.assertEqual(image, "tensor")
         self.assertEqual(mask, "tensor")
