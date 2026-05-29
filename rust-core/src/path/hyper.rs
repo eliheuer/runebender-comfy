@@ -73,6 +73,10 @@ impl HyperPath {
         self.points.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.points.is_empty()
+    }
+
     pub fn points(&self) -> &PathPoints {
         &self.points
     }

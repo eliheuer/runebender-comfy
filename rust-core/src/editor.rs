@@ -1059,10 +1059,10 @@ impl EditorState {
         let path = Path::Hyper(crate::path::HyperPath::new(point));
         self.paths.push(path);
         self.selection = Selection::new();
-        if let Some(Path::Hyper(path)) = self.paths.last() {
-            if let Some(start) = path.start_point() {
-                self.selection.insert(start.id);
-            }
+        if let Some(Path::Hyper(path)) = self.paths.last()
+            && let Some(start) = path.start_point()
+        {
+            self.selection.insert(start.id);
         }
         self.bump_edit_revision();
         self.paths.len() - 1

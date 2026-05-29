@@ -28,9 +28,6 @@ spline = { git = "https://github.com/linebender/spline" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# Error types.
-thiserror = "1.0"
-
 # UFO parsing (Linebender) — same library runebender-xilem uses.
 norad = "0.13"
 
@@ -41,13 +38,11 @@ plist = "1"
 
 # WASM bindings.
 wasm-bindgen = "0.2"
-js-sys = "0.3"
 console_error_panic_hook = "0.1"
 
-# Render path (Wave 3). Vello re-exports wgpu and peniko, so we use
-# those rather than picking versions ourselves.
+# Render path (Wave 3). Vello re-exports wgpu and peniko, so we reach
+# those through vello rather than depending on them directly.
 vello = "0.8"
-peniko = "0.5"
 linesweeper = "0.2"
 
 # Enable WebGPU canvas surface support for wasm32 targets. Vello pulls
@@ -78,3 +73,46 @@ features = [
 [profile.release]
 opt-level = "z"
 lto = true
+
+# Linebender canonical lint set (https://linebender.org/wiki/canonical-lints/).
+# Heavy lints (missing_docs, unreachable_pub, …) are warned here and deferred
+# via #![allow(...)] in lib.rs until the crate-wide cleanup lands.
+# `unsafe_code = "forbid"` is intentionally omitted: wasm-bindgen expands
+# `unsafe` into this crate, which a forbid would reject.
+[lints.clippy]
+# allow_attributes / allow_attributes_without_reason are part of the canonical
+# set but deferred: they require a reason on every #[allow], which is bound up
+# with the pending #[allow(dead_code)] triage.
+cast_possible_truncation = "warn"
+collection_is_never_read = "warn"
+dbg_macro = "warn"
+doc_markdown = "warn"
+exhaustive_enums = "warn"
+fn_to_numeric_cast_any = "forbid"
+match_same_arms = "warn"
+missing_assert_message = "warn"
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+partial_pub_fields = "warn"
+return_self_not_must_use = "warn"
+semicolon_if_nothing_returned = "warn"
+shadow_unrelated = "warn"
+should_panic_without_expect = "warn"
+todo = "warn"
+trivially_copy_pass_by_ref = "warn"
+unseparated_literal_suffix = "warn"
+use_self = "warn"
+wildcard_imports = "warn"
+
+[lints.rust]
+elided_lifetimes_in_paths = "warn"
+let_underscore_drop = "warn"
+missing_debug_implementations = "warn"
+missing_docs = "warn"
+non_ascii_idents = "forbid"
+single_use_lifetimes = "warn"
+trivial_numeric_casts = "warn"
+unnameable_types = "warn"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+variant_size_differences = "warn"

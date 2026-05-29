@@ -209,8 +209,19 @@ open; a Vitest/Playwright harness is the proper replacement (follow-up).
       (the aliases are what's used). `cargo fmt`/check/test/wasm-check all clean.
 - [x] **[S]** Remove redundant inner `#![cfg(target_arch="wasm32")]`
       (`renderer.rs`, `wasm_api.rs`) — gating lives in lib.rs.
-- [ ] **[S]** Fix WASM-target clippy: useless `.into()`, collapsible `if`,
-      unnecessary `if let`, needless borrow; add `HyperPath::is_empty`.
+- [x] **Linebender conventions (kurbo pattern):** added SPDX header + `//!`
+      crate doc + the `LINEBENDER LINT SET` marker block to `lib.rs`, and the
+      canonical `[lints]` table to `Cargo.toml` (heavy lints deferred via
+      `#![allow]` exactly as kurbo does; `unsafe_code`/`unused_crate_dependencies`/
+      `allow_attributes*` omitted with documented reasons). The lint table
+      immediately surfaced 3 genuinely-dead deps — removed `thiserror`, `js-sys`,
+      and the redundant direct `peniko` (reached via `vello::peniko`).
+- [x] **[S]** Fixed clippy: collapsible `if` (editor.rs), needless borrow
+      (text.rs), added `HyperPath::is_empty`. `cargo clippy` now silent;
+      fmt/test (139)/wasm-check all clean.
+- [ ] **[S]** Remaining nits: `#[inline(always)]`→`#[inline]`, `.to_vec()`→
+      `.iter()`, `for{push(*el)}`→`.extend()`, rename `glif_/glyph_metadata_from_norad`,
+      NaN-safe `partial_cmp`, `//`→`//!` on the other modules, SPDX on other files.
 - [ ] **[S]** `workspace.rs:113,121` NaN-safe compare (or delete dead block).
 - [ ] **[S]** `#[inline(always)]`→`#[inline]`; `.to_vec()`→`.iter()`;
       `for{push(*el)}`→`.extend()`.

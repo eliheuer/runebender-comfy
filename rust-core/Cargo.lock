@@ -817,18 +817,6 @@ checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
 name = "peniko"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3c76095c9a636173600478e0373218c7b955335048c2bcd12dc6a79657649d8"
-dependencies = [
- "color",
- "kurbo 0.12.0",
- "linebender_resource_handle",
- "smallvec",
-]
-
-[[package]]
-name = "peniko"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9a2b6aadb221872732e87d465213e9be5af2849b0e8cc5300a8ba98fffa2e00a"
@@ -1014,19 +1002,16 @@ name = "runebender-comfy-core"
 version = "0.0.1"
 dependencies = [
  "console_error_panic_hook",
- "js-sys",
  "kurbo 0.12.0",
  "kurbo 0.13.0",
  "kurbo 0.9.5",
  "linesweeper",
  "norad",
- "peniko 0.5.0",
  "plist",
  "runebender-core",
  "serde",
  "serde_json",
  "spline",
- "thiserror 1.0.69",
  "uuid",
  "vello",
  "wasm-bindgen",
@@ -1331,7 +1316,7 @@ dependencies = [
  "bytemuck",
  "futures-intrusive",
  "log",
- "peniko 0.6.0",
+ "peniko",
  "png",
  "skrifa",
  "static_assertions",
@@ -1349,7 +1334,7 @@ checksum = "d53d864987821f40431e62608bf0f58342db57f2f2860628c8cfc28e16a1cc39"
 dependencies = [
  "bytemuck",
  "guillotiere",
- "peniko 0.6.0",
+ "peniko",
  "skrifa",
  "smallvec",
 ]

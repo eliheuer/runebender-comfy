@@ -419,7 +419,7 @@ impl TextBuffer {
         let line_height = line_height.max(1.0);
         let target_line = self.line_number_for_y(y, line_height, ascender, descender);
         let (line_start, line_end) = self.line_range_for_number(target_line);
-        let nearest_cursor = self.nearest_cursor_for_line(x, line_start, line_end, &layout);
+        let nearest_cursor = self.nearest_cursor_for_line(x, line_start, line_end, layout);
 
         for item in layout
             .items
