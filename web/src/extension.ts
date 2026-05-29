@@ -11,7 +11,7 @@ import { runebenderHostKey, type WorkspaceChoice } from "./host/runebenderHost";
 import { comfyHost } from "./hosts/comfy/comfyHost";
 import Runebender from "./Runebender.vue";
 
-const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-28-codemirror-84";
+const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-28-vue-codemirror-90";
 
 // Mirror our own console output to the ComfyUI terminal through the
 // injected Comfy host. Filters to messages prefixed with
@@ -323,22 +323,17 @@ function loadCodeMirror(): Promise<void> {
   return codeMirrorReady;
 }
 
-// The script widget's underlying <textarea>: widget.inputEl (deprecated) on
-// older ComfyUI, widget.element on newer builds.
-function scriptTextareaEl(widget: any): HTMLTextAreaElement | undefined {
-  if (widget.inputEl instanceof HTMLTextAreaElement) return widget.inputEl;
-  const el = widget.element;
-  if (el instanceof HTMLTextAreaElement) return el;
-  return el?.querySelector?.("textarea") ?? undefined;
-}
-
-// Mount a CodeMirror editor over the (now-hidden) script textarea. Strategy
-// ported from comfyfont: a position:fixed overlay whose rect is synced to the
-// textarea's getBoundingClientRect via rAF, so it follows ComfyUI's canvas
-// pan/zoom/resize without reaching into litegraph's coordinate system. The
-// textarea stays in layout (opacity 0, pointer-events none) so its value
-// plumbing — and getBoundingClientRect — keep working.
-async function mountScriptEditor(widget: any, textarea: HTMLTextAreaElement) {
+// Mount a CodeMirror editor over the (now-hidden) script textarea. A
+// position:fixed overlay is synced to the textarea's getBoundingClientRect
+// via rAF, so it follows ComfyUI's canvas pan/zoom/resize without reaching
+// into litegraph's coordinate system.
+//
+// Renderer-agnostic: in Classic (Nodes 1.0) the widget textarea is stable and
+// exposed as widget.inputEl; in Nodes 2.0 the Vue renderer leaves inputEl
+// orphaned (detached) and renders its own <textarea> inside the node's
+// [data-node-id] element. So we re-resolve the live textarea every frame and
+// only tear down when the node itself leaves the graph.
+async function mountScriptEditor(node: any, widget: any) {
   if (widget.__runebenderCM) return;
   await loadCodeMirror();
   const CM = (window as any).CodeMirror;
@@ -354,18 +349,15 @@ async function mountScriptEditor(widget: any, textarea: HTMLTextAreaElement) {
     zIndex: "1000",
     overflow: "hidden",
     boxSizing: "border-box",
+    display: "none",
   });
   document.body.appendChild(wrapper);
-
-  textarea.style.opacity = "0";
-  textarea.style.pointerEvents = "none";
 
   const editor = CM(wrapper, {
     value: String(widget.value ?? ""),
     mode: "python",
     theme: "preschool",
-    lineNumbers: true,
-    fixedGutter: true,
+    lineNumbers: false,
     indentUnit: 4,
     tabSize: 4,
     indentWithTabs: false,
@@ -378,16 +370,85 @@ async function mountScriptEditor(widget: any, textarea: HTMLTextAreaElement) {
   });
   widget.__runebenderCM = editor;
 
+  // Resolve the *visible* textarea to anchor to. Classic exposes it as
+  // widget.inputEl (connected); Nodes 2.0 orphans inputEl and renders its own
+  // Vue <textarea> inside the node's [data-node-id] element — the DrawBot node
+  // has a single multiline widget, so that lone textarea is ours.
+  const findTextarea = (): HTMLTextAreaElement | undefined => {
+    for (const t of [widget.inputEl, widget.element]) {
+      if (t instanceof HTMLTextAreaElement && t.isConnected) return t;
+    }
+    const nodeEl = document.querySelector(`[data-node-id="${node.id}"]`);
+    const live = nodeEl?.querySelector("textarea");
+    return live instanceof HTMLTextAreaElement ? live : undefined;
+  };
+
+  editor.on("change", () => {
+    const src = editor.getValue();
+    widget.value = src;
+    const ta = findTextarea();
+    if (ta) ta.value = src;
+  });
+
   let lastW = 0;
   let lastH = 0;
+  let seenInGraph = false;
   const syncLoop = () => {
-    if (!textarea.isConnected) {
+    // Tear down once the node leaves the graph (litegraph nulls node.graph on
+    // removal). seenInGraph guards against bailing on the first frame before
+    // the node is fully attached.
+    if (node.graph) {
+      seenInGraph = true;
+    } else if (seenInGraph) {
       wrapper.remove();
       widget.__runebenderCM = null;
       return;
     }
+
+    // The full-screen Runebender editor overlay covers the graph; our
+    // fixed-position CM overlay (z-index 1000) would otherwise float on top of
+    // it. Hide while that overlay is open (it toggles this body class).
+    if (document.body.classList.contains("runebender-overlay-open")) {
+      wrapper.style.display = "none";
+      requestAnimationFrame(syncLoop);
+      return;
+    }
+
+    const textarea = findTextarea();
+    if (!textarea || !textarea.isConnected) {
+      // Textarea momentarily gone (Vue re-render); hide and keep waiting.
+      wrapper.style.display = "none";
+      requestAnimationFrame(syncLoop);
+      return;
+    }
+
+    // Hide whichever textarea is current — CodeMirror is the real surface.
+    textarea.style.opacity = "0";
+    textarea.style.pointerEvents = "none";
+
     const rect = textarea.getBoundingClientRect();
+
+    // Yield to an open PrimeVue popover (e.g. the preset dropdown in Nodes
+    // 2.0, which teleports to <body>) that overlaps our editor — our fixed
+    // overlay sits at z-index 1000 and would otherwise cover it. Hide until
+    // the popover closes rather than guessing a fragile z-index.
+    const popover = document.querySelector(
+      ".p-popover, .p-overlaypanel, .p-select-overlay, .p-autocomplete-overlay, .p-multiselect-overlay",
+    );
+    if (popover) {
+      const p = popover.getBoundingClientRect();
+      const overlaps =
+        p.left < rect.right && p.right > rect.left &&
+        p.top < rect.bottom && p.bottom > rect.top;
+      if (overlaps) {
+        wrapper.style.display = "none";
+        requestAnimationFrame(syncLoop);
+        return;
+      }
+    }
+
     Object.assign(wrapper.style, {
+      display: "block",
       top: `${rect.top}px`,
       left: `${rect.left}px`,
       width: `${rect.width}px`,
@@ -402,12 +463,6 @@ async function mountScriptEditor(widget: any, textarea: HTMLTextAreaElement) {
     requestAnimationFrame(syncLoop);
   };
   requestAnimationFrame(syncLoop);
-
-  editor.on("change", () => {
-    const src = editor.getValue();
-    widget.value = src;
-    textarea.value = src;
-  });
 }
 
 function attachFontSpecimenPresetSync(node: any) {
@@ -422,12 +477,9 @@ function attachFontSpecimenPresetSync(node: any) {
   );
   if (!presetWidget || !scriptWidget) return;
 
-  const pollForTextarea = window.setInterval(() => {
-    const textarea = scriptTextareaEl(scriptWidget);
-    if (!textarea) return;
-    window.clearInterval(pollForTextarea);
-    void mountScriptEditor(scriptWidget, textarea);
-  }, 100);
+  // Mount the CodeMirror editor. Its own rAF loop waits for the widget
+  // textarea to appear and re-anchors if Nodes 2.0 swaps it, so no poll here.
+  void mountScriptEditor(node, scriptWidget);
 
   const presetValues = presetWidget.options?.values ?? [];
   const normalizePreset = () => {

@@ -1160,7 +1160,7 @@ class WebBundleTests(unittest.TestCase):
         self.assertNotIn("GRAPH removeLink on FONT link", bundle)
         self.assertIn("runebender/link_source", bundle)
         self.assertIn("workspace/invalidate", bundle)
-        self.assertIn("rb-bundle-2026-05-28-codemirror-84", bundle)
+        self.assertIn("rb-bundle-2026-05-28-vue-codemirror-90", bundle)
         # DrawBot script widget uses a vendored CodeMirror 5 editor
         # (Python highlighting + line numbers), like the old comfyfont node.
         # String literals survive minification; local names do not.
