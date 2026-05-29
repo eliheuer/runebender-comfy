@@ -71,7 +71,6 @@ function injectRunebenderStyles() {
     link.rel = "stylesheet";
     link.href = cssUrl;
     document.head.appendChild(link);
-    console.info(`[runebender-comfy] injected styles from ${cssUrl}`);
   } catch (error) {
     console.warn("[runebender-comfy] could not inject style.css:", error);
   }
@@ -236,25 +235,6 @@ function requestSourcePath(defaultValue: string): Promise<string | null> {
     input.focus();
     input.select();
   });
-}
-
-function logNodeSockets(node: any, label: string) {
-  const payload = {
-    id: node.id,
-    title: node.title,
-    inputs: (node.inputs ?? []).map((slot: any) => ({
-      name: slot.name,
-      type: slot.type,
-      link: slot.link ?? null,
-      hasWidget: !!slot.widget,
-    })),
-    outputs: (node.outputs ?? []).map((slot: any) => ({
-      name: slot.name,
-      type: slot.type,
-      links: slot.links ?? [],
-    })),
-  };
-  console.info(`[runebender-comfy] ${label} ${JSON.stringify(payload)}`);
 }
 
 function resolveConnectedFontValue(node: any): string {
@@ -592,7 +572,6 @@ function measureComfyChromeInsets(): {
     right: 0,
     bottom: 0,
   };
-  console.info("[runebender-comfy] chrome insets", JSON.stringify(insets));
   return insets;
 }
 
@@ -722,7 +701,6 @@ function openRunebenderOverlay(options: {
   const onDocumentPointerDown = (event: PointerEvent) => {
     const target = event.target as Element | null;
     if (!target?.closest(".workflow-tabs-container")) return;
-    console.info("[runebender-comfy] closing editor for workflow tab switch");
     cleanup();
   };
   document.addEventListener("pointerdown", onDocumentPointerDown, true);
@@ -799,8 +777,6 @@ app.registerExtension({
     const onCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function () {
       onCreated?.apply(this, arguments);
-      console.log(`[runebender-comfy] ${RUNEBENDER_BUNDLE_FINGERPRINT} Runebender node active`);
-      logNodeSockets(this, "Runebender node sockets");
       this.properties ??= {};
       this.properties.glyph_data ??= "";
 
@@ -920,14 +896,6 @@ app.registerExtension({
       previewImg.addEventListener("error", () => {
         console.warn("[runebender-comfy] preview <img> failed", previewImg.src);
       });
-      previewImg.addEventListener("load", () => {
-        console.info("[runebender-comfy] preview <img> loaded", JSON.stringify({
-          src: previewImg.src,
-          width: previewImg.naturalWidth,
-          height: previewImg.naturalHeight,
-        }));
-      });
-
       let lastPreviewSlot = "";
       const syncPreview = (force = false) => {
         const value = currentSourceValue();
@@ -946,13 +914,6 @@ app.registerExtension({
           t: String(Date.now()),
         });
         previewImg.src = comfyHost.workspacePreviewUrl(value, params);
-        console.info("[runebender-comfy] preview request", JSON.stringify({
-          value,
-          visible: visibleSourceValue(),
-          stored: storedSourceValue(),
-          upstream: resolveConnectedFontValue(this),
-          src: previewImg.src,
-        }));
       };
 
       const refreshChoices = async () => {
@@ -1068,11 +1029,6 @@ app.registerExtension({
       this.onConfigure = function (info: unknown) {
         origConfigure?.call(this, info);
         const restored = localSourceValue();
-        console.info("[runebender-comfy] source restore", JSON.stringify({
-          restored,
-          visible: visibleSourceValue(),
-          stored: storedSourceValue(),
-        }));
         if (restored) setSourceValue(restored);
         syncPreview();
       };
