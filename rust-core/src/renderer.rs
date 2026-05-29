@@ -4,9 +4,7 @@
 // expects a `wgpu::SurfaceTarget`, and the only `SurfaceTarget` we
 // ever hand it is an `HtmlCanvasElement` — that's a browser-only
 // path. The path/model/editing modules build on both native and
-// wasm32 so unit tests still run on `cargo test`.
-
-#![cfg(target_arch = "wasm32")]
+// wasm32 so unit tests still run on `cargo test`. (Gating lives in lib.rs.)
 
 use kurbo::{Affine, BezPath, Circle, Ellipse, Line, Point, Rect, Stroke};
 use runebender_core::theme;

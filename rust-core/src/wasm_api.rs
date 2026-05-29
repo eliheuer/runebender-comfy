@@ -1,8 +1,6 @@
 // wasm-bindgen surface — the JS/Vue-facing API. Holds the editor
 // state, the mouse state machine, the active tool, the renderer, and
-// the undo stack.
-
-#![cfg(target_arch = "wasm32")]
+// the undo stack. (wasm32 gating lives in lib.rs.)
 
 use kurbo::{Affine, BezPath, Point, Rect, Shape, Vec2};
 use serde::Serialize;

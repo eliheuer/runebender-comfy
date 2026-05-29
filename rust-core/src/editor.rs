@@ -12,7 +12,7 @@ use serde::Deserialize;
 use crate::editing::{Selection, ViewPort};
 use crate::model::EntityId;
 use crate::model::workspace::{
-    self, Contour as WsContour, ContourPoint as WsContourPoint, PointType as WsPointType,
+    Contour as WsContour, ContourPoint as WsContourPoint, PointType as WsPointType,
 };
 use crate::path::{
     CubicPath, HyperPath, Path, PathPoint, PathPoints, PointType, Quadrant, QuadraticPath, Segment,
@@ -2567,11 +2567,6 @@ pub fn convert_norad_point(pt: &norad::ContourPoint) -> WsContourPoint {
         smooth: pt.smooth,
     }
 }
-
-// Quiet unused-import lint on `workspace` while the only use is via
-// the WsContour / WsContourPoint / WsPointType aliases above.
-#[allow(dead_code)]
-fn _suppress(_: workspace::Glyph) {}
 
 #[cfg(test)]
 mod tests {

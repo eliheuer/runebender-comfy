@@ -205,9 +205,10 @@ open; a Vitest/Playwright harness is the proper replacement (follow-up).
 - [ ] **[D]** Add `web/tsconfig.json` (`strict:true`) + ESLint/Prettier.
 
 ### Tier 3 — Rust (safe nits + dead-code triage)
-- [ ] **[S]** Delete `fn _suppress`, fix the import (`editor.rs:2571`).
-- [ ] **[S]** Remove redundant inner `#![cfg(target_arch="wasm32")]`
-      (`renderer.rs:9`, `wasm_api.rs:5`).
+- [x] **[S]** Delete `fn _suppress`; dropped `self` from the workspace import
+      (the aliases are what's used). `cargo fmt`/check/test/wasm-check all clean.
+- [x] **[S]** Remove redundant inner `#![cfg(target_arch="wasm32")]`
+      (`renderer.rs`, `wasm_api.rs`) — gating lives in lib.rs.
 - [ ] **[S]** Fix WASM-target clippy: useless `.into()`, collapsible `if`,
       unnecessary `if let`, needless borrow; add `HyperPath::is_empty`.
 - [ ] **[S]** `workspace.rs:113,121` NaN-safe compare (or delete dead block).
