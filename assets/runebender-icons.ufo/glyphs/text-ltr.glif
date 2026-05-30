@@ -1,29 +1,27 @@
 <?xml version='1.0' encoding='UTF-8'?>
 <glyph name="text-ltr" format="2">
-  <advance width="24"/>
+  <advance width="768" />
   <outline>
     <contour>
-      <point x="5.0" y="-6.0" type="move"/>
-      <point x="15.0" y="-6.0" type="line"/>
+      <point x="128" y="584" type="line" />
+      <point x="496" y="584" type="line" />
+      <point x="496" y="656" type="line" />
+      <point x="128" y="656" type="line" />
     </contour>
     <contour>
-      <point x="12.0" y="-3.0" type="move"/>
-      <point x="15.0" y="-6.0" type="line"/>
-      <point x="12.0" y="-9.0" type="line"/>
+      <point x="276" y="128" type="line" />
+      <point x="348" y="128" type="line" />
+      <point x="348" y="584" type="line" />
+      <point x="276" y="584" type="line" />
     </contour>
     <contour>
-      <point x="5.0" y="-13.0" type="move"/>
-      <point x="18.0" y="-13.0" type="line"/>
-    </contour>
-    <contour>
-      <point x="5.0" y="-18.0" type="move"/>
-      <point x="14.0" y="-18.0" type="line"/>
+      <point x="496" y="392" type="line" />
+      <point x="648" y="512" type="line" />
+      <point x="648" y="432" type="line" />
+      <point x="704" y="432" type="line" />
+      <point x="704" y="352" type="line" />
+      <point x="648" y="352" type="line" />
+      <point x="648" y="272" type="line" />
     </contour>
   </outline>
-  <lib>
-    <dict>
-      <key>com.runebender.iconRenderMode</key>
-      <string>stroke</string>
-    </dict>
-  </lib>
 </glyph>

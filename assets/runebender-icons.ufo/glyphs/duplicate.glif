@@ -1,25 +1,18 @@
 <?xml version='1.0' encoding='UTF-8'?>
 <glyph name="duplicate" format="2">
-  <advance width="24"/>
+  <advance width="768" />
   <outline>
     <contour>
-      <point x="8.0" y="-8.0" type="line"/>
-      <point x="18.0" y="-8.0" type="line"/>
-      <point x="18.0" y="-18.0" type="line"/>
-      <point x="8.0" y="-18.0" type="line"/>
+      <point x="128" y="240" type="line" />
+      <point x="448" y="240" type="line" />
+      <point x="448" y="560" type="line" />
+      <point x="128" y="560" type="line" />
     </contour>
     <contour>
-      <point x="6.0" y="-16.0" type="move"/>
-      <point x="4.0" y="-16.0" type="line"/>
-      <point x="4.0" y="-4.0" type="line"/>
-      <point x="16.0" y="-4.0" type="line"/>
-      <point x="16.0" y="-6.0" type="line"/>
+      <point x="300" y="92" type="line" />
+      <point x="620" y="92" type="line" />
+      <point x="620" y="412" type="line" />
+      <point x="300" y="412" type="line" />
     </contour>
   </outline>
-  <lib>
-    <dict>
-      <key>com.runebender.iconRenderMode</key>
-      <string>stroke</string>
-    </dict>
-  </lib>
 </glyph>

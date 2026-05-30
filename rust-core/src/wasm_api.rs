@@ -299,10 +299,15 @@ pub fn glif_with_outlines_from(
 /// y-up coordinates display correctly.
 #[wasm_bindgen(js_name = glifToSvg)]
 pub fn glif_to_svg(bytes: &[u8]) -> Result<String, JsValue> {
+    let stroke_icon = is_runebender_stroke_icon_xml(bytes);
     let glyph = norad::Glyph::parse_raw(bytes)
         .map_err(|e| JsValue::from_str(&format!("parse .glif: {e}")))?;
     let bez = norad_glyph_to_bezpath(&glyph);
-    svg_from_bezpath(&bez)
+    if stroke_icon {
+        svg_from_stroke_icon_bezpath(&bez)
+    } else {
+        svg_from_bezpath(&bez)
+    }
 }
 
 /// Parse a .glif file's bytes and return an SVG with UFO components
@@ -313,13 +318,18 @@ pub fn glif_to_svg_with_components(
     bytes: &[u8],
     glyph_xml_by_name: &str,
 ) -> Result<String, JsValue> {
+    let stroke_icon = is_runebender_stroke_icon_xml(bytes);
     let glyph = norad::Glyph::parse_raw(bytes)
         .map_err(|e| JsValue::from_str(&format!("parse .glif: {e}")))?;
     let glyphs = parse_glif_xml_map(glyph_xml_by_name)?;
 
     let mut bez = norad_glyph_to_bezpath(&glyph);
     append_norad_components_to_bezpath(&mut bez, &glyph, &glyphs, Affine::IDENTITY, 0);
-    svg_from_bezpath(&bez)
+    if stroke_icon {
+        svg_from_stroke_icon_bezpath(&bez)
+    } else {
+        svg_from_bezpath(&bez)
+    }
 }
 
 /// Batch-convert every glyph in a master to SVG thumbnails for the
@@ -356,7 +366,15 @@ pub fn glif_map_to_svgs(glyph_xml_by_name: &str, units_per_em: f64) -> Result<St
     for (name, glyph) in &glyphs {
         let mut bez = norad_glyph_to_bezpath(glyph);
         append_norad_components_to_bezpath(&mut bez, glyph, &glyphs, Affine::IDENTITY, 0);
-        if let Ok(svg) = svg_from_bezpath_em(&bez, upm) {
+        let stroke_icon = xml_by_name
+            .get(name)
+            .is_some_and(|xml| is_runebender_stroke_icon_xml(xml.as_bytes()));
+        let svg_result = if stroke_icon {
+            svg_from_stroke_icon_bezpath(&bez)
+        } else {
+            svg_from_bezpath_em(&bez, upm)
+        };
+        if let Ok(svg) = svg_result {
             if !svg.is_empty() {
                 svgs.insert(name.clone(), svg);
             }
@@ -364,6 +382,30 @@ pub fn glif_map_to_svgs(glyph_xml_by_name: &str, units_per_em: f64) -> Result<St
     }
 
     serde_json::to_string(&svgs).map_err(|e| JsValue::from_str(&format!("serialize svgs: {e}")))
+}
+
+fn is_runebender_stroke_icon_xml(bytes: &[u8]) -> bool {
+    let Ok(xml) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    xml.contains("<key>com.runebender.iconRenderMode</key>")
+        && xml.contains("<string>stroke</string>")
+}
+
+fn svg_from_stroke_icon_bezpath(bez: &BezPath) -> Result<String, JsValue> {
+    if bez.elements().is_empty() {
+        return Ok(String::new());
+    }
+    let bbox = bez.bounding_box();
+    let pad = 2.0;
+    Ok(format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="{} {} {} {}" preserveAspectRatio="xMidYMid meet"><path d="{}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" transform="scale(1 -1)"/></svg>"#,
+        bbox.x0 - pad,
+        -bbox.y1 - pad,
+        bbox.width() + pad * 2.0,
+        bbox.height() + pad * 2.0,
+        bez.to_svg(),
+    ))
 }
 
 /// Grid-thumbnail SVG with a CONSTANT em-based vertical viewBox, so
