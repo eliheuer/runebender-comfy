@@ -1,4 +1,5 @@
 import type {
+  ClearWorkspaceSlotsResult,
   ChooseSourceResult,
   LinkSourceResult,
   RunebenderHost,
@@ -48,6 +49,15 @@ export const comfyHost: RunebenderHost = {
         .filter((choice) => choice.slot);
     }
     return (data.slots ?? []).map((slot) => ({ slot, label: slot }));
+  },
+
+  async clearWorkspaceSlots() {
+    const response = await fetch("/runebender/workspaces/clear", { method: "POST" });
+    const data = (await response.json().catch(() => ({}))) as ClearWorkspaceSlotsResult;
+    if (!response.ok) {
+      throw new Error(data.error || `${response.status} ${response.statusText}`);
+    }
+    return data;
   },
 
   workspacePreviewUrl(slot, params) {

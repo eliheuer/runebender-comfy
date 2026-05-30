@@ -49,13 +49,25 @@ class WebBundleTests(unittest.TestCase):
         self.assertEqual(module.WEB_DIRECTORY, "./web/dist")
         self.assertEqual(
             set(module.NODE_CLASS_MAPPINGS),
-            {"CompileFont", "FontPreview", "FontSpecimen", "ComfyFontDrawBot", "ForkFont", "Runebender", "DesignBot"},
+            {
+                "CompileFont",
+                "FontPreview",
+                "FontSpecimen",
+                "ComfyFontDrawBot",
+                "ForkFont",
+                "ApplyGlyphCandidates",
+                "GlyphCandidateBuilder",
+                "Runebender",
+                "DesignBot",
+            },
         )
         self.assertEqual(
             set(module.NODE_DISPLAY_NAME_MAPPINGS),
             set(module.NODE_CLASS_MAPPINGS),
         )
         self.assertEqual(module.NODE_DISPLAY_NAME_MAPPINGS["FontSpecimen"], "DrawBot Skia")
+        self.assertEqual(module.NODE_DISPLAY_NAME_MAPPINGS["ApplyGlyphCandidates"], "Apply Glyph Candidates")
+        self.assertEqual(module.NODE_DISPLAY_NAME_MAPPINGS["GlyphCandidateBuilder"], "Glyph Candidate Builder")
         self.assertEqual(module.NODE_DISPLAY_NAME_MAPPINGS["ComfyFontDrawBot"], "DrawBot Skia (legacy)")
         self.assertTrue(module.NODE_CLASS_MAPPINGS["ComfyFontDrawBot"].DEPRECATED)
         self.assertTrue(all(cls.CATEGORY.startswith("Runebender") for cls in module.NODE_CLASS_MAPPINGS.values()))
@@ -86,6 +98,10 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn('from "/scripts/app.js"', bundle)
         self.assertIn("registerExtension", bundle)
         self.assertIn("runebender-comfy.Runebender", bundle)
+        self.assertIn("Clear Font Sources", bundle)
+        self.assertIn("candidate_name", bundle)
+        self.assertIn("/runebender/workspaces/clear", bundle)
+        self.assertIn("All masters", bundle)
 
         # The DrawBot script editor loads CodeMirror from vendored assets that
         # Vite copies from web/public/ into dist/vendor/.

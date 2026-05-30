@@ -1110,6 +1110,14 @@ impl GlyphEditor {
         self.undo.add_undo_group(snapshot);
     }
 
+    #[wasm_bindgen(js_name = activateTextSort)]
+    pub fn activate_text_sort(&mut self, index: usize) -> bool {
+        if !self.state.has_text_session {
+            return false;
+        }
+        self.state.text_buffer.activate_sort(index)
+    }
+
     #[wasm_bindgen(js_name = insertTextCharacter)]
     pub fn insert_text_character(&mut self, codepoint: u32) -> bool {
         let Some(char) = text_codepoint_from_wasm(codepoint) else {

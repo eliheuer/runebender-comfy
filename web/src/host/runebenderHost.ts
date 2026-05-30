@@ -41,6 +41,12 @@ export type LinkSourceResult = {
   error?: string;
 };
 
+export type ClearWorkspaceSlotsResult = {
+  deleted?: string[];
+  choices?: WorkspaceChoice[];
+  error?: string;
+};
+
 export type RunebenderStatePayload = {
   nodeId: string;
   font: string;
@@ -52,6 +58,7 @@ export type RunebenderHost = {
   publishState(payload: RunebenderStatePayload): Promise<void>;
   loadWorkspaceSlot(slot: string): Promise<WorkspaceSlotPayload | null>;
   listWorkspaceSlots(): Promise<WorkspaceChoice[]>;
+  clearWorkspaceSlots(): Promise<ClearWorkspaceSlotsResult>;
   workspacePreviewUrl(slot: string, params: URLSearchParams): string;
   drawBotPresetSource(name: string): Promise<string | null>;
   writeWorkspaceFile(path: string, text: string): Promise<Response>;

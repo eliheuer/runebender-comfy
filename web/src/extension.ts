@@ -11,7 +11,7 @@ import { runebenderHostKey, type WorkspaceChoice } from "./host/runebenderHost";
 import { comfyHost } from "./hosts/comfy/comfyHost";
 import Runebender from "./Runebender.vue";
 
-const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-28-vue-codemirror-90";
+const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-29-sidebar-selection-edge-95";
 
 // Mirror our own console output to the ComfyUI terminal through the
 // injected Comfy host. Filters to messages prefixed with
@@ -244,7 +244,7 @@ function resolveConnectedFontValue(node: any): string {
     if (input?.link == null) return "";
     const upstream = node.getInputNode?.(inputIndex);
     if (upstream) {
-      for (const candidate of ["source", "workspace", "font", "source_path"]) {
+      for (const candidate of ["source", "workspace", "font", "source_path", "candidate_name"]) {
         const widget = upstream.widgets?.find((w: any) => w.name === candidate);
         const value = String(widget?.value ?? "").trim();
         if (value) return value;
@@ -814,6 +814,17 @@ app.registerExtension({
         return workspaceChoiceBySlot.get(source)?.label || source;
       };
 
+      const replaceComboValues = (values: string[]) => {
+        if (!workspaceSelect) return;
+        workspaceSelect.options ??= {};
+        const existingValues = workspaceSelect.options.values;
+        if (Array.isArray(existingValues)) {
+          existingValues.splice(0, existingValues.length, ...values);
+        } else {
+          workspaceSelect.options.values = values;
+        }
+      };
+
       const setWorkspaceChoices = (choices: WorkspaceChoice[], pinnedValue?: string) => {
         if (!workspaceSelect) return;
         const pinned = String(pinnedValue ?? "").trim();
@@ -832,9 +843,41 @@ app.registerExtension({
         workspaceSlotByLabel = new Map(
           Array.from(workspaceChoiceBySlot.values()).map((choice) => [choice.label, choice.slot]),
         );
-        workspaceSelect.options.values = Array.from(
+        const nextValues = Array.from(
           new Set(Array.from(workspaceChoiceBySlot.values()).map((choice) => choice.label)),
         );
+        replaceComboValues(nextValues);
+      };
+
+      const hardResetFontSourceUi = () => {
+        workspaceChoiceBySlot = new Map([["demo", { slot: "demo", label: "demo" }]]);
+        workspaceSlotByLabel = new Map([["demo", "demo"]]);
+        replaceComboValues(["demo"]);
+        if (workspaceSelect) {
+          workspaceSelect.value = "demo";
+        }
+        if (sourceWidget) {
+          sourceWidget.value = "demo";
+        }
+        if (sourceKindWidget) {
+          sourceKindWidget.value = "auto";
+        }
+        if (workspaceNameWidget) {
+          workspaceNameWidget.value = "";
+        }
+        if (Array.isArray(this.widgets_values)) {
+          for (const widget of [sourceWidget, sourceKindWidget, workspaceNameWidget, workspaceSelect]) {
+            const index = this.widgets?.indexOf(widget);
+            if (index != null && index >= 0) {
+              this.widgets_values[index] =
+                widget === sourceWidget || widget === workspaceSelect
+                  ? "demo"
+                  : widget === sourceKindWidget
+                    ? "auto"
+                    : "";
+            }
+          }
+        }
       };
 
       const setSourceValue = (value: string) => {
@@ -848,6 +891,17 @@ app.registerExtension({
         }
         if (sourceWidget && String(sourceWidget.value ?? "") !== source) {
           sourceWidget.value = source;
+        }
+      };
+
+      const showSourceValue = (value: string) => {
+        const source = normalizeSourceValue(value);
+        setWorkspaceChoices(
+          Array.from(workspaceChoiceBySlot.values()),
+          source,
+        );
+        if (workspaceSelect) {
+          workspaceSelect.value = displayLabelForSource(source);
         }
       };
 
@@ -904,6 +958,7 @@ app.registerExtension({
           previewImg.removeAttribute("src");
           return;
         }
+        showSourceValue(value);
         if (!force && value === lastPreviewSlot && previewImg.src) return;
         lastPreviewSlot = value;
         const params = new URLSearchParams({
@@ -952,6 +1007,25 @@ app.registerExtension({
         return slot;
       };
 
+      const clearFontSources = async () => {
+        hardResetFontSourceUi();
+        syncPreview(true);
+        try {
+          const result = await comfyHost.clearWorkspaceSlots();
+          hardResetFontSourceUi();
+          const count = result.deleted?.length ?? 0;
+          console.info(`[runebender-comfy] cleared ${count} font source${count === 1 ? "" : "s"}`);
+        } catch (error) {
+          const routeHint = error instanceof Error && /404|405/.test(error.message)
+            ? " Fully restart ComfyUI, then hard-refresh the browser so the clear-font-sources backend route is registered."
+            : "";
+          throw new Error(`${error}${routeHint}`);
+        }
+        hardResetFontSourceUi();
+        syncPreview(true);
+        this.setDirtyCanvas(true, true);
+      };
+
       const ensureEditableWorkspace = async (value: string) => {
         if (!value || value.startsWith("workspace://")) return value;
         const values = Array.from(workspaceChoiceBySlot.keys());
@@ -964,6 +1038,7 @@ app.registerExtension({
       // Widget order, matching node-based editors (Fusion/Nuke/Houdini):
       //   Font Source (combo)         — the loaded font, visible at a glance
       //   Open Font Source (button)   — choose a disk source for edit/save-back
+      //   Clear Font Sources (button) — drop stale cached sources from this workspace
       //   Edit Font Source (button)   — open the full-screen editor
       //   <img> specimen preview      — DOM widget, v1-native
       workspaceSelect = this.addWidget("combo", "Font Source", "demo", (value: any) => {
@@ -982,6 +1057,14 @@ app.registerExtension({
       }, {});
       importButton.serialize = false;
 
+      const clearButton = this.addWidget("button", "Clear Font Sources", null, () => {
+        void clearFontSources().catch((error) => {
+          alert(`Runebender clear font sources failed: ${error}`);
+          console.error("[runebender-comfy] clear font sources failed:", error);
+        });
+      }, {});
+      clearButton.serialize = false;
+
       const editButton = this.addWidget("button", "Edit Font Source", null, () => {
         void (async () => {
           const currentFont = currentSourceValue();
@@ -990,6 +1073,7 @@ app.registerExtension({
             return;
           }
           const editableFont = await ensureEditableWorkspace(currentFont);
+          showSourceValue(editableFont);
           const fontPath = ref(editableFont);
           openRunebenderOverlay({
             nodeId: String(this.id),
@@ -1031,6 +1115,12 @@ app.registerExtension({
         const restored = localSourceValue();
         if (restored) setSourceValue(restored);
         syncPreview();
+      };
+
+      const origConnectionsChange = this.onConnectionsChange;
+      this.onConnectionsChange = function (...args: any[]) {
+        origConnectionsChange?.apply(this, args);
+        syncPreview(true);
       };
 
       const hideWidget = (widget: any) => {

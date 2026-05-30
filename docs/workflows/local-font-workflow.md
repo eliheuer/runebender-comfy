@@ -41,6 +41,19 @@ Runebender -> Compile Font -> Font Preview
 : Copies a workspace so you can keep exploring variants without
   overwriting the original source.
 
+`Glyph Candidate Builder`
+: Copies a workspace into a new candidate `FONT` and replaces only the
+  selected glyphs with normalized donor outlines. Use `glyphs:
+  mark:red` and `arabic_only: true` to turn red-labeled Arabic
+  placeholders into a visual candidate branch without touching the
+  original source.
+
+`Apply Glyph Candidates`
+: Copies reviewed glyphs from a candidate `FONT` back into a target
+  `FONT`. Keep `clear_mark_color: false` while reviewing so red labels
+  stay under your control. When the target is a linked source, the node
+  writes through to the original disk source by default.
+
 `Specimen`
 : Renders a DrawBot-style specimen from a `FONT` wire and returns both
   `IMAGE` and `MASK` outputs. Use this when you want a scripted
@@ -70,6 +83,35 @@ For a bundled smoke test, use
 `samples/virtua-grotesk/VirtuaGrotesk.designspace` as the source path.
 The bundled demo is the two-master (Regular/Bold) Virtua Grotesk font;
 the `demo` workspace alias resolves to it automatically.
+
+## Red-Marked Arabic Candidate Workflow
+
+Use this when you want to replace only the glyphs you marked visually in
+Runebender:
+
+```text
+Runebender -> Glyph Candidate Builder -> Runebender
+            -> Apply Glyph Candidates -> Runebender
+```
+
+1. Load the real source in the first `Runebender` node.
+2. Mark the Arabic placeholders that should be replaced as red.
+3. Save.
+4. Run `Glyph Candidate Builder` with:
+   - `donor_path`: `/Users/eli/GH/repos/rubik/sources/designspace/Rubik.designspace`
+   - `glyphs`: `mark:red`
+   - `arabic_only`: `true`
+5. Open the output `FONT` in the second `Runebender` node.
+6. When a candidate is worth keeping, run `Apply Glyph Candidates` with:
+   - `candidate_font`: the candidate builder output
+   - `target_font`: the original linked `Runebender` source
+   - `glyphs`: `mark:red` to apply only red glyphs from the candidate
+     report, `report`, or an explicit accepted glyph list
+   - `clear_mark_color`: `false`
+
+The candidate builder forks the workspace, so the original source is not
+overwritten. `Apply Glyph Candidates` is the deliberate promotion step
+that copies only the selected reviewed drawings back to the real source.
 
 ## Notes
 

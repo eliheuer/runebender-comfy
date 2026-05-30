@@ -23,6 +23,7 @@ from server import PromptServer
 
 from .font_preview import render_preview_png, render_workspace_preview_png
 from .workspace import (
+    clear_workspace_slots,
     compile_slot,
     create_slot_from_path,
     list_workspace_choices,
@@ -208,6 +209,18 @@ async def list_workspaces(request):
     choices = [{"slot": "demo", "label": "demo", "origin_source": ""}]
     choices.extend(list_workspace_choices())
     return web.json_response({
+        "slots": [choice["slot"] for choice in choices],
+        "choices": choices,
+    })
+
+
+@routes.post("/runebender/workspaces/clear")
+async def clear_workspaces(request):
+    cleared = clear_workspace_slots()
+    choices = [{"slot": "demo", "label": "demo", "origin_source": ""}]
+    return web.json_response({
+        "success": True,
+        "deleted": cleared,
         "slots": [choice["slot"] for choice in choices],
         "choices": choices,
     })

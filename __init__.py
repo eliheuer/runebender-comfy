@@ -6,6 +6,10 @@ Nodes:
                  Glyphs/glyphspackage as alternates
   CompileFont  — compile a workspace when a backend exists
   FontPreview  — simple specimen renderer for a FONT reference
+  GlyphCandidateBuilder — fork a workspace and replace marked glyphs
+                 with donor-derived candidates
+  ApplyGlyphCandidates — copy reviewed candidate glyphs back into a
+                 target workspace/source
   DrawBot Skia — scriptable DrawBot renderer with IMAGE + MASK outputs
   ForkFont     — deep-copy a workspace under a new name
   DesignBot    — DrawBot/Processing-style 2D graphics scripting
@@ -21,6 +25,8 @@ from .nodes.compile_font import CompileFont
 from .nodes.font_preview import FontPreview
 from .nodes.font_specimen import FontSpecimen
 from .nodes.fork_font import ForkFont
+from .nodes.apply_glyph_candidates import ApplyGlyphCandidates
+from .nodes.glyph_candidate_builder import GlyphCandidateBuilder
 from .nodes.runebender import Runebender
 from .nodes.designbot import DesignBot
 
@@ -37,6 +43,8 @@ NODE_CLASS_MAPPINGS = {
     "FontSpecimen": FontSpecimen,
     "ComfyFontDrawBot": LegacyComfyFontDrawBot,
     "ForkFont": ForkFont,
+    "ApplyGlyphCandidates": ApplyGlyphCandidates,
+    "GlyphCandidateBuilder": GlyphCandidateBuilder,
     "Runebender": Runebender,
     "DesignBot": DesignBot,
 }
@@ -47,6 +55,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "FontSpecimen": "DrawBot Skia",
     "ComfyFontDrawBot": "DrawBot Skia (legacy)",
     "ForkFont": "Fork Font",
+    "ApplyGlyphCandidates": "Apply Glyph Candidates",
+    "GlyphCandidateBuilder": "Glyph Candidate Builder",
     "Runebender": "Runebender",
     "DesignBot": "DesignBot",
 }

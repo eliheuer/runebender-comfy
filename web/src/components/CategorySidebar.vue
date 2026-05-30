@@ -469,6 +469,8 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
 }
 
 .disclosure {
+  position: relative;
+  z-index: 1;
   font: 22px ui-sans-serif, system-ui, sans-serif;
   line-height: 20px;
   transform: rotate(0deg);
@@ -494,6 +496,11 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
   cursor: pointer;
   font: 15px ui-sans-serif, system-ui, sans-serif;
   text-align: left;
+}
+
+.row-wrap > .row {
+  margin-left: -18px;
+  padding-left: 26px;
 }
 
 .row.active {
@@ -541,12 +548,12 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
 }
 
 .sublist {
-  margin-left: 34px;
+  margin-left: 0;
 }
 
 .subrow {
   height: 22px;
-  padding-left: 0;
+  padding-left: 34px;
   font-size: 14px;
 }
 </style>

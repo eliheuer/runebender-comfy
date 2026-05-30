@@ -47,6 +47,8 @@ from nodes import font_preview
 from nodes.font_preview import FontPreview
 from nodes.font_specimen import FontSpecimen, load_presets
 from nodes.fork_font import ForkFont
+from nodes.apply_glyph_candidates import ApplyGlyphCandidates
+from nodes.glyph_candidate_builder import GlyphCandidateBuilder, arabic_glyph_filter, rgba_matches
 from nodes.designbot import DesignBot, _script_for_render
 
 
@@ -118,6 +120,32 @@ class WorkspaceTests(unittest.TestCase):
         manifest = json.loads((package_dir / workspace.MANIFEST_NAME).read_text(encoding="utf-8"))
         self.assertEqual(manifest["source_slot"], "demo")
         self.assertEqual(manifest["sources_root"], "sources")
+
+    def test_glyph_candidate_builder_declares_font_output_and_report(self) -> None:
+        self.assertEqual(GlyphCandidateBuilder.CATEGORY, "Runebender / Font")
+        self.assertEqual(GlyphCandidateBuilder.RETURN_TYPES, ("FONT", "STRING"))
+        input_types = GlyphCandidateBuilder.INPUT_TYPES()
+        self.assertIn("font", input_types["required"])
+        self.assertIn("donor_path", input_types["required"])
+        self.assertIn("glyphs", input_types["optional"])
+
+    def test_apply_glyph_candidates_declares_review_apply_inputs(self) -> None:
+        self.assertEqual(ApplyGlyphCandidates.CATEGORY, "Runebender / Font")
+        self.assertEqual(ApplyGlyphCandidates.RETURN_TYPES, ("FONT", "STRING"))
+        input_types = ApplyGlyphCandidates.INPUT_TYPES()
+        self.assertIn("candidate_font", input_types["required"])
+        self.assertIn("target_font", input_types["required"])
+        self.assertIn("glyphs", input_types["optional"])
+        self.assertIn("clear_mark_color", input_types["optional"])
+        self.assertIn("write_linked_source", input_types["optional"])
+
+    def test_glyph_candidate_builder_color_and_arabic_filters(self) -> None:
+        self.assertTrue(rgba_matches("1,0.251,0.251,1", (1.0, 0.3, 0.3, 1.0)))
+        self.assertFalse(rgba_matches("0.267,0.733,0.267,1", (1.0, 0.3, 0.3, 1.0)))
+        self.assertEqual(
+            arabic_glyph_filter(["A", "seen-ar", "dottedCircle", "zeroFarsi-ar"]),
+            ["seen-ar", "dottedCircle", "zeroFarsi-ar"],
+        )
 
     def test_compile_slot_records_compiled_artifact(self) -> None:
         self._make_slot()
@@ -1012,6 +1040,28 @@ class FontImportRouteTests(unittest.TestCase):
             },
             payload["choices"],
         )
+
+    def test_clear_workspaces_route_removes_cached_sources_and_returns_demo_choice(self) -> None:
+        from nodes.font import clear_workspaces, list_workspaces
+
+        for slot in ("demo", "old-one", "old-two"):
+            slot_dir = workspace.FONTS_DIR / slot
+            slot_dir.mkdir(parents=True)
+            (slot_dir / "Demo.designspace").write_text(
+                '<?xml version="1.0" encoding="UTF-8"?><designspace format="5"><sources/></designspace>',
+                encoding="utf-8",
+            )
+
+        payload = asyncio.run(clear_workspaces(types.SimpleNamespace()))
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["deleted"], ["demo", "old-one", "old-two"])
+        self.assertFalse((workspace.FONTS_DIR / "demo").exists())
+        self.assertFalse((workspace.FONTS_DIR / "old-one").exists())
+        self.assertFalse((workspace.FONTS_DIR / "old-two").exists())
+
+        choices = asyncio.run(list_workspaces(types.SimpleNamespace()))
+        self.assertEqual(choices["choices"], [{"slot": "demo", "label": "demo", "origin_source": ""}])
 
     def test_import_source_path_route_creates_managed_copy_slot(self) -> None:
         from nodes.font import import_source_path

@@ -29,6 +29,12 @@ full type-design toolchain is still in progress.
   `glyphspackage` source package and then runs the Google Fonts
   oriented `fontc` compiler against it. The compiled artifact is
   recorded in the workspace manifest.
+- **Glyph Candidate Builder** — forks a `FONT` workspace and replaces
+  selected or marked glyphs with normalized candidates from an OFL donor
+  source such as Rubik. The incoming font is never modified.
+- **Apply Glyph Candidates** — copies reviewed glyphs from a candidate
+  `FONT` back into a target `FONT`, writing through to linked disk
+  sources by default.
 - **Font Preview** — renders a simple specimen from a `FONT`
   reference.
 - **Fork Font** — duplicates a `FONT` workspace for parallel work.
@@ -206,6 +212,22 @@ add-node menu:
 
 For a concrete starter graph, see
 [docs/workflows/local-font-workflow.md](docs/workflows/local-font-workflow.md).
+
+For red-marked Arabic placeholder replacement, use this graph:
+
+```text
+Runebender (Virtua source)
+  -> Glyph Candidate Builder (donor: Rubik, glyphs: mark:red)
+  -> Runebender (candidate FONT)
+  -> Apply Glyph Candidates (accepted glyphs only)
+```
+
+Mark only the Arabic glyphs that should be replaced as red in the first
+Runebender node, save, then run the candidate builder. The output is a
+scratch workspace for visual review and editing. Apply reviewed glyphs
+back to the original source with `Apply Glyph Candidates`; mark colors
+are preserved unless you explicitly clear them. Use `glyphs: mark:red`
+to apply only candidate-report glyphs that are still labeled red.
 
 To use the Google Fonts compile path, install `fontc` and put it on
 `PATH`. The workspace will materialize a `glyphspackage` source package

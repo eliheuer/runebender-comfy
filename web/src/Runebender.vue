@@ -368,6 +368,7 @@ const dirtyGlyphsByMaster = ref<Map<string, Set<string>>>(new Map());
 const dirtyKerningMasters = ref<Set<string>>(new Set());
 const dirtyGroupsMasters = ref<Set<string>>(new Set());
 const gridGlyphClipboard = ref<Uint8Array | null>(null);
+const markColorApplyAllMasters = ref(false);
 
 const activeMasterData = computed(() => masterDataMap.value.get(activeMasterName.value));
 const glyphUnicodes = computed(
@@ -826,6 +827,7 @@ type Editor = {
   clearTextBuffer(): void;
   insertTextGlyph(name: string, codepoint: number, advanceWidth: number): void;
   insertInactiveTextGlyph(name: string, codepoint: number, advanceWidth: number): void;
+  activateTextSort(index: number): boolean;
   insertTextCharacter(codepoint: number): boolean;
   updateTextGlyph(index: number, name: string, codepoint: number, advanceWidth: number): boolean;
   insertTextLineBreak(): void;
@@ -2365,6 +2367,41 @@ function seedTextBufferWithGlyph(glyphName: string) {
   );
   hasTextBufferSession.value = true;
   refreshTextStateFromEditor();
+}
+
+function textGlyphArgs(glyphName: string): {
+  name: string;
+  codepoint: number;
+  advanceWidth: number;
+} | null {
+  const metadata = glyphMetadataMap.value.get(glyphName);
+  const unicode = glyphUnicodes.value.get(glyphName);
+  const codepoint = unicode ? parseInt(unicode, 16) : 0;
+  const advanceWidth = metadata?.width ?? 500;
+  return {
+    name: glyphName,
+    codepoint: Number.isFinite(codepoint) ? codepoint : 0,
+    advanceWidth,
+  };
+}
+
+function seedTextBufferWithGlyphs(glyphNames: string[], activeGlyph: string) {
+  if (!editor) return;
+  const names = glyphNames.filter((name) => activeMasterData.value?.glyphBytes.has(name));
+  if (names.length === 0) return;
+  editor.clearTextBuffer();
+  for (const name of names) {
+    const args = textGlyphArgs(name);
+    if (!args) continue;
+    editor.insertInactiveTextGlyph(args.name, args.codepoint, args.advanceWidth);
+  }
+  const activeIndex = Math.max(0, names.indexOf(activeGlyph));
+  editor.activateTextSort(activeIndex);
+  hasTextBufferSession.value = true;
+  activeTool.value = "Text";
+  editor.setTool("Text");
+  refreshTextStateFromEditor();
+  syncTextKerningModelToEditor();
 }
 
 function insertTextLineBreak(): boolean {
@@ -4046,11 +4083,12 @@ function loadGlyphIntoEditor(
       editor.setGlyphGlifWithComponents(bytes, glyphXmlByName);
       coordinateQuadrant.value = "cc";
     }
+    const previousSelection = new Set(selectedGlyphs.value);
     refreshSelectionState();
     viewMode.value = "editor";
     currentGlyph.value = name;
     selectedGlyph.value = name;
-    selectedGlyphs.value = new Set([name]);
+    selectedGlyphs.value = previousSelection.has(name) ? previousSelection : new Set([name]);
     currentWidth.value = editor.advanceWidth();
     currentContours.value = editor.contourCount();
     refreshSidebearingsFromEditor();
@@ -4093,46 +4131,83 @@ function openGlyph(name: string) {
   loadGlyphIntoEditor(name, { fitCanvas: true });
 }
 
+function openGridSelectionInEditor(name: string) {
+  const selected = selectedGridGlyphNames();
+  const visibleOrder = filteredGlyphNames.value;
+  const names = selected.includes(name)
+    ? visibleOrder.filter((glyphName) => selected.includes(glyphName))
+    : [name];
+  selectedGlyph.value = name;
+  selectedGlyphs.value = new Set(names);
+  loadGlyphIntoEditor(name, { fitCanvas: true, seedTextBuffer: false });
+  if (names.length > 1) {
+    seedTextBufferWithGlyphs(names, name);
+    status.value = `opened ${names.length} glyphs`;
+    requestRender();
+  }
+}
+
 /// Apply (or clear) a mark color on the selected glyph. RGBA is
 /// the UFO `public.markColor` string "r,g,b,a"; empty string clears.
-/// Affects only the active master's MasterData.
+/// Defaults to the active master; the color panel can opt into all masters.
 function setMarkOnSelected(rgba: string) {
-  const data = activeMasterData.value;
   const names = selectedGridGlyphNames();
-  if (!data || names.length === 0) return;
-  for (const name of names) {
-    if (rgba) {
-      data.glyphMarkColors.set(name, rgba);
-    } else {
-      data.glyphMarkColors.delete(name);
+  if (names.length === 0) return;
+  const targetMasterNames = markColorApplyAllMasters.value
+    ? masters.value
+    : activeMasterName.value
+      ? [activeMasterName.value]
+      : [];
+  const targets = targetMasterNames
+    .map((masterName) => [masterName, masterDataMap.value.get(masterName)] as const)
+    .filter((entry): entry is readonly [string, MasterData] => !!entry[1]);
+  if (targets.length === 0) return;
+
+  for (const [, data] of targets) {
+    for (const name of names) {
+      if (!data.glyphBytes.has(name)) continue;
+      if (rgba) {
+        data.glyphMarkColors.set(name, rgba);
+      } else {
+        data.glyphMarkColors.delete(name);
+      }
     }
   }
+
   // Trigger reactivity — the inner Map mutation isn't observable;
   // replace the outer masterDataMap reference so dependent computeds
   // (glyphMarkColors, the cells) re-run.
   masterDataMap.value = new Map(masterDataMap.value);
-  // If this glyph is open, keep its in-memory .glif bytes aligned.
-  // Browser/UFO file writes still land in the later save slice.
+
+  // If this glyph is open, keep the active master's in-memory .glif
+  // bytes aligned without losing unsaved outline edits from the editor.
   if (names.includes(currentGlyph.value)) {
     syncCurrentGlyphBytesFromEditor();
   }
-  for (const name of names) {
-    if (name === currentGlyph.value) continue;
-    const originalBytes = data.glyphBytes.get(name);
-    if (originalBytes) {
-      try {
-        const bytes = glifWithMarkColor(originalBytes, rgba);
-        data.glyphBytes.set(name, bytes);
-        const svg = gridGlyphSvgWithComponents(name, bytes, data.glyphBytes, data.unitsPerEm);
-        if (svg) data.glyphSvgs.set(name, svg);
-      } catch (e) {
-        console.warn("serializing mark color failed:", e);
+
+  for (const [masterName, data] of targets) {
+    for (const name of names) {
+      if (masterName === activeMasterName.value && name === currentGlyph.value) continue;
+      const originalBytes = data.glyphBytes.get(name);
+      if (originalBytes) {
+        try {
+          const bytes = glifWithMarkColor(originalBytes, rgba);
+          data.glyphBytes.set(name, bytes);
+          const svg = gridGlyphSvgWithComponents(name, bytes, data.glyphBytes, data.unitsPerEm);
+          if (svg) data.glyphSvgs.set(name, svg);
+        } catch (e) {
+          console.warn("serializing mark color failed:", e);
+        }
       }
     }
   }
-  for (const name of names) {
-    markGlyphDirty(name);
+
+  for (const [masterName, data] of targets) {
+    for (const name of names) {
+      if (data.glyphBytes.has(name)) markGlyphDirty(name, masterName);
+    }
   }
+  masterDataMap.value = new Map(masterDataMap.value);
   queueComfyStateSync();
 }
 
@@ -4926,12 +5001,12 @@ function syncCurrentGlyphBytesFromEditor(
   }
 }
 
-function markGlyphDirty(glyphName: string) {
-  if (!glyphName || !activeMasterName.value) return;
+function markGlyphDirty(glyphName: string, masterName = activeMasterName.value) {
+  if (!glyphName || !masterName) return;
   const next = new Map(dirtyGlyphsByMaster.value);
-  const glyphs = new Set(next.get(activeMasterName.value) ?? []);
+  const glyphs = new Set(next.get(masterName) ?? []);
   glyphs.add(glyphName);
-  next.set(activeMasterName.value, glyphs);
+  next.set(masterName, glyphs);
   dirtyGlyphsByMaster.value = next;
 }
 
@@ -5635,7 +5710,7 @@ onBeforeUnmount(() => {
             :column-span="item.columnSpan"
             :mark-color="glyphMarkColors.get(item.name)"
             @click="selectGlyph(item.name, $event)"
-            @dblclick="openGlyph(item.name)"
+            @dblclick="openGridSelectionInEditor(item.name)"
           />
         </div>
 
@@ -6033,6 +6108,8 @@ onBeforeUnmount(() => {
         <MarkColorPanel
           :active="selectedGlyph ? glyphMarkColors.get(selectedGlyph) : ''"
           :enabled="!!selectedGlyph"
+          :can-apply-all-masters="masters.length > 1"
+          v-model:apply-all-masters="markColorApplyAllMasters"
           @set="setMarkOnSelected"
         />
         <!-- Designspace XML panel hidden for now — not needed yet. The

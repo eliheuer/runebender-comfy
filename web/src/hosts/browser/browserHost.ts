@@ -24,6 +24,10 @@ export const browserHost: RunebenderHost = {
     return [];
   },
 
+  async clearWorkspaceSlots() {
+    return { deleted: [] };
+  },
+
   workspacePreviewUrl() {
     return "";
   },

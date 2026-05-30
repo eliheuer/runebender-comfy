@@ -66,6 +66,26 @@ def ensure_workspace() -> None:
     FONTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def clear_workspace_slots(keep: tuple[str, ...] = ()) -> list[str]:
+    """Remove cached workspace slots without touching linked disk sources."""
+    ensure_workspace()
+    kept = {_clean_slot_name(slot) for slot in keep}
+    cleared: list[str] = []
+    fonts_root = FONTS_DIR.resolve()
+    for entry in sorted(FONTS_DIR.iterdir()):
+        if entry.name in kept:
+            continue
+        if entry.resolve().parent != fonts_root:
+            continue
+        if entry.is_dir():
+            shutil.rmtree(entry)
+            cleared.append(entry.name)
+        elif entry.is_file():
+            entry.unlink()
+            cleared.append(entry.name)
+    return cleared
+
+
 def _slot_dir(slot: str) -> Path:
     return FONTS_DIR / _clean_slot_name(slot)
 
