@@ -4,6 +4,7 @@ import { GF_GLYPHSETS } from "./gfSidebarData.generated";
 export type GlyphSidebarFilter =
   | { kind: "all" }
   | { kind: "category"; category: Category; subcategory?: string }
+  | { kind: "languageGroup"; id: string }
   | { kind: "language"; id: string }
   | { kind: "gfGlyphset"; id: string }
   | { kind: "builtin"; id: string };

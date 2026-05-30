@@ -118,7 +118,7 @@ defineEmits<{
 }
 
 .header {
-  color: var(--rb-muted-text, #808080);
+  color: var(--rb-accent, #66ee88);
   font: 16px ui-sans-serif, system-ui, sans-serif;
   font-weight: 400;
   line-height: 16px;
@@ -127,10 +127,10 @@ defineEmits<{
 .all-masters-toggle {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   color: var(--rb-muted-text, #808080);
-  font: 11px ui-sans-serif, system-ui, sans-serif;
-  line-height: 12px;
+  font: 16px ui-sans-serif, system-ui, sans-serif;
+  line-height: 18px;
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
@@ -149,7 +149,9 @@ defineEmits<{
   background: var(--rb-panel-background, #1c1c1c);
   display: flex;
   align-items: center;
+  flex: 0 0 auto;
   padding: 1px;
+  transform: translateY(1px);
 }
 .toggle-thumb {
   width: 6px;

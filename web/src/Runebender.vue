@@ -550,6 +550,10 @@ const categoryCounts = computed<Record<string, number>>(() => {
     }
   }
   for (const group of SIDEBAR_LANGUAGE_GROUPS) {
+    counts[sidebarFilterKey({ kind: "languageGroup", id: group.id })] =
+      glyphNames.value.filter((name) =>
+        group.filters.some((filter) => glyphMatchesCharacterFilter(name, filter)),
+      ).length;
     for (const filter of group.filters) {
       counts[sidebarFilterKey({ kind: "language", id: filter.id })] =
         glyphNames.value.filter((name) => glyphMatchesCharacterFilter(name, filter)).length;
@@ -678,6 +682,12 @@ function glyphMatchesSidebarFilter(name: string): boolean {
       (item) => item.id === filter.id,
     );
     return languageFilter ? glyphMatchesCharacterFilter(name, languageFilter) : false;
+  }
+  if (filter.kind === "languageGroup") {
+    const languageGroup = SIDEBAR_LANGUAGE_GROUPS.find((group) => group.id === filter.id);
+    return languageGroup
+      ? languageGroup.filters.some((item) => glyphMatchesCharacterFilter(name, item))
+      : false;
   }
   if (filter.kind === "gfGlyphset") {
     const gfFilter = SIDEBAR_FILTERS.find((item) => item.id === filter.id);

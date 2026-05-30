@@ -106,7 +106,9 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
         @click="searchMenuOpen = !searchMenuOpen"
       >
         ⌕
-        <span class="chevron">⌄</span>
+        <svg class="search-chevron" viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M2.5 4 6 7.5 9.5 4" />
+        </svg>
       </button>
       <input
         class="search-input"
@@ -179,7 +181,9 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
               :class="{ open: expandedCategories.has(group.category) }"
               @click="toggleCategory(group.category)"
             >
-              ›
+              <svg class="disclosure-icon" viewBox="0 0 12 12" aria-hidden="true">
+                <path d="M4 2.5 7.5 6 4 9.5" />
+              </svg>
             </button>
             <span v-else class="disclosure-spacer"></span>
             <button
@@ -225,13 +229,15 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
               :class="{ open: expandedLanguages.has(group.id) }"
               @click="toggleLanguage(group.id)"
             >
-              ›
+              <svg class="disclosure-icon" viewBox="0 0 12 12" aria-hidden="true">
+                <path d="M4 2.5 7.5 6 4 9.5" />
+              </svg>
             </button>
             <button
               type="button"
               class="row"
-              :class="{ active: group.filters.some((filter) => isSelected(selected, { kind: 'language', id: filter.id })) }"
-              @click="toggleLanguage(group.id)"
+              :class="{ active: isSelected(selected, { kind: 'languageGroup', id: group.id }) }"
+              @click="$emit('select', { kind: 'languageGroup', id: group.id })"
             >
               <span class="icon">{{ group.icon }}</span>
               <span class="row-name">{{ group.label }}</span>
@@ -297,7 +303,6 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
 
 .search-wrap:focus-within {
   border-color: var(--rb-accent, #66ee88);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--rb-accent, #66ee88) 32%, transparent);
 }
 
 .search-mode,
@@ -338,12 +343,27 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
 .search-mode {
   width: 42px;
   height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0;
   font-size: 20px;
 }
 
-.chevron {
-  font-size: 13px;
-  margin-left: -3px;
+.search-chevron {
+  width: 10px;
+  height: 10px;
+  display: block;
+  overflow: visible;
+}
+
+.search-chevron path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .search-input {
@@ -463,17 +483,34 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
 
 .disclosure,
 .disclosure-spacer {
-  width: 18px;
-  height: 23px;
-  flex: 0 0 18px;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
 }
 
 .disclosure {
   position: relative;
   z-index: 1;
-  font: 22px ui-sans-serif, system-ui, sans-serif;
-  line-height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   transform: rotate(0deg);
+}
+
+.disclosure-icon {
+  width: 12px;
+  height: 12px;
+  display: block;
+  overflow: visible;
+}
+
+.disclosure-icon path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .disclosure.open {
@@ -499,8 +536,8 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
 }
 
 .row-wrap > .row {
-  margin-left: -18px;
-  padding-left: 26px;
+  margin-left: -24px;
+  padding-left: 34px;
 }
 
 .row.active {
