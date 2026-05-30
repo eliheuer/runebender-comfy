@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import ast
+import fnmatch
 import importlib.util
 import json
+import subprocess
 import sys
 import types
 import unittest
@@ -122,6 +124,141 @@ class WebBundleTests(unittest.TestCase):
         self.assertEqual(node["type"], "Runebender")
         self.assertEqual(node["widgets_values"], ["", "auto", ""])
         self.assertEqual([output["type"] for output in node["outputs"]], ["FONT", "STRING"])
+
+    def test_registry_metadata_is_publish_candidate_shape(self) -> None:
+        try:
+            import tomllib
+        except ImportError:
+            self.skipTest("tomllib is available in Python 3.11+")
+
+        metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+        self.assertEqual(metadata["project"]["name"], "runebender-comfy")
+        self.assertEqual(metadata["project"]["version"], "0.1.0")
+        self.assertEqual(metadata["project"]["description"], "Rust-powered type-design and DrawBot nodes for ComfyUI.")
+        self.assertEqual(metadata["project"]["license"], {"file": "LICENSE"})
+        self.assertEqual(metadata["project"]["requires-python"], ">=3.10")
+        self.assertEqual(metadata["project"]["dynamic"], ["dependencies"])
+        self.assertEqual(
+            metadata["tool"]["setuptools"]["dynamic"]["dependencies"],
+            {"file": ["requirements.txt"]},
+        )
+        self.assertEqual(metadata["tool"]["comfy"]["PublisherId"], "eliheuer")
+        self.assertEqual(metadata["tool"]["comfy"]["DisplayName"], "Runebender")
+        self.assertIn("web/dist", metadata["tool"]["comfy"]["includes"])
+        self.assertEqual(
+            metadata["project"]["urls"]["Repository"],
+            "https://github.com/eliheuer/runebender-comfy",
+        )
+        self.assertTrue(metadata["project"]["urls"]["Documentation"].startswith("https://"))
+        self.assertTrue(metadata["project"]["urls"]["Bug Tracker"].startswith("https://"))
+
+    def test_comfyignore_keeps_runtime_files_and_drops_dev_files(self) -> None:
+        patterns = _comfyignore_patterns()
+
+        included = [
+            "__init__.py",
+            "nodes/runebender.py",
+            "nodes/font.py",
+            "nodes/workspace.py",
+            "nodes/drawbot_presets/01_specimen.py",
+            "nodes/drawbot_presets/02_waterfall.py",
+            "nodes/drawbot_presets/03_glyph.py",
+            "nodes/drawbot_presets/04_pangram.py",
+            "nodes/drawbot_presets/05_custom.py",
+            "nodes/drawbot_presets/README.md",
+            "nodes/drawbot_presets/helpers.py",
+            "requirements.txt",
+            "README.md",
+            "LICENSE",
+            "docs/workflows/local-font-workflow.md",
+            "example_workflows/runebender-linked-source-smoke.json",
+            "web/dist/runebender-comfy.js",
+            "web/dist/style.css",
+        ]
+        for path in included:
+            with self.subTest(path=path):
+                self.assertFalse(_is_comfyignored(path, patterns))
+
+        excluded = [
+            ".agents/COMFY_REGISTRY_PUBLISHING.md",
+            ".github/workflows/ci.yml",
+            "AGENTS.md",
+            "CLAUDE.md",
+            "rebuild-icons.sh",
+            "assets/runebender-icons.ufo/fontinfo.plist",
+            "rust-core/src/lib.rs",
+            "tests/test_web_bundle.py",
+            "tools/check-crate-age/Cargo.toml",
+            "web/src/Runebender.vue",
+            "web/wasm/runebender_comfy_core.js",
+            "web/node_modules/.modules.yaml",
+        ]
+        for path in excluded:
+            with self.subTest(path=path):
+                self.assertTrue(_is_comfyignored(path, patterns))
+
+    def test_publish_readiness_checker_reports_known_blockers(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "scripts/check_comfy_publish_ready.py", "--strict"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 1, result.stderr + result.stdout)
+        self.assertIn("Comfy publish readiness: NOT READY", result.stdout)
+        self.assertIn("tool.comfy.Icon", result.stdout)
+        self.assertIn("tool.comfy.requires-comfyui", result.stdout)
+        self.assertIn("PublisherId", result.stdout)
+        self.assertIn("DrawBot exec", result.stdout)
+
+    def test_requirements_use_runebender_drawbot_skia_fork(self) -> None:
+        requirement_lines = [
+            line.strip()
+            for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        requirements = "\n".join(requirement_lines)
+
+        self.assertIn(
+            "drawbot-skia @ git+https://github.com/eliheuer/drawbot-skia.git",
+            requirements,
+        )
+        self.assertFalse(any(line.startswith(("-e ", "--editable")) for line in requirement_lines))
+        self.assertFalse(any(line.startswith((".", "/", "~")) for line in requirement_lines))
+        self.assertFalse(any(" @ file:" in line for line in requirement_lines))
+        self.assertFalse(any("git+" in line and "git+https://" not in line for line in requirement_lines))
+
+    def test_readme_documents_publish_readiness_gate(self) -> None:
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+        self.assertIn("python3 scripts/check_comfy_publish_ready.py --strict", readme)
+        self.assertIn("Strict mode intentionally fails", readme)
+        self.assertIn("DrawBot scripting blocker", readme)
+
+
+def _comfyignore_patterns() -> list[str]:
+    return [
+        line.strip()
+        for line in (ROOT / ".comfyignore").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
+def _is_comfyignored(path: str, patterns: list[str]) -> bool:
+    normalized = path.strip("/")
+    for pattern in patterns:
+        normalized_pattern = pattern.strip("/")
+        if pattern.endswith("/") and (
+            normalized == normalized_pattern
+            or normalized.startswith(normalized_pattern + "/")
+        ):
+            return True
+        if fnmatch.fnmatch(normalized, normalized_pattern):
+            return True
+    return False
 
 
 if __name__ == "__main__":

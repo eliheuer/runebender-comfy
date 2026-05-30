@@ -1,0 +1,44 @@
+# Agent and development planning material.
+.agents/
+.github/
+AGENTS.md
+CLAUDE.md
+rebuild-icons.sh
+
+# Development-only build inputs and caches.
+rust-core/
+tools/
+web/src/
+web/wasm/
+web/node_modules/
+web/.vite/
+web/index.html
+web/package.json
+web/pnpm-lock.yaml
+web/pnpm-workspace.yaml
+web/vite.config.ts
+web/.npmrc
+
+# Tests, CI scratch, and local runtime workspaces.
+tests/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+__pycache__/
+**/__pycache__/
+*.pyc
+.venv/
+workspace/
+
+# Internal source/assets not needed at runtime.
+assets/
+samples/
+scripts/
+themes/
+docs/architecture/
+
+# Local machine/editor files.
+.DS_Store
+.idea/
+.vscode/
+*.log

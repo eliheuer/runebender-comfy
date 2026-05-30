@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Validate registry metadata
+        run: python -c "import pathlib, tomllib; tomllib.loads(pathlib.Path('pyproject.toml').read_text())"
+
+      - name: Check Comfy publish readiness
+        run: python scripts/check_comfy_publish_ready.py
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: COREPACK_ENABLE_AUTO_PIN=0 pnpm install --frozen-lockfile
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+
+      - name: Build WASM package
+        working-directory: web
+        run: COREPACK_ENABLE_AUTO_PIN=0 pnpm wasm:release
+
+      - name: Build frontend bundle
+        working-directory: web
+        run: COREPACK_ENABLE_AUTO_PIN=0 pnpm build
+
+      - name: Run Python tests
+        run: python -m unittest tests.test_workspace tests.test_web_bundle
+
+      - name: Run Rust tests
+        working-directory: rust-core
+        run: cargo test

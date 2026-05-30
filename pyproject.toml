@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "runebender-comfy"
+version = "0.1.0"
+description = "Rust-powered type-design and DrawBot nodes for ComfyUI."
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dynamic = ["dependencies"]
+classifiers = [
+  "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+]
+
+[project.urls]
+Repository = "https://github.com/eliheuer/runebender-comfy"
+Documentation = "https://github.com/eliheuer/runebender-comfy#readme"
+"Bug Tracker" = "https://github.com/eliheuer/runebender-comfy/issues"
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.comfy]
+PublisherId = "eliheuer"
+DisplayName = "Runebender"
+includes = ["web/dist"]

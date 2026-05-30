@@ -1651,6 +1651,8 @@ class FontSpecimenNodeTests(unittest.TestCase):
         self.assertEqual(FontSpecimen.RETURN_TYPES, ("IMAGE", "MASK"))
         self.assertIn("custom_script", input_types["optional"])
         self.assertIn("DrawBot Python", input_types["optional"]["custom_script"][1]["tooltip"])
+        self.assertIn("trusted", input_types["optional"]["custom_script"][1]["tooltip"].lower())
+        self.assertIn("execute locally", input_types["optional"]["custom_script"][1]["tooltip"])
 
     def test_font_specimen_loads_drawbot_presets_from_disk(self) -> None:
         presets = load_presets()

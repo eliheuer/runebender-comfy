@@ -246,6 +246,9 @@ pip install 'drawbot-skia @ git+https://github.com/eliheuer/drawbot-skia.git'
 The `DrawBot` node consumes a `FONT` wire, exposes DrawBot preset
 scripts in an editable `custom_script` field, and outputs `IMAGE` +
 `MASK` tensors that can be wired to ComfyUI's normal image save nodes.
+Custom DrawBot scripts execute locally in the ComfyUI Python process.
+Use bundled presets or scripts you trust; do not paste untrusted Python
+into `custom_script`.
 
 The `Load Font` node includes an import button that copies a local
 UFO/designspace bundle into the workspace and binds the resulting
@@ -278,6 +281,41 @@ Run all checks at once:
 ```bash
 ./scripts/audit.sh
 ```
+
+## Comfy Registry Publishing
+
+This repo has the basic files expected by the Comfy Registry:
+
+- `pyproject.toml` for package and Comfy metadata.
+- `.comfyignore` to keep development-only files out of the publish
+  archive.
+- `.github/workflows/ci.yml` for Python, frontend bundle, and Rust
+  checks.
+
+Before publishing an official build, verify the external registry
+values that cannot be proven from the repo alone:
+
+- The `eliheuer` publisher id exists in the Comfy Registry account.
+- A public square icon URL is available for `[tool.comfy].Icon`.
+- The minimum supported ComfyUI version has been tested and can be
+  recorded as `[tool.comfy].requires-comfyui`.
+- The `FontSpecimen` DrawBot scripting path has been removed,
+  sandboxed, or split out of the registry-publishable node. Current
+  Comfy Registry standards prohibit `eval`/`exec`.
+- Optional QuiverAI workflows are documented as optional Partner Node
+  workflows and do not block the base Runebender install.
+
+Run the local publish-readiness gate with:
+
+```bash
+python3 scripts/check_comfy_publish_ready.py --strict
+```
+
+Strict mode intentionally fails until the registry account, icon URL,
+minimum ComfyUI version, and DrawBot scripting blocker are resolved.
+
+Agent-facing publish notes live in
+[.agents/COMFY_REGISTRY_PUBLISHING.md](.agents/COMFY_REGISTRY_PUBLISHING.md).
 
 ## License
 

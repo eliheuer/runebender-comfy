@@ -174,7 +174,10 @@ def _render_drawbot(script: str, font_path: Path, width: int, height: int, input
 
 class FontSpecimen:
     CATEGORY = "Runebender / Font"
-    DESCRIPTION = "Render editable DrawBot scripts from a Runebender FONT wire."
+    DESCRIPTION = (
+        "Render editable DrawBot scripts from a Runebender FONT wire. "
+        "Custom scripts execute locally in the ComfyUI Python process; run only trusted scripts."
+    )
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -193,7 +196,10 @@ class FontSpecimen:
                     {
                         "multiline": True,
                         "default": "",
-                        "tooltip": "DrawBot Python. Available: font_path, WIDTH, HEIGHT, input_text, and drawbot-skia globals.",
+                        "tooltip": (
+                            "Trusted DrawBot Python only; custom scripts execute locally in the ComfyUI Python process. "
+                            "Available: font_path, WIDTH, HEIGHT, input_text, and drawbot-skia globals."
+                        ),
                     },
                 ),
             },
