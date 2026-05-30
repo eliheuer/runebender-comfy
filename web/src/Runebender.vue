@@ -6353,9 +6353,15 @@ onBeforeUnmount(() => {
 .transform-overlay {
   position: absolute;
   right: var(--rb-editor-edge-inset, 8px);
-  top: 50%;
-  transform: translateY(-50%);
+  top: calc(var(--rb-editor-edge-inset, 8px) + 70px);
+  bottom: calc(var(--rb-editor-edge-inset, 8px) + 92px);
+  height: max-content;
+  margin-block: auto;
   z-index: 3;
+}
+
+.stage.editor-bottom-preview-visible .transform-overlay {
+  bottom: calc(var(--rb-editor-bottom-preview-height) + var(--rb-editor-edge-inset, 8px) + 92px);
 }
 
 .editor-tools-overlay {
@@ -6548,16 +6554,18 @@ onBeforeUnmount(() => {
 
 .glyph-preview-overlay {
   left: var(--rb-editor-edge-inset, 8px);
-  width: 235px;
-  height: 140px;
-  padding: 18px;
-  display: flex;
+  width: fit-content;
+  min-width: 86px;
+  max-width: 235px;
+  height: 86px;
+  padding: 12px;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
 }
 
 .glyph-preview-shape {
-  width: 100%;
+  width: auto;
   height: 100%;
   /* Warm yellow, matching runebender-xilem's panel::GLYPH_PREVIEW
      (MARK_YELLOW #ffdd33) — the bottom-left preview reads as the
@@ -6570,14 +6578,14 @@ onBeforeUnmount(() => {
 .glyph-preview-shape :deep(svg) {
   display: block;
   width: auto;
-  height: auto;
-  max-width: 100%;
+  height: 100%;
+  max-width: calc(235px - 24px);
   max-height: 100%;
 }
 
 .active-glyph-overlay {
   left: 50%;
-  width: min(560px, calc(100% - 32px));
+  width: min(680px, calc(100% - 32px));
   padding: 8px;
   transform: translateX(-50%);
   display: grid;
@@ -6595,11 +6603,11 @@ onBeforeUnmount(() => {
 }
 
 .active-glyph-header {
-  grid-template-columns: minmax(220px, 1.6fr) 118px minmax(132px, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .metrics-strip {
-  grid-template-columns: minmax(118px, 1fr) 86px 86px minmax(118px, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .kern-strip {
@@ -6670,6 +6678,7 @@ onBeforeUnmount(() => {
 }
 
 .glyph-name-field {
+  grid-column: span 2;
   grid-template-columns: 48px minmax(0, 1fr);
 }
 
@@ -6750,7 +6759,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0;
+  padding: 12px var(--rb-editor-edge-inset, 8px) 14px;
   overflow: hidden;
   background: var(--rb-panel-background, #1c1c1c);
   pointer-events: auto;
