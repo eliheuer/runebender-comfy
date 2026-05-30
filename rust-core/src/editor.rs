@@ -239,6 +239,30 @@ impl EditorState {
         (ascender, descender)
     }
 
+    pub fn text_sort_metric_bounds(&self) -> (f64, f64) {
+        let (ascender, descender) = self.text_metric_bounds();
+        let top = self
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.units_per_em)
+            .filter(|units_per_em| units_per_em.is_finite() && *units_per_em > 0.0)
+            .map(|units_per_em| units_per_em.max(ascender))
+            .unwrap_or(ascender);
+        (top, descender)
+    }
+
+    pub fn glyph_metric_bounds(&self) -> Option<(f64, f64)> {
+        let metrics = self.metrics.as_ref()?;
+        let ascender = metrics.ascender.unwrap_or(0.0);
+        let descender = metrics.descender.unwrap_or(0.0);
+        let top = metrics
+            .units_per_em
+            .filter(|units_per_em| units_per_em.is_finite() && *units_per_em > 0.0)
+            .map(|units_per_em| units_per_em.max(ascender))
+            .unwrap_or(ascender);
+        Some((top, descender))
+    }
+
     pub fn insert_text_character(&mut self, char: char) -> bool {
         let active_advance_width = self
             .text_buffer
@@ -2628,6 +2652,48 @@ mod tests {
 
         assert_eq!(state.text_line_height(), 1000.0);
         assert_eq!(state.active_text_sort_origin(), Vec2::new(0.0, -1000.0));
+    }
+
+    #[test]
+    fn text_sort_metric_bounds_extend_to_upm_without_changing_line_height() {
+        let mut state = EditorState::default();
+        state.metrics = Some(FontMetrics {
+            units_per_em: Some(1000.0),
+            ascender: Some(700.0),
+            descender: Some(-300.0),
+            ..Default::default()
+        });
+
+        assert_eq!(state.text_metric_bounds(), (700.0, -300.0));
+        assert_eq!(state.text_sort_metric_bounds(), (1000.0, -300.0));
+        assert_eq!(state.text_line_height(), 1000.0);
+    }
+
+    #[test]
+    fn text_sort_metric_bounds_keep_ascender_when_it_exceeds_upm() {
+        let mut state = EditorState::default();
+        state.metrics = Some(FontMetrics {
+            units_per_em: Some(600.0),
+            ascender: Some(700.0),
+            descender: Some(-300.0),
+            ..Default::default()
+        });
+
+        assert_eq!(state.text_sort_metric_bounds(), (700.0, -300.0));
+    }
+
+    #[test]
+    fn glyph_metric_bounds_extend_to_upm_for_icon_fonts() {
+        let mut state = EditorState::default();
+        state.metrics = Some(FontMetrics {
+            units_per_em: Some(1000.0),
+            ascender: Some(768.0),
+            descender: Some(-200.0),
+            cap_height: Some(800.0),
+            ..Default::default()
+        });
+
+        assert_eq!(state.glyph_metric_bounds(), Some((1000.0, -200.0)));
     }
 
     #[test]

@@ -387,6 +387,24 @@ impl Renderer {
         self.device_scale * zoom_scale
     }
 
+    fn stroke_screen_line(
+        &mut self,
+        width_px: f64,
+        color: Srgb,
+        view: Affine,
+        p0: Point,
+        p1: Point,
+    ) {
+        let line = Line::new(view * p0, view * p1);
+        self.scene.stroke(
+            &Stroke::new(self.px(width_px)),
+            Affine::IDENTITY,
+            color,
+            None,
+            &line,
+        );
+    }
+
     /// Paint one frame against the given editor state.
     pub fn render(
         &mut self,
@@ -694,19 +712,23 @@ impl Renderer {
         view: Affine,
         color: Srgb,
     ) {
-        let stroke = Stroke::new(METRIC_LINE_PX);
         for edge_x in [x, x + advance_width] {
             for y in [baseline_y + descender, baseline_y, baseline_y + ascender] {
+                let center = view * Point::new(edge_x, y);
+                let size = self.px(TEXT_METRIC_CROSS_SIZE);
+                let stroke = Stroke::new(self.px(METRIC_LINE_PX));
                 let h = Line::new(
-                    Point::new(edge_x - TEXT_METRIC_CROSS_SIZE, y),
-                    Point::new(edge_x + TEXT_METRIC_CROSS_SIZE, y),
+                    Point::new(center.x - size, center.y),
+                    Point::new(center.x + size, center.y),
                 );
                 let v = Line::new(
-                    Point::new(edge_x, y - TEXT_METRIC_CROSS_SIZE),
-                    Point::new(edge_x, y + TEXT_METRIC_CROSS_SIZE),
+                    Point::new(center.x, center.y - size),
+                    Point::new(center.x, center.y + size),
                 );
-                self.scene.stroke(&stroke, view, color, None, &h);
-                self.scene.stroke(&stroke, view, color, None, &v);
+                self.scene
+                    .stroke(&stroke, Affine::IDENTITY, color, None, &h);
+                self.scene
+                    .stroke(&stroke, Affine::IDENTITY, color, None, &v);
             }
         }
     }
@@ -719,45 +741,43 @@ impl Renderer {
         advance_width: f64,
         view: Affine,
     ) {
-        let stroke = Stroke::new(METRIC_LINE_PX);
         let (ascender, descender) = state.text_metric_bounds();
-        if ascender > descender {
-            self.scene.stroke(
-                &stroke,
-                view,
+        let (box_top, box_bottom) = state.text_sort_metric_bounds();
+        if box_top > box_bottom {
+            self.stroke_screen_line(
+                METRIC_LINE_PX,
                 self.theme.metric_guide,
-                None,
-                &Line::new(
-                    Point::new(x, baseline_y + descender),
-                    Point::new(x, baseline_y + ascender),
-                ),
+                view,
+                Point::new(x, baseline_y + box_bottom),
+                Point::new(x, baseline_y + box_top),
             );
-            self.scene.stroke(
-                &stroke,
-                view,
+            self.stroke_screen_line(
+                METRIC_LINE_PX,
                 self.theme.metric_guide,
-                None,
-                &Line::new(
-                    Point::new(x + advance_width, baseline_y + descender),
-                    Point::new(x + advance_width, baseline_y + ascender),
-                ),
+                view,
+                Point::new(x + advance_width, baseline_y + box_bottom),
+                Point::new(x + advance_width, baseline_y + box_top),
             );
         }
 
-        let mut ys = vec![0.0, ascender, descender];
+        let mut ys = vec![0.0, ascender, descender, box_top, box_bottom];
         if let Some(metrics) = state.metrics.as_ref() {
-            ys.extend([metrics.x_height, metrics.cap_height].into_iter().flatten());
+            ys.extend(
+                [metrics.units_per_em, metrics.x_height, metrics.cap_height]
+                    .into_iter()
+                    .flatten(),
+            );
         }
+        ys.retain(|y| y.is_finite());
+        ys.sort_by(|a, b| a.total_cmp(b));
+        ys.dedup_by(|a, b| (*a - *b).abs() < 0.001);
         for y in ys {
-            self.scene.stroke(
-                &stroke,
-                view,
+            self.stroke_screen_line(
+                METRIC_LINE_PX,
                 self.theme.metric_guide,
-                None,
-                &Line::new(
-                    Point::new(x, baseline_y + y),
-                    Point::new(x + advance_width, baseline_y + y),
-                ),
+                view,
+                Point::new(x, baseline_y + y),
+                Point::new(x + advance_width, baseline_y + y),
             );
         }
     }
@@ -992,30 +1012,32 @@ impl Renderer {
             return;
         }
 
-        let stroke = Stroke::new(METRIC_LINE_PX);
         let width = state.advance_width;
-        let ascender = metrics.ascender.unwrap_or(0.0);
-        let descender = metrics.descender.unwrap_or(0.0);
-
-        // Vertical edges of the metric box.
-        let stamp_line = |scene: &mut Scene, p0: (f64, f64), p1: (f64, f64)| {
-            scene.stroke(
-                &stroke,
-                view,
-                self.theme.metric_guide,
-                None,
-                &Line::new(p0, p1),
-            );
+        let Some((box_top, box_bottom)) = state.glyph_metric_bounds() else {
+            return;
         };
-        if ascender > descender {
-            stamp_line(&mut self.scene, (0.0, descender), (0.0, ascender));
-            stamp_line(&mut self.scene, (width, descender), (width, ascender));
+        if box_top > box_bottom {
+            self.stroke_screen_line(
+                METRIC_LINE_PX,
+                self.theme.metric_guide,
+                view,
+                Point::new(0.0, box_bottom),
+                Point::new(0.0, box_top),
+            );
+            self.stroke_screen_line(
+                METRIC_LINE_PX,
+                self.theme.metric_guide,
+                view,
+                Point::new(width, box_bottom),
+                Point::new(width, box_top),
+            );
         }
 
         // Horizontal metric lines. Baseline is always drawn (y=0);
         // others appear only when defined in fontinfo.
-        let mut ys: Vec<f64> = vec![0.0];
+        let mut ys: Vec<f64> = vec![0.0, box_top, box_bottom];
         for opt in [
+            metrics.units_per_em,
             metrics.ascender,
             metrics.descender,
             metrics.x_height,
@@ -1025,8 +1047,17 @@ impl Renderer {
                 ys.push(y);
             }
         }
+        ys.retain(|y| y.is_finite());
+        ys.sort_by(|a, b| a.total_cmp(b));
+        ys.dedup_by(|a, b| (*a - *b).abs() < 0.001);
         for y in ys {
-            stamp_line(&mut self.scene, (0.0, y), (width, y));
+            self.stroke_screen_line(
+                METRIC_LINE_PX,
+                self.theme.metric_guide,
+                view,
+                Point::new(0.0, y),
+                Point::new(width, y),
+            );
         }
     }
 
