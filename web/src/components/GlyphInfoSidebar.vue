@@ -97,8 +97,8 @@ function displayGroup(group: string | undefined, prefix: string): string {
   width: 220px;
   flex-shrink: 0;
   background: var(--rb-panel-background, #1c1c1c);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 8px;
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
+  border-radius: var(--rb-panel-radius, 12px);
   padding: 12px;
   display: flex;
   flex-direction: column;

@@ -1161,7 +1161,7 @@ function applyCanvasTheme() {
   editor.setTheme(
     JSON.stringify({
       bg: resolveHostColor("--rb-canvas-background", [0x10, 0x10, 0x10, 0xff]),
-      pathStroke: resolveHostColor("--rb-canvas-path-stroke", [0xc0, 0xc0, 0xc0, 0xff]),
+      pathStroke: resolveHostColor("--rb-canvas-path-stroke", [0xb0, 0xb0, 0xb0, 0xff]),
       previewFill: resolveHostColor("--rb-glyph-preview", [0x80, 0x80, 0x80, 0xff]),
       componentFill: resolveHostColor("--rb-canvas-component", [0x66, 0x99, 0xcc, 0xff]),
       componentSelectedFill: resolveHostColor(
@@ -6184,11 +6184,16 @@ onBeforeUnmount(() => {
   /* Surfaces */
   --rb-app-background:     var(--rb-canvas-background, #0c0c0c);
   --rb-panel-background:   #121212;
-  --rb-grid-cell-background: var(--rb-canvas-background, #0c0c0c);
+  --rb-grid-cell-background: var(--rb-panel-background, #121212);
+  --rb-grid-cell-hover-background: #1d1d1d;
+  --rb-button-background:  #1d1d1d;
   --rb-control-background: var(--comfy-input-bg, #111315);
 
   /* Borders / outlines */
   --rb-panel-outline:      #404040;
+  --rb-stroke-width:       1.5px;
+  --rb-panel-radius:       12px;
+  --rb-button-radius:      8px;
 
   /* Text */
   --rb-primary-text:       #909090;
@@ -6211,7 +6216,7 @@ onBeforeUnmount(() => {
    * resulting RGBA values into the Rust renderer, keeping the WebGPU
    * scene aligned with the surrounding ComfyUI chrome. */
   --rb-canvas-background:         #0c0c0c;
-  --rb-canvas-path-stroke:        var(--content-fg, #c0c0c0);
+  --rb-canvas-path-stroke:        #b0b0b0;
   --rb-canvas-selection:          #ffaa33;
   --rb-canvas-component:          #6699cc;
   --rb-canvas-component-selected: #88bbff;
@@ -6296,8 +6301,8 @@ onBeforeUnmount(() => {
 
 .designspace-panel {
   background: var(--rb-panel-background, #1c1c1c);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 8px;
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
+  border-radius: var(--rb-panel-radius, 12px);
   padding: 10px;
   min-height: 220px;
   flex: 1;
@@ -6339,7 +6344,7 @@ onBeforeUnmount(() => {
   width: 100%;
   resize: none;
   box-sizing: border-box;
-  border: 1.5px solid var(--rb-panel-outline, #606060);
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
   border-radius: 4px;
   background: var(--rb-app-background, #101010);
   color: var(--rb-primary-text, #909090);
@@ -6430,7 +6435,7 @@ onBeforeUnmount(() => {
   user-select: none;
   touch-action: none;
   cursor: move;
-  border: 1.5px solid transparent;
+  border: var(--rb-stroke-width, 1px) solid transparent;
   box-sizing: border-box;
 }
 .background-image img {
@@ -6458,7 +6463,7 @@ onBeforeUnmount(() => {
   margin: -5px 0 0 -5px;
   border-radius: 50%;
   background: var(--rb-mark-selected-ring, #ffffff);
-  border: 1.5px solid var(--rb-background-image-selection, #4488ff);
+  border: var(--rb-stroke-width, 1px) solid var(--rb-background-image-selection, #4488ff);
   box-sizing: border-box;
   touch-action: none;
 }
@@ -6514,7 +6519,7 @@ onBeforeUnmount(() => {
   min-width: 140px;
   padding: 6px;
   background: var(--rb-panel-background, #1c1c1c);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
   border-radius: 6px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
@@ -6562,7 +6567,7 @@ onBeforeUnmount(() => {
   gap: 4px;
   padding: 8px 10px;
   background: color-mix(in srgb, var(--rb-panel-background, #1c1c1c) 94%, transparent);
-  border: 1.5px solid var(--rb-danger, #ff3333);
+  border: var(--rb-stroke-width, 1px) solid var(--rb-danger, #ff3333);
   border-radius: 6px;
   color: var(--rb-overlay-text, #f0f0f0);
   font: 12px ui-sans-serif, system-ui, sans-serif;
@@ -6585,8 +6590,8 @@ onBeforeUnmount(() => {
   bottom: var(--rb-editor-edge-inset, 8px);
   box-sizing: border-box;
   background: var(--rb-panel-background, #1c1c1c);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 8px;
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
+  border-radius: var(--rb-panel-radius, 12px);
   pointer-events: auto;
 }
 
@@ -6660,7 +6665,7 @@ onBeforeUnmount(() => {
   height: 30px;
   padding: 0 10px;
   background: var(--rb-app-background, #101010);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
   border-radius: 6px;
 }
 
@@ -6756,7 +6761,7 @@ onBeforeUnmount(() => {
   gap: 6px;
   padding: 4px 6px;
   background: var(--rb-app-background, #101010);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
   border-radius: 6px;
   color: var(--rb-accent, #66ee88);
   font: 11px ui-monospace, monospace;
@@ -6773,7 +6778,7 @@ onBeforeUnmount(() => {
   padding: 6px 10px;
   box-sizing: border-box;
   background: color-mix(in srgb, var(--rb-panel-background, #1c1c1c) 94%, transparent);
-  border: 1.5px solid var(--rb-accent, #66ee88);
+  border: var(--rb-stroke-width, 1px) solid var(--rb-accent, #66ee88);
   border-radius: 6px;
   color: var(--rb-overlay-text, #f0f0f0);
   font: 12px ui-sans-serif, system-ui, sans-serif;
@@ -6818,7 +6823,7 @@ onBeforeUnmount(() => {
   left: 0;
   right: 0;
   top: 6px;
-  height: 1.5px;
+  height: var(--rb-stroke-width, 1px);
   background: var(--rb-panel-outline, #606060);
 }
 

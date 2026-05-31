@@ -137,8 +137,8 @@ function blurOnEnter(event: KeyboardEvent) {
   height: auto;
   box-sizing: border-box;
   background: var(--rb-panel-background, #1c1c1c);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 8px;
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
+  border-radius: var(--rb-panel-radius, 12px);
   padding: 8px 8px 8px 14px;
   display: flex;
   align-items: center;
@@ -157,7 +157,7 @@ function blurOnEnter(event: KeyboardEvent) {
   height: 58px;
   box-sizing: border-box;
   position: relative;
-  border: 1.5px solid var(--rb-panel-outline, #606060);
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
 }
 
 .quadrant-picker::before,
@@ -170,7 +170,7 @@ function blurOnEnter(event: KeyboardEvent) {
 }
 
 .quadrant-picker::before {
-  width: 1.5px;
+  width: var(--rb-stroke-width, 1px);
   top: 0;
   bottom: 0;
   left: 50%;
@@ -178,7 +178,7 @@ function blurOnEnter(event: KeyboardEvent) {
 }
 
 .quadrant-picker::after {
-  height: 1.5px;
+  height: var(--rb-stroke-width, 1px);
   left: 0;
   right: 0;
   top: 50%;
@@ -196,7 +196,7 @@ function blurOnEnter(event: KeyboardEvent) {
   transform: translate(-50%, -50%);
   border-radius: 50%;
   background: var(--rb-control-background, #303030);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
   box-sizing: border-box;
   cursor: pointer;
 }
@@ -255,8 +255,8 @@ function blurOnEnter(event: KeyboardEvent) {
   align-items: center;
   gap: 6px;
   background: var(--rb-app-background, #101010);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 6px;
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
+  border-radius: var(--rb-button-radius, 8px);
 }
 .coord-field span {
   color: var(--rb-muted-text, #808080);

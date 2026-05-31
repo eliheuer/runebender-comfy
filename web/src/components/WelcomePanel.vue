@@ -57,8 +57,8 @@ button {
   margin-top: 8px;
   color: var(--rb-primary-text, #909090);
   background: var(--rb-panel-background, #1c1c1c);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 6px;
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
+  border-radius: var(--rb-button-radius, 8px);
   font: 14px ui-sans-serif, system-ui, sans-serif;
   text-align: center;
   cursor: pointer;

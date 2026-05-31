@@ -283,8 +283,8 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
   width: 280px;
   flex-shrink: 0;
   background: var(--rb-panel-background, #1c1c1c);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 8px;
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
+  border-radius: var(--rb-panel-radius, 12px);
   display: flex;
   flex-direction: column;
   overflow: visible;
@@ -296,9 +296,9 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
   align-items: center;
   margin: 8px 8px 6px;
   height: 30px;
-  border: 1.5px solid var(--rb-panel-outline, #606060);
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
   border-radius: 7px;
-  background: #252525;
+  background: var(--rb-canvas-background, #0c0c0c);
 }
 
 .search-wrap:focus-within {
@@ -329,8 +329,8 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
 .clear-search:focus-visible,
 .section-action:focus-visible,
 .disclosure:focus-visible {
-  outline: 1.5px solid var(--rb-accent, #66ee88);
-  outline-offset: 1.5px;
+  outline: var(--rb-stroke-width, 1px) solid var(--rb-accent, #66ee88);
+  outline-offset: var(--rb-stroke-width, 1px);
   border-radius: 4px;
 }
 
@@ -397,7 +397,7 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
   width: 146px;
   padding: 6px 0;
   background: #222;
-  border: 1.5px solid var(--rb-panel-outline, #606060);
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
   border-radius: 7px;
   box-shadow: 0 12px 24px rgb(0 0 0 / 45%);
 }
@@ -440,11 +440,11 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
 }
 
 .scroll::-webkit-scrollbar-thumb {
-  border-width: 1.5px;
+  border-width: var(--rb-stroke-width, 1px);
 }
 
 .scroll::-webkit-scrollbar-thumb:hover {
-  border-width: 1.5px;
+  border-width: var(--rb-stroke-width, 1px);
 }
 
 .section-title {
@@ -526,7 +526,7 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
   min-width: 0;
   height: 24px;
   padding: 0 8px;
-  border: 1.5px solid transparent;
+  border: var(--rb-stroke-width, 1px) solid transparent;
   border-radius: 6px;
   background: transparent;
   color: var(--rb-primary-text, #e8e8e8);

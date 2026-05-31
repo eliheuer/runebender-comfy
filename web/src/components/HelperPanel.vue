@@ -41,8 +41,8 @@ const helpers = [
   width: 117px;
   box-sizing: border-box;
   background: var(--rb-panel-background, #1c1c1c);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 8px;
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
+  border-radius: var(--rb-panel-radius, 12px);
   padding: 6px;
   pointer-events: auto;
 }
@@ -57,10 +57,10 @@ const helpers = [
   appearance: none;
   width: 48px;
   height: 48px;
-  background: var(--rb-panel-background, #1c1c1c);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 6px;
-  color: var(--rb-panel-outline, #606060);
+  background: var(--rb-button-background, #181818);
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
+  border-radius: var(--rb-button-radius, 8px);
+  color: var(--rb-glyph-preview, #808080);
   padding: 0;
   display: flex;
   align-items: center;
@@ -68,7 +68,7 @@ const helpers = [
 }
 
 .action-btn.disabled {
-  color: var(--rb-panel-outline, #606060);
+  color: var(--rb-glyph-preview, #808080);
   opacity: 0.55;
 }
 </style>

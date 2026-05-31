@@ -98,8 +98,8 @@ defineEmits<{
   min-height: 76px;
   box-sizing: border-box;
   background: var(--rb-panel-background, #1c1c1c);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 8px;
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
+  border-radius: var(--rb-panel-radius, 12px);
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -144,7 +144,7 @@ defineEmits<{
   width: 22px;
   height: 12px;
   box-sizing: border-box;
-  border: 1.5px solid var(--rb-panel-outline, #606060);
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
   border-radius: 999px;
   background: var(--rb-panel-background, #1c1c1c);
   display: flex;
@@ -185,7 +185,7 @@ defineEmits<{
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  border: 1.5px solid transparent;
+  border: var(--rb-stroke-width, 1px) solid transparent;
   cursor: pointer;
   padding: 0;
   display: flex;
@@ -193,12 +193,12 @@ defineEmits<{
   justify-content: center;
 }
 .swatch:hover:not(:disabled) {
-  outline: 1.5px solid var(--rb-mark-hover-ring, #bbbbbb);
+  outline: var(--rb-stroke-width, 1px) solid var(--rb-mark-hover-ring, #bbbbbb);
   outline-offset: 0;
 }
 .swatch.active {
   outline: 2px solid var(--rb-mark-selected-ring, #ffffff);
-  outline-offset: 1.5px;
+  outline-offset: var(--rb-stroke-width, 1px);
 }
 .swatch:disabled {
   cursor: default;

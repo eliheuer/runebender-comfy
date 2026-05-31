@@ -758,6 +758,12 @@ def _clean_source_kind(source_kind: str, source_path: Path) -> str:
     if kind not in SOURCE_EXTS_BY_KIND:
         raise ValueError(f"unsupported source kind: {source_kind!r}")
     suffix = source_path.suffix.lower()
+    if suffix in {".ufo", ".designspace"}:
+        return "ufo/designspace"
+    if suffix == ".glyphs":
+        return "glyphs"
+    if suffix == ".glyphspackage":
+        return "glyphspackage"
     if kind == "glyphs" and suffix != ".glyphs":
         raise ValueError("Glyphs source kind requires a .glyphs source")
     if kind == "glyphspackage" and suffix != ".glyphspackage":

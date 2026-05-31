@@ -72,8 +72,8 @@ const cellStyle = computed(() => {
   flex-direction: column;
   height: 100%;
   background: var(--rb-grid-cell-background, #0c0c0c);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 8px;
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
+  border-radius: var(--rb-panel-radius, 12px);
   cursor: pointer;
   overflow: hidden;
   scroll-snap-align: start;
@@ -82,7 +82,7 @@ const cellStyle = computed(() => {
     border-color 0.08s;
 }
 .cell:hover {
-  border-color: var(--rb-accent, #66ee88);
+  background: var(--rb-grid-cell-hover-background, #181818);
 }
 .cell:focus {
   outline: none;
@@ -90,7 +90,7 @@ const cellStyle = computed(() => {
 .cell:focus-visible {
   border-color: var(--rb-grid-selected, #ffffff);
 }
-.cell.marked:not(.selected):not(:hover) {
+.cell.marked:not(.selected) {
   border-color: var(--mark-color);
 }
 .cell.selected {
@@ -106,7 +106,7 @@ const cellStyle = computed(() => {
   padding: 8px;
   min-height: 0;
 }
-.cell.marked:not(.selected):not(:hover) .cell-glyph {
+.cell.marked:not(.selected) .cell-glyph {
   color: var(--mark-color);
 }
 .cell.selected .cell-glyph {
@@ -141,10 +141,6 @@ const cellStyle = computed(() => {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.cell.selected .cell-name,
-.cell:hover .cell-name {
-  color: var(--rb-accent, #66ee88);
-}
 .cell.selected .cell-name {
   color: var(--rb-grid-selected, #ffffff);
 }
@@ -155,13 +151,9 @@ const cellStyle = computed(() => {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.cell.marked:not(.selected):not(:hover) .cell-name,
-.cell.marked:not(.selected):not(:hover) .cell-unicode {
+.cell.marked:not(.selected) .cell-name,
+.cell.marked:not(.selected) .cell-unicode {
   color: var(--mark-color);
-}
-.cell.selected .cell-unicode,
-.cell:hover .cell-unicode {
-  color: var(--rb-accent, #66ee88);
 }
 .cell.selected .cell-unicode {
   color: var(--rb-grid-selected, #ffffff);

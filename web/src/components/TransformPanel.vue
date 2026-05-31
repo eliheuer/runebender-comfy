@@ -126,8 +126,8 @@ function runAction(
   width: 117px;
   box-sizing: border-box;
   background: var(--rb-panel-background, #1c1c1c);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 8px;
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
+  border-radius: var(--rb-panel-radius, 12px);
   padding: 6px;
   pointer-events: auto;
 }
@@ -142,13 +142,13 @@ function runAction(
   appearance: none;
   width: 48px;
   height: 48px;
-  background: var(--rb-panel-background, #1c1c1c);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 6px;
+  background: var(--rb-button-background, #181818);
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
+  border-radius: var(--rb-button-radius, 8px);
   /* Neutral gray by default, green only on hover — same as the tool
      palette and xilem's transform buttons. Enabled buttons should not
      glow green just for being usable. */
-  color: var(--rb-panel-outline, #606060);
+  color: var(--rb-glyph-preview, #808080);
   padding: 0;
   display: flex;
   align-items: center;
@@ -159,7 +159,7 @@ function runAction(
   border-color: var(--rb-accent, #66ee88);
 }
 .action-btn.disabled {
-  color: var(--rb-panel-outline, #606060);
+  color: var(--rb-glyph-preview, #808080);
   opacity: 0.55;
 }
 

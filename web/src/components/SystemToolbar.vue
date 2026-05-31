@@ -81,8 +81,8 @@ function onSaveAs(enabled: boolean) {
   box-sizing: border-box;
   padding: 6px;
   background: var(--rb-panel-background, #1c1c1c);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 8px;
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
+  border-radius: var(--rb-panel-radius, 12px);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -94,10 +94,10 @@ function onSaveAs(enabled: boolean) {
   height: 48px;
   box-sizing: border-box;
   padding: 0;
-  background: var(--rb-panel-background, #1c1c1c);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 6px;
-  color: var(--rb-panel-outline, #606060);
+  background: var(--rb-button-background, #181818);
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
+  border-radius: var(--rb-button-radius, 8px);
+  color: var(--rb-glyph-preview, #808080);
   display: flex;
   align-items: center;
   justify-content: center;

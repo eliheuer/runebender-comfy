@@ -1008,6 +1008,44 @@ class FontImportRouteTests(unittest.TestCase):
         self.assertEqual(Path(manifest["origin_root"]).resolve(), source_dir.resolve())
         self.assertTrue((workspace.FONTS_DIR / "linked-demo" / "Demo.ufo" / "glyphs" / "A_.glif").exists())
 
+    def test_link_source_route_uses_designspace_extension_over_stale_kind(self) -> None:
+        from nodes.font import link_source
+
+        source_dir = Path(self.tmp.name) / "linked-stale-kind"
+        glyphs_dir = source_dir / "Demo.ufo" / "glyphs"
+        glyphs_dir.mkdir(parents=True)
+        (glyphs_dir / "A_.glif").write_text("<glyph name=\"A\"/>", encoding="utf-8")
+        (source_dir / "Demo.ufo" / "metainfo.plist").write_text("<plist/>", encoding="utf-8")
+        designspace = source_dir / "Demo.designspace"
+        designspace.write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<designspace format=\"5\">
+  <sources>
+    <source name=\"Regular\" filename=\"Demo.ufo\"/>
+  </sources>
+</designspace>
+""",
+            encoding="utf-8",
+        )
+
+        class _Request:
+            async def post(self):
+                return {
+                    "source_path": str(designspace),
+                    "workspace_name": "linked-stale-kind",
+                    "source_kind": "glyphs",
+                }
+
+        payload = asyncio.run(link_source(_Request()))
+        manifest = json.loads(
+            (workspace.FONTS_DIR / "linked-stale-kind" / workspace.MANIFEST_NAME).read_text(encoding="utf-8")
+        )
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["source_kind"], "ufo/designspace")
+        self.assertEqual(manifest["source_kind"], "ufo/designspace")
+        self.assertEqual(manifest["origin_kind"], "ufo/designspace")
+
     def test_workspaces_route_reports_display_labels(self) -> None:
         from nodes.font import list_workspaces
 

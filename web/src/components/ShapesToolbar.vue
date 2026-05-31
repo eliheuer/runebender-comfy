@@ -47,8 +47,8 @@ const SHAPE_ICONS: Record<ShapeKind, string> = {
 <style scoped>
 .shapes-toolbar {
   background: var(--rb-panel-background, #1c1c1c);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 8px;
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
+  border-radius: var(--rb-panel-radius, 12px);
   padding: 6px;
   display: flex;
   flex-direction: row;
@@ -62,10 +62,10 @@ const SHAPE_ICONS: Record<ShapeKind, string> = {
   font: inherit;
   width: 48px;
   height: 48px;
-  background: var(--rb-panel-background, #1c1c1c);
-  color: var(--rb-panel-outline, #606060);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 6px;
+  background: var(--rb-button-background, #181818);
+  color: var(--rb-glyph-preview, #808080);
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
+  border-radius: var(--rb-button-radius, 8px);
   cursor: pointer;
   display: flex;
   align-items: center;

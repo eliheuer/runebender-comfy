@@ -110,7 +110,7 @@ defineEmits<{
  *
  * Sizes:
  *   TOOLBAR_BUTTON_RADIUS  6px
- *   TOOLBAR_BORDER_WIDTH   1.5px
+ *   TOOLBAR_BORDER_WIDTH   1px
  *   BENTO_GAP              6px (parent grid)
  */
 
@@ -123,8 +123,8 @@ defineEmits<{
 
 .panel {
   background: var(--rb-panel-background, #1c1c1c);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 8px;
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
+  border-radius: var(--rb-panel-radius, 12px);
   display: flex;
   align-items: center;
 }
@@ -170,10 +170,10 @@ defineEmits<{
 .master-btn {
   appearance: none;
   font: inherit;
-  background: var(--rb-panel-background, #1c1c1c);
-  color: var(--rb-panel-outline, #606060);
-  border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 6px;
+  background: var(--rb-button-background, #181818);
+  color: var(--rb-glyph-preview, #808080);
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
+  border-radius: var(--rb-button-radius, 8px);
   width: 48px;
   height: 48px;
   cursor: pointer;

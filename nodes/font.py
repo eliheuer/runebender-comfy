@@ -115,12 +115,15 @@ async def link_source(request):
         if located is not None:
             candidate = located
 
-    slot = create_slot_from_path(
-        str(candidate),
-        workspace_name or None,
-        source_kind=None if source_kind in {"", "auto"} else source_kind,
-        linked=True,
-    )
+    try:
+        slot = create_slot_from_path(
+            str(candidate),
+            workspace_name or None,
+            source_kind=None if source_kind in {"", "auto"} else source_kind,
+            linked=True,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        return web.json_response({"success": False, "error": str(exc)}, status=400)
     loop = asyncio.get_running_loop()
     try:
         await loop.run_in_executor(None, lambda: compile_slot(slot))
