@@ -16,8 +16,8 @@ export const THEME_MARK_COLORS = [
 export const THEME_CHROME_COLORS = {
   appBackground: "#101010",
   controlBackground: "#303030",
-  panelBackground: "#1c1c1c",
-  panelOutline: "#606060",
+  panelBackground: "#121212",
+  panelOutline: "#404040",
   primaryText: "#909090",
   secondaryText: "#707070",
   mutedText: "#808080",

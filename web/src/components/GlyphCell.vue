@@ -71,7 +71,7 @@ const cellStyle = computed(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--rb-panel-background, #1c1c1c);
+  background: var(--rb-grid-cell-background, #0c0c0c);
   border: 1.5px solid var(--rb-panel-outline, #606060);
   border-radius: 8px;
   cursor: pointer;

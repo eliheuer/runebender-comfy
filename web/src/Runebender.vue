@@ -1184,8 +1184,8 @@ function applyCanvasTheme() {
       marqueeStroke: selection,
       toolPreview: selection,
       metricGuide: accent,
-      designGridFine: [panelText[0], panelText[1], panelText[2], 0x40],
-      designGridCoarse: [panelText[0], panelText[1], panelText[2], 0x58],
+      designGridFine: [panelText[0], panelText[1], panelText[2], 0x52],
+      designGridCoarse: [panelText[0], panelText[1], panelText[2], 0x70],
       textPreviewFill: resolveHostColor("--rb-canvas-text-preview-fill", [0x80, 0x80, 0x80, 0xff]),
       textCursor: resolveHostColor("--rb-canvas-text-cursor", [0xff, 0xaa, 0x33, 0xff]),
       textKernActive: resolveHostColor("--rb-canvas-kern-active", [0x00, 0xff, 0xcc, 0xff]),
@@ -6182,12 +6182,13 @@ onBeforeUnmount(() => {
 
 .runebender-host {
   /* Surfaces */
-  --rb-app-background:     var(--bg-color, #101010);
-  --rb-panel-background:   var(--comfy-menu-bg, #1c1c1c);
+  --rb-app-background:     var(--rb-canvas-background, #0c0c0c);
+  --rb-panel-background:   #121212;
+  --rb-grid-cell-background: var(--rb-canvas-background, #0c0c0c);
   --rb-control-background: var(--comfy-input-bg, #111315);
 
   /* Borders / outlines */
-  --rb-panel-outline:      var(--border-color, #606060);
+  --rb-panel-outline:      #404040;
 
   /* Text */
   --rb-primary-text:       #909090;
@@ -6905,7 +6906,7 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 6px;
   scroll-snap-type: y mandatory;
-  background: var(--rb-app-background, #101010);
+  background: var(--rb-canvas-background, #0c0c0c);
 }
 
 /* ----- Scrollbars -----
@@ -6926,14 +6927,14 @@ onBeforeUnmount(() => {
 .runebender-host :deep(::-webkit-scrollbar-thumb) {
   /* Reserve exactly one BENTO_GAP for the scrollbar, then inset the
    * visible thumb so it does not touch either neighboring panel edge. */
-  background: var(--rb-panel-outline, #606060);
+  background: rgba(96, 96, 96, 0.36);
   border-radius: 999px;
   border: 2.25px solid transparent;
   background-clip: padding-box;
   min-height: 32px;
 }
 .runebender-host :deep(::-webkit-scrollbar-thumb:hover) {
-  background: var(--rb-primary-text, #909090);
+  background: rgba(144, 144, 144, 0.41);
   border: 2.25px solid transparent;
   background-clip: padding-box;
 }
@@ -6944,7 +6945,7 @@ onBeforeUnmount(() => {
 @supports (-moz-appearance: none) {
   .runebender-host {
     scrollbar-width: thin;
-    scrollbar-color: var(--rb-panel-outline, #606060) transparent;
+    scrollbar-color: rgba(96, 96, 96, 0.36) transparent;
   }
 }
 </style>
