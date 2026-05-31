@@ -45,6 +45,7 @@ import type { TextDirection } from "./components/TextDirectionToolbar.vue";
 import GlyphAnatomyPanel from "./components/GlyphAnatomyPanel.vue";
 import GlyphCell from "./components/GlyphCell.vue";
 import GlyphInfoSidebar from "./components/GlyphInfoSidebar.vue";
+import HelperPanel from "./components/HelperPanel.vue";
 import MarkColorPanel from "./components/MarkColorPanel.vue";
 import MasterToolbar from "./components/MasterToolbar.vue";
 import TopBar from "./components/TopBar.vue";
@@ -887,6 +888,7 @@ type Editor = {
   screenToDesign(x: number, y: number): Float64Array;
   selectionCount(): number;
   selectedContourCount(): number;
+  cycleSelectedPoint(backwards: boolean): boolean;
   selectionBounds(): Float64Array;
   measureInfo(): Float64Array;
   setCoordinateQuadrant(quadrant: string): void;
@@ -2235,6 +2237,9 @@ function onToolSelect(tool: ToolId) {
   if (tool === "Shapes") {
     shapeChanged = editor?.setShapeTool(activeShape.value) ?? false;
   }
+  if (tool === "Text") {
+    ensureTextSessionForCurrentGlyph();
+  }
   if (wasTextSession && tool !== "Text") {
     loadActiveTextSortGlyphIntoEditor();
   }
@@ -2270,6 +2275,16 @@ function onTextDirectionSelect(direction: TextDirection) {
   editor?.setTextDirection(direction);
   refreshTextStateFromEditor();
   requestRender();
+}
+
+function ensureTextSessionForCurrentGlyph() {
+  if (!editor) return;
+  syncTextKerningModelToEditor();
+  if (!hasTextBufferSession.value && currentGlyph.value) {
+    seedTextBufferWithGlyph(currentGlyph.value);
+  } else {
+    refreshTextStateFromEditor();
+  }
 }
 
 function textPreviewLineHeight(): number {
@@ -4149,7 +4164,7 @@ function openGridSelectionInEditor(name: string) {
     : [name];
   selectedGlyph.value = name;
   selectedGlyphs.value = new Set(names);
-  loadGlyphIntoEditor(name, { fitCanvas: true, seedTextBuffer: false });
+  loadGlyphIntoEditor(name, { fitCanvas: true, seedTextBuffer: names.length <= 1 });
   if (names.length > 1) {
     seedTextBufferWithGlyphs(names, name);
     status.value = `opened ${names.length} glyphs`;
@@ -5363,9 +5378,12 @@ function onKeyDown(e: KeyboardEvent) {
     return;
   }
 
-  if (e.key === "Tab" && !textModeActive.value) {
+  if (e.key === "Tab") {
     e.preventDefault();
-    editorPanelsVisible.value = !editorPanelsVisible.value;
+    if (editor.cycleSelectedPoint(e.shiftKey)) {
+      refreshSelectionState();
+      requestRender();
+    }
     return;
   }
 
@@ -6048,6 +6066,11 @@ onBeforeUnmount(() => {
           @transform="onTransform"
         />
 
+        <HelperPanel
+          v-if="viewMode === 'editor' && editorPanelsVisible"
+          class="helper-overlay"
+        />
+
         <div
           v-if="viewMode === 'editor' && measureInfo"
           class="measure-overlay"
@@ -6186,7 +6209,7 @@ onBeforeUnmount(() => {
   /* Canvas theme bridge. Vue resolves these variables and passes the
    * resulting RGBA values into the Rust renderer, keeping the WebGPU
    * scene aligned with the surrounding ComfyUI chrome. */
-  --rb-canvas-background:         var(--rb-app-background);
+  --rb-canvas-background:         #0c0c0c;
   --rb-canvas-path-stroke:        var(--content-fg, #c0c0c0);
   --rb-canvas-selection:          #ffaa33;
   --rb-canvas-component:          #6699cc;
@@ -6273,7 +6296,7 @@ onBeforeUnmount(() => {
 .designspace-panel {
   background: var(--rb-panel-background, #1c1c1c);
   border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 6px;
+  border-radius: 8px;
   padding: 10px;
   min-height: 220px;
   flex: 1;
@@ -6361,6 +6384,20 @@ onBeforeUnmount(() => {
 }
 
 .stage.editor-bottom-preview-visible .transform-overlay {
+  bottom: calc(var(--rb-editor-bottom-preview-height) + var(--rb-editor-edge-inset, 8px) + 92px);
+}
+
+.helper-overlay {
+  position: absolute;
+  left: var(--rb-editor-edge-inset, 8px);
+  top: calc(var(--rb-editor-edge-inset, 8px) + 70px);
+  bottom: calc(var(--rb-editor-edge-inset, 8px) + 92px);
+  height: max-content;
+  margin-block: auto;
+  z-index: 3;
+}
+
+.stage.editor-bottom-preview-visible .helper-overlay {
   bottom: calc(var(--rb-editor-bottom-preview-height) + var(--rb-editor-edge-inset, 8px) + 92px);
 }
 
@@ -6554,12 +6591,10 @@ onBeforeUnmount(() => {
 
 .glyph-preview-overlay {
   left: var(--rb-editor-edge-inset, 8px);
-  width: fit-content;
-  min-width: 86px;
-  max-width: 235px;
+  width: 235px;
   height: 86px;
   padding: 12px;
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
 }
@@ -6865,6 +6900,7 @@ onBeforeUnmount(() => {
   position: absolute;
   inset: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   box-sizing: border-box;
   display: grid;
   gap: 6px;

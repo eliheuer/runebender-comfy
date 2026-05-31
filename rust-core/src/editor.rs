@@ -888,6 +888,45 @@ impl EditorState {
         self.transform_selection(transform)
     }
 
+    /// Move the point selection to the next/previous point in outline
+    /// storage order, matching Glyphs' Tab / Shift-Tab behavior.
+    pub fn cycle_selected_point(&mut self, backwards: bool) -> bool {
+        let point_ids = self
+            .paths
+            .iter()
+            .flat_map(|path| path.points().iter().map(|point| point.id))
+            .collect::<Vec<_>>();
+        if point_ids.is_empty() {
+            return false;
+        }
+
+        let selected_positions = point_ids
+            .iter()
+            .enumerate()
+            .filter_map(|(index, id)| self.selection.contains(id).then_some(index))
+            .collect::<Vec<_>>();
+
+        let target_index = if selected_positions.is_empty() {
+            if backwards { point_ids.len() - 1 } else { 0 }
+        } else if backwards {
+            let first = selected_positions[0];
+            if first == 0 {
+                point_ids.len() - 1
+            } else {
+                first - 1
+            }
+        } else {
+            let last = selected_positions[selected_positions.len() - 1];
+            (last + 1) % point_ids.len()
+        };
+
+        let target = point_ids[target_index];
+        self.clear_component_selection();
+        self.selection = Selection::new();
+        self.selection.insert(target);
+        true
+    }
+
     pub fn push_path_and_select(&mut self, path: Path) {
         let mut selection = Selection::new();
         for pt in path.points().iter() {
@@ -2634,6 +2673,48 @@ mod tests {
         assert!(!state.selection.contains(&second_id));
         let point = state.paths[0].points().iter().next().expect("point exists");
         assert!(matches!(point.typ, PointType::OnCurve { smooth: true }));
+    }
+
+    #[test]
+    fn cycle_selected_point_moves_forward_in_outline_order() {
+        let mut state = EditorState::default();
+        let first = on_curve(Point::new(0.0, 0.0), false);
+        let first_id = first.id;
+        let second = off_curve(Point::new(50.0, 50.0));
+        let second_id = second.id;
+        let third = on_curve(Point::new(100.0, 0.0), false);
+        let third_id = third.id;
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![first, second, third]),
+            false,
+        )));
+        state.selection.insert(first_id);
+
+        assert!(state.cycle_selected_point(false));
+        assert!(!state.selection.contains(&first_id));
+        assert!(state.selection.contains(&second_id));
+
+        assert!(state.cycle_selected_point(false));
+        assert!(!state.selection.contains(&second_id));
+        assert!(state.selection.contains(&third_id));
+    }
+
+    #[test]
+    fn cycle_selected_point_moves_backward_and_wraps() {
+        let mut state = EditorState::default();
+        let first = on_curve(Point::new(0.0, 0.0), false);
+        let first_id = first.id;
+        let second = on_curve(Point::new(100.0, 0.0), false);
+        let second_id = second.id;
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![first, second]),
+            false,
+        )));
+        state.selection.insert(first_id);
+
+        assert!(state.cycle_selected_point(true));
+        assert!(!state.selection.contains(&first_id));
+        assert!(state.selection.contains(&second_id));
     }
 
     #[test]

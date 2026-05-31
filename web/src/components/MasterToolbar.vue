@@ -43,12 +43,11 @@ function labelFor(name: string): string {
 
 <style scoped>
 .master-toolbar {
-  height: 64px;
   box-sizing: border-box;
-  padding: 8px;
+  padding: 6px;
   background: var(--rb-panel-background, #1c1c1c);
   border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 6px;
+  border-radius: 8px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -82,8 +81,8 @@ function labelFor(name: string): string {
 }
 
 .master-preview {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   color: currentColor;
   display: flex;
   align-items: center;

@@ -33,6 +33,7 @@ const fn srgb(color: theme::ColorRgba) -> Srgb {
 
 const BG: Srgb = srgb(theme::app::BACKGROUND);
 const PATH_STROKE: Srgb = srgb(theme::path::STROKE);
+const PATH_EDIT_FILL: Srgb = AlphaColor::from_rgba8(0x60, 0x60, 0x60, 0x22);
 const PREVIEW_FILL: Srgb = srgb(theme::path::PREVIEW_FILL);
 const COMPONENT_FILL: Srgb = srgb(theme::component::FILL);
 const COMPONENT_SELECTED_FILL: Srgb = srgb(theme::component::SELECTED_FILL);
@@ -63,6 +64,7 @@ const TEXT_KERN_PREVIOUS: Srgb = srgb(theme::kerning::PREVIOUS_GLYPH);
 struct CanvasTheme {
     bg: Srgb,
     path_stroke: Srgb,
+    path_edit_fill: Srgb,
     preview_fill: Srgb,
     component_fill: Srgb,
     component_selected_fill: Srgb,
@@ -95,6 +97,7 @@ impl Default for CanvasTheme {
         Self {
             bg: BG,
             path_stroke: PATH_STROKE,
+            path_edit_fill: PATH_EDIT_FILL,
             preview_fill: PREVIEW_FILL,
             component_fill: COMPONENT_FILL,
             component_selected_fill: COMPONENT_SELECTED_FILL,
@@ -466,11 +469,16 @@ impl Renderer {
             return;
         }
         if !combined.elements().is_empty() {
-            // Edit mode: STROKE the outline at a constant screen-pixel
-            // width and leave the interior empty, matching
-            // runebender-xilem's paint_glyph_edit_mode. Transform the
-            // path into screen space first so the stroke width doesn't
-            // scale with zoom. (Components below are still filled.)
+            self.scene.fill(
+                Fill::NonZero,
+                glyph_view,
+                self.theme.path_edit_fill,
+                None,
+                &combined,
+            );
+            // Edit mode: stroke the outline at a constant screen-pixel
+            // width. Transform the path into screen space first so the
+            // stroke width doesn't scale with zoom.
             let screen_path = glyph_view * &combined;
             self.scene.stroke(
                 &Stroke::new(self.px(PATH_STROKE_PX)),
@@ -590,8 +598,15 @@ impl Renderer {
             if render_active_editable {
                 let active_outline = editable_outline_path(state);
                 if !active_outline.elements().is_empty() {
-                    let screen_path =
-                        (view * Affine::translate((item.x, item.y))) * &active_outline;
+                    let item_view = view * Affine::translate((item.x, item.y));
+                    self.scene.fill(
+                        Fill::NonZero,
+                        item_view,
+                        self.theme.path_edit_fill,
+                        None,
+                        &active_outline,
+                    );
+                    let screen_path = item_view * &active_outline;
                     self.scene.stroke(
                         &Stroke::new(self.px(PATH_STROKE_PX)),
                         Affine::IDENTITY,

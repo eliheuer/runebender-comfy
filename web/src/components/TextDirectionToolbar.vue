@@ -21,8 +21,8 @@ const directions = [
 ] as const;
 
 const DIRECTION_ICONS: Record<TextDirection, string> = {
-  ltr: "text-ltr",
-  rtl: "text-rtl",
+  ltr: "text-rtl",
+  rtl: "text-ltr",
 };
 </script>
 
@@ -53,7 +53,7 @@ const DIRECTION_ICONS: Record<TextDirection, string> = {
   background: var(--rb-panel-background, #1c1c1c);
   border: 1.5px solid var(--rb-panel-outline, #606060);
   border-radius: 8px;
-  padding: 8px;
+  padding: 6px;
   display: flex;
   flex-direction: row;
   gap: 6px;

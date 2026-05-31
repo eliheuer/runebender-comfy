@@ -78,8 +78,8 @@ function iconFor(id: ToolId): ToolbarIcon {
  *   TOOLBAR_ICON_SELECTED           #66EE88
  *   TOOLBAR_ITEM_SIZE               48 px
  *   TOOLBAR_ITEM_SPACING            6 px
- *   TOOLBAR_PADDING                 8 px
- *   TOOLBAR_ICON_PADDING            12 px  (icon target = 48 − 24 = 24)
+ *   TOOLBAR_PADDING                 6 px
+ *   TOOLBAR_ICON_PADDING             8 px  (icon target = 48 − 16 = 32)
  *   TOOLBAR_BUTTON_RADIUS           6 px
  *   TOOLBAR_BORDER_WIDTH            1.5 px
  */
@@ -87,8 +87,8 @@ function iconFor(id: ToolId): ToolbarIcon {
 .edit-mode-toolbar {
   background: var(--rb-panel-background, #1c1c1c);
   border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 6px;
-  padding: 8px;
+  border-radius: 8px;
+  padding: 6px;
   display: flex;
   flex-direction: row;
   gap: 6px;
@@ -119,10 +119,9 @@ function iconFor(id: ToolId): ToolbarIcon {
   border-color: var(--rb-accent, #66ee88);
 }
 
-/* Icon target size = TOOLBAR_ITEM_SIZE − 2 × TOOLBAR_ICON_PADDING. */
 .tool-icon {
-  width: 24px;
-  height: 24px;
+  width: 32px;
+  height: 32px;
   display: block;
 }
 </style>

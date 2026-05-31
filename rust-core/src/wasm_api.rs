@@ -1746,6 +1746,12 @@ impl GlyphEditor {
         self.state.selected_contour_count()
     }
 
+    /// Move point selection by outline order. `backwards` is Shift-Tab.
+    #[wasm_bindgen(js_name = cycleSelectedPoint)]
+    pub fn cycle_selected_point(&mut self, backwards: bool) -> bool {
+        self.state.cycle_selected_point(backwards)
+    }
+
     /// Advance width of the currently-open glyph (design units).
     /// Zero when no glyph is loaded.
     #[wasm_bindgen(js_name = advanceWidth)]

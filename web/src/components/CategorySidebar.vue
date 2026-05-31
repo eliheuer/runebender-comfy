@@ -284,7 +284,7 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
   flex-shrink: 0;
   background: var(--rb-panel-background, #1c1c1c);
   border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 6px;
+  border-radius: 8px;
   display: flex;
   flex-direction: column;
   overflow: visible;

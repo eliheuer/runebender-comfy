@@ -73,7 +73,7 @@ const cellStyle = computed(() => {
   height: 100%;
   background: var(--rb-panel-background, #1c1c1c);
   border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
   overflow: hidden;
   scroll-snap-align: start;

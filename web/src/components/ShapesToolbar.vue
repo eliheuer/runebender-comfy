@@ -48,8 +48,8 @@ const SHAPE_ICONS: Record<ShapeKind, string> = {
 .shapes-toolbar {
   background: var(--rb-panel-background, #1c1c1c);
   border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 6px;
-  padding: 8px;
+  border-radius: 8px;
+  padding: 6px;
   display: flex;
   flex-direction: row;
   gap: 6px;

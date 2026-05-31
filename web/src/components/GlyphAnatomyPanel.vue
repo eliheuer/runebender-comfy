@@ -26,7 +26,7 @@ defineProps<{
 .anatomy {
   background: var(--rb-panel-background, #1c1c1c);
   border: 1.5px solid var(--rb-panel-outline, #606060);
-  border-radius: 6px;
+  border-radius: 8px;
   padding: 16px;
   display: flex;
   flex-direction: column;
