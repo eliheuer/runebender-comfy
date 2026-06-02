@@ -105,12 +105,12 @@ function onSaveAs(enabled: boolean) {
 }
 
 .system-btn:not(:disabled):hover {
-  color: var(--rb-accent, #66ee88);
+  color: var(--rb-accent, #18b86f);
 }
 
 .close-btn:not(:disabled):hover {
-  color: var(--rb-warning, #ffdd33);
-  border-color: var(--rb-warning, #ffdd33);
+  color: var(--rb-warning, #ffdc32);
+  border-color: var(--rb-warning, #ffdc32);
 }
 
 .system-btn.disabled {

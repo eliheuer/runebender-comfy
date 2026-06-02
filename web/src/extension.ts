@@ -11,7 +11,7 @@ import { runebenderHostKey, type WorkspaceChoice } from "./host/runebenderHost";
 import { comfyHost } from "./hosts/comfy/comfyHost";
 import Runebender from "./Runebender.vue";
 
-const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-01-contour-point-guard";
+const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-02-knife-preview-164935";
 
 // Mirror our own console output to the ComfyUI terminal through the
 // injected Comfy host. Filters to messages prefixed with
@@ -185,10 +185,10 @@ function requestSourcePath(defaultValue: string): Promise<string | null> {
     submit.type = "submit";
     submit.textContent = "Open for Editing";
     submit.style.padding = "8px 14px";
-    submit.style.border = "1px solid #66ee88";
+    submit.style.border = "1px solid #18b86f";
     submit.style.borderRadius = "8px";
-    submit.style.background = "#1f6f3d";
-    submit.style.color = "#ffffff";
+    submit.style.background = "#121212";
+    submit.style.color = "#18b86f";
     submit.style.fontWeight = "700";
 
     actions.append(cancel, submit);

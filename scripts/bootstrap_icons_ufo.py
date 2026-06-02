@@ -20,6 +20,7 @@ venv:
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 
@@ -52,9 +53,18 @@ ICONS: dict[str, str] = {
 ORDER = ["select", "pen", "hyperpen", "knife", "measure", "shapes", "preview", "text"]
 
 
+def load_icon_codepoints(repo_root: Path) -> dict[str, int]:
+    path = repo_root / "assets" / "runebender-icons.codepoints.json"
+    return {
+        name: int(str(value).removeprefix("U+"), 16)
+        for name, value in json.loads(path.read_text(encoding="utf-8")).items()
+    }
+
+
 def main() -> None:
     repo_root = Path(__file__).resolve().parent.parent
     ufo_path = repo_root / "assets" / "runebender-icons.ufo"
+    icon_codepoints = load_icon_codepoints(repo_root)
     if ufo_path.exists():
         raise SystemExit(
             f"refusing to overwrite existing {ufo_path}\n"
@@ -74,6 +84,7 @@ def main() -> None:
     for name in ORDER:
         d = ICONS[name]
         glyph = font.newGlyph(name)
+        glyph.unicodes = [icon_codepoints[name]]
         parse_path(d, TransformPen(glyph.getPen(), SCREEN_TO_UFO))
         # Advance width = right edge of the (flipped) outline, so the
         # editor shows a sensible metrics box around the icon.

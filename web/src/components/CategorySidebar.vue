@@ -302,7 +302,7 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
 }
 
 .search-wrap:focus-within {
-  border-color: var(--rb-accent, #66ee88);
+  border-color: var(--rb-accent, #18b86f);
 }
 
 .search-mode,
@@ -329,7 +329,7 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
 .clear-search:focus-visible,
 .section-action:focus-visible,
 .disclosure:focus-visible {
-  outline: var(--rb-stroke-width, 1px) solid var(--rb-accent, #66ee88);
+  outline: var(--rb-stroke-width, 1px) solid var(--rb-accent, #18b86f);
   outline-offset: var(--rb-stroke-width, 1px);
   border-radius: 4px;
 }
@@ -337,7 +337,7 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
 .row:focus-visible,
 .search-menu-row:focus-visible {
   outline: none;
-  border-color: var(--rb-accent, #66ee88);
+  border-color: var(--rb-accent, #18b86f);
 }
 
 .search-mode {
@@ -542,8 +542,8 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
 
 .row.active {
   background: transparent;
-  border-color: var(--rb-accent, #66ee88);
-  color: var(--rb-accent, #66ee88);
+  border-color: var(--rb-accent, #18b86f);
+  color: var(--rb-accent, #18b86f);
 }
 
 .top-row {
@@ -552,7 +552,7 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
 
 .icon {
   flex: 0 0 22px;
-  color: var(--rb-accent, #66ee88);
+  color: var(--rb-accent, #18b86f);
   font-weight: 700;
   text-align: center;
 }

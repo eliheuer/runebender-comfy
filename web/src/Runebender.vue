@@ -1153,9 +1153,9 @@ function resolveHostColor(variableName: string, fallback: Rgba, alpha?: number):
 
 function applyCanvasTheme() {
   if (!editor) return;
-  const accent = resolveHostColor("--rb-accent", [0x66, 0xee, 0x88, 0xff]);
-  const selected = resolveHostColor("--rb-warning", [0xff, 0xdd, 0x33, 0xff]);
-  const selection = resolveHostColor("--rb-canvas-selection", [0xff, 0xaa, 0x33, 0xff]);
+  const accent = resolveHostColor("--rb-accent", [0x18, 0xb8, 0x6f, 0xff]);
+  const selected = resolveHostColor("--rb-warning", [0xff, 0xdc, 0x32, 0xff]);
+  const selection = resolveHostColor("--rb-canvas-selection", [0xff, 0x98, 0x0f, 0xff]);
   const primaryText = resolveHostColor("--rb-primary-text", [0x90, 0x90, 0x90, 0xff]);
   const panelText = resolveHostColor("--rb-secondary-text", [0x70, 0x70, 0x70, 0xff]);
 
@@ -1171,16 +1171,16 @@ function applyCanvasTheme() {
       ),
       handleLine: primaryText,
       pointSmoothInner: resolveHostColor("--rb-canvas-point-smooth-inner", [0x18, 0x18, 0x18, 0xff]),
-      pointSmoothOuter: resolveHostColor("--rb-canvas-point-smooth-outer", [0x40, 0x88, 0xff, 0xff]),
+      pointSmoothOuter: resolveHostColor("--rb-canvas-point-smooth-outer", [0x18, 0xb8, 0x6f, 0xff]),
       pointCornerInner: resolveHostColor("--rb-canvas-point-corner-inner", [0x18, 0x18, 0x18, 0xff]),
-      pointCornerOuter: resolveHostColor("--rb-canvas-point-corner-outer", [0x66, 0xee, 0x88, 0xff]),
+      pointCornerOuter: resolveHostColor("--rb-canvas-point-corner-outer", [0xff, 0x98, 0x0f, 0xff]),
       pointOffcurveInner: resolveHostColor("--rb-canvas-point-offcurve-inner", [0x18, 0x18, 0x18, 0xff]),
-      pointOffcurveOuter: resolveHostColor("--rb-canvas-point-offcurve-outer", [0xcc, 0x66, 0xff, 0xff]),
+      pointOffcurveOuter: resolveHostColor("--rb-canvas-point-offcurve-outer", [0x8c, 0x6c, 0xff, 0xff]),
       pointHyperInner: resolveHostColor("--rb-canvas-point-hyper-inner", [0x18, 0x18, 0x18, 0xff]),
-      pointHyperOuter: resolveHostColor("--rb-canvas-point-hyper-outer", [0xff, 0x66, 0xcc, 0xff]),
+      pointHyperOuter: resolveHostColor("--rb-canvas-point-hyper-outer", [0x8c, 0x6c, 0xff, 0xff]),
       pointSelectedInner: selected,
       pointSelectedOuter: selection,
-      startNodeOuter: resolveHostColor("--rb-canvas-start-node", [0xff, 0xaa, 0x33, 0xff]),
+      startNodeOuter: resolveHostColor("--rb-canvas-start-node", [0xff, 0x98, 0x0f, 0xff]),
       marqueeFill: [selection[0], selection[1], selection[2], 0x20],
       marqueeStroke: selection,
       toolPreview: selection,
@@ -1188,9 +1188,9 @@ function applyCanvasTheme() {
       designGridFine: [panelText[0], panelText[1], panelText[2], 0x52],
       designGridCoarse: [panelText[0], panelText[1], panelText[2], 0x70],
       textPreviewFill: resolveHostColor("--rb-canvas-text-preview-fill", [0x80, 0x80, 0x80, 0xff]),
-      textCursor: resolveHostColor("--rb-canvas-text-cursor", [0xff, 0xaa, 0x33, 0xff]),
-      textKernActive: resolveHostColor("--rb-canvas-kern-active", [0x00, 0xff, 0xcc, 0xff]),
-      textKernPrevious: resolveHostColor("--rb-canvas-kern-previous", [0xff, 0xaa, 0x33, 0xff]),
+      textCursor: resolveHostColor("--rb-canvas-text-cursor", [0xff, 0x98, 0x0f, 0xff]),
+      textKernActive: resolveHostColor("--rb-canvas-kern-active", [0x45, 0x6f, 0xff, 0xff]),
+      textKernPrevious: resolveHostColor("--rb-canvas-kern-previous", [0xff, 0x98, 0x0f, 0xff]),
     }),
   );
 }
@@ -2814,6 +2814,10 @@ function onCanvasDoubleClick(e: MouseEvent) {
   if (!editor) return;
   const c = canvasMouseCoords(e);
   if (!c) return;
+  if (editor.togglePointTypeAt(c[0], c[1])) {
+    syncEditorMutationAfterWasmChange();
+    return;
+  }
   if (editor.selectContourAt(c[0], c[1])) {
     refreshSelectionState();
     requestRender();
@@ -4702,10 +4706,10 @@ function requestSaveAsDestination(defaultValue: string): Promise<SaveAsDestinati
     submit.type = "submit";
     submit.textContent = "Save As";
     submit.style.padding = "8px 14px";
-    submit.style.border = "1px solid #66ee88";
+    submit.style.border = "1px solid #18b86f";
     submit.style.borderRadius = "8px";
-    submit.style.background = "#1f6f3d";
-    submit.style.color = "#ffffff";
+    submit.style.background = "#121212";
+    submit.style.color = "#18b86f";
     submit.style.fontWeight = "700";
 
     actions.append(cancel, submit);
@@ -6182,8 +6186,8 @@ onBeforeUnmount(() => {
  *   SECONDARY_UI_TEXT    #707070 (BASE_G)
  *   GRID_CELL_TEXT       #808080 (BASE_H)
  *   GRID_GLYPH_COLOR     #a0a0a0 (BASE_J)
- *   ACCENT (METRICS_GUIDE / SELECTED_OUTLINE)  #66EE88
- *   SELECTION_RECT_STROKE / TOOL_PREVIEW       #ffaa33
+ *   ACCENT (METRICS_GUIDE / SELECTED_OUTLINE)  #18B86F
+ *   SELECTION_RECT_STROKE / TOOL_PREVIEW       #ff980f
  *
  * ComfyUI v1 exposes both generic colors (--bg-color, --fg-color,
  * --border-color, --content-bg, etc.) and PrimeVue tokens (--p-*).
@@ -6216,10 +6220,10 @@ onBeforeUnmount(() => {
   --rb-glyph-preview:      var(--rb-muted-text);
 
   /* Accents / state */
-  --rb-accent:                     #66ee88;
-  --rb-warning:                    #ffdd33;
-  --rb-danger:                     var(--p-red-500, #f43f5e);
-  --rb-danger-text:                var(--p-button-text-danger-color, #ffe0e0);
+  --rb-accent:                     #18b86f;
+  --rb-warning:                    #ffdc32;
+  --rb-danger:                     #ff4a3d;
+  --rb-danger-text:                #ff4a3d;
   --rb-mark-hover-ring:            color-mix(in srgb, var(--rb-accent) 55%, transparent);
   --rb-mark-selected-ring:         var(--rb-accent);
   --rb-background-image-selection: var(--rb-accent);
@@ -6229,21 +6233,21 @@ onBeforeUnmount(() => {
    * scene aligned with the surrounding ComfyUI chrome. */
   --rb-canvas-background:         #0c0c0c;
   --rb-canvas-path-stroke:        #b0b0b0;
-  --rb-canvas-selection:          #ffaa33;
+  --rb-canvas-selection:          #ff980f;
   --rb-canvas-component:          #6699cc;
   --rb-canvas-component-selected: #88bbff;
   --rb-canvas-point-smooth-inner: #181818;
-  --rb-canvas-point-smooth-outer: #4088ff;
+  --rb-canvas-point-smooth-outer: #18b86f;
   --rb-canvas-point-corner-inner: #181818;
-  --rb-canvas-point-corner-outer: var(--rb-accent);
+  --rb-canvas-point-corner-outer: #ff980f;
   --rb-canvas-point-offcurve-inner: #181818;
-  --rb-canvas-point-offcurve-outer: #cc66ff;
+  --rb-canvas-point-offcurve-outer: #8c6cff;
   --rb-canvas-point-hyper-inner: #181818;
-  --rb-canvas-point-hyper-outer: #ff66cc;
-  --rb-canvas-start-node:         #ffaa33;
-  --rb-canvas-text-cursor:        #ffaa33;
-  --rb-canvas-kern-active:        #00ffcc;
-  --rb-canvas-kern-previous:      #ffaa33;
+  --rb-canvas-point-hyper-outer: #8c6cff;
+  --rb-canvas-start-node:         #ff980f;
+  --rb-canvas-text-cursor:        #ff980f;
+  --rb-canvas-kern-active:        #456fff;
+  --rb-canvas-kern-previous:      #ff980f;
   --rb-canvas-text-preview-fill:  #808080;
   --rb-editor-edge-inset:         8px;
   --rb-editor-bottom-preview-height: clamp(112px, 15%, 180px);
@@ -6367,7 +6371,7 @@ onBeforeUnmount(() => {
 }
 
 .designspace-editor:focus {
-  border-color: var(--rb-accent, #66ee88);
+  border-color: var(--rb-accent, #18b86f);
 }
 
 /* Stage = the area inside .content where canvas + grid live,
@@ -6477,7 +6481,7 @@ onBeforeUnmount(() => {
   cursor: default;
 }
 .background-image.selected {
-  border-color: var(--rb-background-image-selection, #4488ff);
+  border-color: var(--rb-background-image-selection, #456fff);
   border-style: dashed;
   border-width: 2px;
 }
@@ -6489,7 +6493,7 @@ onBeforeUnmount(() => {
   margin: -5px 0 0 -5px;
   border-radius: 50%;
   background: var(--rb-mark-selected-ring, #ffffff);
-  border: var(--rb-stroke-width, 1px) solid var(--rb-background-image-selection, #4488ff);
+  border: var(--rb-stroke-width, 1px) solid var(--rb-background-image-selection, #456fff);
   box-sizing: border-box;
   touch-action: none;
 }
@@ -6574,7 +6578,7 @@ onBeforeUnmount(() => {
   width: 16px;
   height: 16px;
   margin: -8px 0 0 -8px;
-  border: 2px solid var(--rb-danger, #ff3333);
+  border: 2px solid var(--rb-danger, #ff4a3d);
   border-radius: 50%;
   box-sizing: border-box;
   pointer-events: none;
@@ -6593,14 +6597,14 @@ onBeforeUnmount(() => {
   gap: 4px;
   padding: 8px 10px;
   background: color-mix(in srgb, var(--rb-panel-background, #1c1c1c) 94%, transparent);
-  border: var(--rb-stroke-width, 1px) solid var(--rb-danger, #ff3333);
+  border: var(--rb-stroke-width, 1px) solid var(--rb-danger, #ff4a3d);
   border-radius: 6px;
   color: var(--rb-overlay-text, #f0f0f0);
   font: 12px ui-sans-serif, system-ui, sans-serif;
   pointer-events: none;
 }
 .compat-badge strong {
-  color: var(--rb-danger-text, #ff7777);
+  color: var(--rb-danger-text, #ff4a3d);
   font-weight: 700;
 }
 .compat-badge span {
@@ -6634,10 +6638,9 @@ onBeforeUnmount(() => {
 .glyph-preview-shape {
   width: auto;
   height: 100%;
-  /* Warm yellow, matching runebender-xilem's panel::GLYPH_PREVIEW
-     (MARK_YELLOW #ffdd33) — the bottom-left preview reads as the
-     "current glyph" highlight rather than another gray panel. */
-  color: #ffdd33;
+  /* Core palette yellow: the bottom-left preview reads as the current glyph
+     highlight rather than another gray panel. */
+  color: var(--rb-warning, #ffdc32);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -6745,7 +6748,7 @@ onBeforeUnmount(() => {
 }
 
 .glyph-name-field input {
-  color: var(--rb-accent, #66ee88);
+  color: var(--rb-accent, #18b86f);
   font-weight: 700;
 }
 
@@ -6764,7 +6767,7 @@ onBeforeUnmount(() => {
 }
 
 .metric-field:focus-within {
-  border-color: var(--rb-accent, #66ee88);
+  border-color: var(--rb-accent, #18b86f);
 }
 
 .metric-field input::placeholder {
@@ -6794,7 +6797,7 @@ onBeforeUnmount(() => {
   background: var(--rb-app-background, #101010);
   border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
   border-radius: 6px;
-  color: var(--rb-accent, #66ee88);
+  color: var(--rb-accent, #18b86f);
   font: 11px ui-monospace, monospace;
   white-space: nowrap;
 }
@@ -6809,7 +6812,7 @@ onBeforeUnmount(() => {
   padding: 6px 10px;
   box-sizing: border-box;
   background: color-mix(in srgb, var(--rb-panel-background, #1c1c1c) 94%, transparent);
-  border: var(--rb-stroke-width, 1px) solid var(--rb-accent, #66ee88);
+  border: var(--rb-stroke-width, 1px) solid var(--rb-accent, #18b86f);
   border-radius: 6px;
   color: var(--rb-overlay-text, #f0f0f0);
   font: 12px ui-sans-serif, system-ui, sans-serif;
@@ -6859,13 +6862,13 @@ onBeforeUnmount(() => {
 }
 
 .editor-bottom-preview-resizer:hover::after {
-  background: var(--rb-accent, #66ee88);
+  background: var(--rb-accent, #18b86f);
 }
 
 .editor-bottom-preview-glyph {
   width: 100%;
   height: 100%;
-  color: #ffdd33;
+  color: var(--rb-warning, #ffdc32);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -6888,20 +6891,24 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
   pointer-events: none;
 }
 
 .text-preview-glyphs {
   width: 100%;
   height: 100%;
-  color: #ffdd33;
+  color: var(--rb-warning, #ffdc32);
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
 }
 .text-preview-glyphs :deep(svg) {
-  width: 100%;
   height: 100%;
+  width: auto;
+  max-width: none;
+  flex: 0 0 auto;
   display: block;
 }
 .text-preview-glyphs :deep(path) {
@@ -6927,7 +6934,7 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 .runebender-canvas.drag-hover {
-  outline: 2px dashed var(--rb-accent, #66ee88);
+  outline: 2px dashed var(--rb-accent, #18b86f);
   outline-offset: -2px;
 }
 

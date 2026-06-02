@@ -74,8 +74,8 @@ function iconFor(id: ToolId): ToolbarIcon {
  *   PANEL_BACKGROUND               #1C1C1C
  *   TOOLBAR_BUTTON_OUTLINE / BASE_F #606060
  *   TOOLBAR_ICON_UNSELECTED         #606060
- *   TOOLBAR_ICON_HOVERED            #66EE88
- *   TOOLBAR_ICON_SELECTED           #66EE88
+ *   TOOLBAR_ICON_HOVERED            #18B86F
+ *   TOOLBAR_ICON_SELECTED           #18B86F
  *   TOOLBAR_ITEM_SIZE               48 px
  *   TOOLBAR_ITEM_SPACING            6 px
  *   TOOLBAR_PADDING                 6 px
@@ -112,11 +112,11 @@ function iconFor(id: ToolId): ToolbarIcon {
   padding: 0;
 }
 .tool-btn:hover {
-  color: var(--rb-accent, #66ee88);
+  color: var(--rb-accent, #18b86f);
 }
 .tool-btn.active {
-  color: var(--rb-accent, #66ee88);
-  border-color: var(--rb-accent, #66ee88);
+  color: var(--rb-accent, #18b86f);
+  border-color: var(--rb-accent, #18b86f);
 }
 
 .tool-icon {

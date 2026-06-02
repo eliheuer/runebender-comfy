@@ -75,8 +75,8 @@ const SHAPE_ICONS: Record<ShapeKind, string> = {
 
 .shape-btn:hover,
 .shape-btn.active {
-  color: var(--rb-accent, #66ee88);
-  border-color: var(--rb-accent, #66ee88);
+  color: var(--rb-accent, #18b86f);
+  border-color: var(--rb-accent, #18b86f);
 }
 
 </style>

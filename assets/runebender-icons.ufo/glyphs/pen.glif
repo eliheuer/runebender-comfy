@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <glyph name="pen" format="2">
 	<advance width="768"/>
+	<unicode hex="E00B"/>
 	<outline>
 		<contour>
 			<point x="268" y="0" type="curve" smooth="yes"/>
@@ -82,4 +83,10 @@
 			<point x="248" y="166"/>
 		</contour>
 	</outline>
+	<lib>
+		<dict>
+			<key>public.markColor</key>
+			<string>0.09,0.72,0.44,1</string>
+		</dict>
+	</lib>
 </glyph>

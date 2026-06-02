@@ -89,7 +89,6 @@ defineEmits<{
  * Colors from xilem theme.rs:
  *   PANEL_BACKGROUND               #1C1C1C
  *   PANEL_OUTLINE / BASE_F         #606060
- *   MARK_SELECTED_RING            #FFFFFF (active swatch ring)
  *   SECONDARY_UI_TEXT / BASE_G     #707070
  */
 
@@ -118,7 +117,7 @@ defineEmits<{
 }
 
 .header {
-  color: var(--rb-accent, #66ee88);
+  color: var(--rb-accent, #18b86f);
   font: 16px ui-sans-serif, system-ui, sans-serif;
   font-weight: 400;
   line-height: 16px;
@@ -162,13 +161,13 @@ defineEmits<{
   transition: transform 0.08s, background 0.08s;
 }
 .all-masters-toggle.active {
-  color: var(--rb-accent, #66ee88);
+  color: var(--rb-accent, #18b86f);
 }
 .all-masters-toggle.active .toggle-track {
-  border-color: var(--rb-accent, #66ee88);
+  border-color: var(--rb-accent, #18b86f);
 }
 .all-masters-toggle.active .toggle-thumb {
-  background: var(--rb-accent, #66ee88);
+  background: var(--rb-accent, #18b86f);
   transform: translateX(10px);
 }
 
@@ -196,10 +195,6 @@ defineEmits<{
   outline: var(--rb-stroke-width, 1px) solid var(--rb-mark-hover-ring, #bbbbbb);
   outline-offset: 0;
 }
-.swatch.active {
-  outline: 2px solid var(--rb-mark-selected-ring, #ffffff);
-  outline-offset: var(--rb-stroke-width, 1px);
-}
 .swatch:disabled {
   cursor: default;
 }
@@ -215,6 +210,6 @@ defineEmits<{
   stroke-width: 1.5;
 }
 .swatch.clear:hover:not(:disabled) svg {
-  stroke: var(--rb-accent, #66ee88);
+  stroke: var(--rb-accent, #18b86f);
 }
 </style>

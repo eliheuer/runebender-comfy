@@ -4,13 +4,13 @@
 // the shared JSON artifact.
 
 export const THEME_MARK_COLORS = [
-  { name: "red", color: "#ff4040", ufoRgba: "1,0.3,0.3,1" },
-  { name: "orange", color: "#ff9933", ufoRgba: "1,0.6,0.2,1" },
-  { name: "yellow", color: "#ffdd33", ufoRgba: "1,0.9,0.2,1" },
-  { name: "green", color: "#22bb77", ufoRgba: "0.3,0.7,0.3,1" },
-  { name: "blue", color: "#4488ff", ufoRgba: "0.1,0.3,0.8,1" },
-  { name: "purple", color: "#9955dd", ufoRgba: "0.6,0.3,0.9,1" },
-  { name: "pink", color: "#dd55aa", ufoRgba: "0.9,0.3,0.7,1" },
+  { name: "red", color: "#ff4a3d", ufoRgba: "1,0.29,0.24,1" },
+  { name: "orange", color: "#ff980f", ufoRgba: "1,0.6,0.06,1" },
+  { name: "yellow", color: "#ffdc32", ufoRgba: "1,0.86,0.2,1" },
+  { name: "green", color: "#18b86f", ufoRgba: "0.09,0.72,0.44,1" },
+  { name: "blue", color: "#456fff", ufoRgba: "0.27,0.44,1,1" },
+  { name: "purple", color: "#8c6cff", ufoRgba: "0.55,0.42,1,1" },
+  { name: "pink", color: "#e86ab8", ufoRgba: "0.91,0.42,0.72,1" },
 ] as const;
 
 export const THEME_CHROME_COLORS = {
@@ -27,12 +27,12 @@ export const THEME_CHROME_COLORS = {
   secondaryText: "#707070",
   mutedText: "#808080",
   subduedText: "#505050",
-  accent: "#66ee88",
+  accent: "#18b86f",
   glyphPreview: "#a0a0a0",
-  warning: "#ffdd33",
-  backgroundImageSelection: "#4488ff",
-  danger: "#ff3333",
-  dangerText: "#ff7777",
+  warning: "#ffdc32",
+  backgroundImageSelection: "#456fff",
+  danger: "#ff4a3d",
+  dangerText: "#ff4a3d",
   overlayText: "#f0f0f0",
   markSelectedRing: "#ffffff",
   markHoverRing: "#bbbbbb",

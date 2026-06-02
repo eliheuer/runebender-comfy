@@ -237,7 +237,7 @@ function blurOnEnter(event: KeyboardEvent) {
   background: #808080;
 }
 .quadrant-dot:hover {
-  border-color: var(--rb-accent, #66ee88);
+  border-color: var(--rb-accent, #18b86f);
 }
 
 .fields {
@@ -292,6 +292,6 @@ function blurOnEnter(event: KeyboardEvent) {
   color: var(--rb-subdued-text, #505050);
 }
 .coord-field:focus-within {
-  border-color: var(--rb-accent, #66ee88);
+  border-color: var(--rb-accent, #18b86f);
 }
 </style>

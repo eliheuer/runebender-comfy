@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <glyph name="hyperpen" format="2">
 	<advance width="768"/>
+	<unicode hex="E007"/>
 	<outline>
 		<contour>
 			<point x="330" y="348" type="curve" smooth="yes"/>
@@ -65,4 +66,10 @@
 			<point x="358" y="348"/>
 		</contour>
 	</outline>
+	<lib>
+		<dict>
+			<key>public.markColor</key>
+			<string>0.09,0.72,0.44,1</string>
+		</dict>
+	</lib>
 </glyph>

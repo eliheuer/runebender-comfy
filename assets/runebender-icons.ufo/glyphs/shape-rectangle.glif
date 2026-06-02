@@ -1,12 +1,19 @@
-<?xml version='1.0' encoding='UTF-8'?>
+<?xml version="1.0" encoding="UTF-8"?>
 <glyph name="shape-rectangle" format="2">
-  <advance width="768" />
-  <outline>
-    <contour>
-      <point x="128" y="128" type="line" />
-      <point x="640" y="128" type="line" />
-      <point x="640" y="640" type="line" />
-      <point x="128" y="640" type="line" />
-    </contour>
-  </outline>
+	<advance width="768"/>
+	<unicode hex="E013"/>
+	<outline>
+		<contour>
+			<point x="128" y="128" type="line"/>
+			<point x="640" y="128" type="line"/>
+			<point x="640" y="640" type="line"/>
+			<point x="128" y="640" type="line"/>
+		</contour>
+	</outline>
+	<lib>
+		<dict>
+			<key>public.markColor</key>
+			<string>1,0.29,0.24,1</string>
+		</dict>
+	</lib>
 </glyph>

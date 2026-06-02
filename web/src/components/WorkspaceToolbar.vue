@@ -54,7 +54,7 @@ const emit = defineEmits<{
 }
 
 .workspace-btn:hover {
-  color: var(--rb-accent, #66ee88);
+  color: var(--rb-accent, #18b86f);
 }
 
 </style>

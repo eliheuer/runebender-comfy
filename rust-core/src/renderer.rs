@@ -38,17 +38,23 @@ const PREVIEW_FILL: Srgb = srgb(theme::path::PREVIEW_FILL);
 const COMPONENT_FILL: Srgb = srgb(theme::component::FILL);
 const COMPONENT_SELECTED_FILL: Srgb = srgb(theme::component::SELECTED_FILL);
 const HANDLE_LINE: Srgb = srgb(theme::handle::LINE);
-const POINT_SMOOTH_INNER: Srgb = srgb(theme::point::SMOOTH_INNER);
-const POINT_SMOOTH_OUTER: Srgb = srgb(theme::point::SMOOTH_OUTER);
-const POINT_CORNER_INNER: Srgb = srgb(theme::point::CORNER_INNER);
-const POINT_CORNER_OUTER: Srgb = srgb(theme::point::CORNER_OUTER);
-const POINT_OFFCURVE_INNER: Srgb = srgb(theme::point::OFFCURVE_INNER);
-const POINT_OFFCURVE_OUTER: Srgb = srgb(theme::point::OFFCURVE_OUTER);
-const POINT_HYPER_INNER: Srgb = srgb(theme::point::HYPER_INNER);
-const POINT_HYPER_OUTER: Srgb = srgb(theme::point::HYPER_OUTER);
-const POINT_SELECTED_INNER: Srgb = srgb(theme::point::SELECTED_INNER);
-const POINT_SELECTED_OUTER: Srgb = srgb(theme::point::SELECTED_OUTER);
-const START_NODE_OUTER: Srgb = srgb(theme::point::START_NODE_OUTER);
+const POINT_INNER: Srgb = AlphaColor::from_rgba8(0x18, 0x18, 0x18, 0xff);
+const POINT_MARK_RED: Srgb = AlphaColor::from_rgba8(0xff, 0x4a, 0x3d, 0xff);
+const POINT_MARK_GREEN: Srgb = AlphaColor::from_rgba8(0x18, 0xb8, 0x6f, 0xff);
+const POINT_MARK_PURPLE: Srgb = AlphaColor::from_rgba8(0x8c, 0x6c, 0xff, 0xff);
+const POINT_MARK_YELLOW: Srgb = AlphaColor::from_rgba8(0xff, 0xdc, 0x32, 0xff);
+const POINT_MARK_ORANGE: Srgb = AlphaColor::from_rgba8(0xff, 0x98, 0x0f, 0xff);
+const POINT_SMOOTH_INNER: Srgb = POINT_INNER;
+const POINT_SMOOTH_OUTER: Srgb = POINT_MARK_GREEN;
+const POINT_CORNER_INNER: Srgb = POINT_INNER;
+const POINT_CORNER_OUTER: Srgb = POINT_MARK_ORANGE;
+const POINT_OFFCURVE_INNER: Srgb = POINT_INNER;
+const POINT_OFFCURVE_OUTER: Srgb = POINT_MARK_PURPLE;
+const POINT_HYPER_INNER: Srgb = POINT_INNER;
+const POINT_HYPER_OUTER: Srgb = POINT_MARK_PURPLE;
+const POINT_SELECTED_INNER: Srgb = POINT_MARK_YELLOW;
+const POINT_SELECTED_OUTER: Srgb = POINT_MARK_ORANGE;
+const START_NODE_OUTER: Srgb = POINT_MARK_ORANGE;
 const MARQUEE_FILL: Srgb = srgb(theme::selection::RECT_FILL);
 const MARQUEE_STROKE: Srgb = srgb(theme::selection::RECT_STROKE);
 const TOOL_PREVIEW: Srgb = srgb(theme::segment::HOVER);
@@ -204,22 +210,25 @@ const SMOOTH_POINT_RADIUS_PX: f64 = 4.5;
 const SMOOTH_POINT_SELECTED_RADIUS_PX: f64 = 5.5;
 const CORNER_POINT_HALF_PX: f64 = 3.5;
 const CORNER_POINT_SELECTED_HALF_PX: f64 = 4.5;
-const OFFCURVE_POINT_RADIUS_PX: f64 = 3.0;
-const OFFCURVE_POINT_SELECTED_RADIUS_PX: f64 = 4.0;
+const OFFCURVE_POINT_RADIUS_PX: f64 = SMOOTH_POINT_RADIUS_PX;
+const OFFCURVE_POINT_SELECTED_RADIUS_PX: f64 = SMOOTH_POINT_SELECTED_RADIUS_PX;
 const HYPER_POINT_RADIUS_PX: f64 = 4.0;
 const HYPER_POINT_SELECTED_RADIUS_PX: f64 = 5.0;
 const START_NODE_HALF_PX: f64 = 5.5;
 const START_NODE_SELECTED_HALF_PX: f64 = 6.5;
 const START_NODE_OFFSET_PX: f64 = 8.0;
-const POINT_OUTLINE_PX: f64 = 1.0 * STROKE_SCALE;
+const POINT_OUTLINE_PX: f64 = 1.25 * STROKE_SCALE;
 const PATH_STROKE_PX: f64 = 1.0 * STROKE_SCALE;
 const COMPONENT_SELECTION_STROKE_PX: f64 = 2.0;
-const HANDLE_LINE_PX: f64 = 1.0 * STROKE_SCALE;
+const HANDLE_LINE_PX: f64 = 1.25 * STROKE_SCALE;
 const MARQUEE_STROKE_PX: f64 = 1.0 * STROKE_SCALE;
 const METRIC_LINE_PX: f64 = 1.0 * STROKE_SCALE;
 const TOOL_PREVIEW_LINE_PX: f64 = 1.0 * STROKE_SCALE;
 const SEGMENT_HOVER_LINE_PX: f64 = 3.0;
 const TOOL_PREVIEW_DOT_RADIUS_PX: f64 = 3.0;
+const KNIFE_PREVIEW_DASH: [f64; 2] = [4.0, 4.0];
+const KNIFE_ENDPOINT_RADIUS_PX: f64 = TOOL_PREVIEW_DOT_RADIUS_PX * 1.5;
+const KNIFE_HIT_RADIUS_PX: f64 = TOOL_PREVIEW_DOT_RADIUS_PX * 2.0;
 const TEXT_CURSOR_LINE_PX: f64 = 1.5;
 const TEXT_CURSOR_TRIANGLE_WIDTH_PX: f64 = 24.0;
 const TEXT_CURSOR_TRIANGLE_HEIGHT_PX: f64 = 16.0;
@@ -227,7 +236,7 @@ const TEXT_METRIC_CROSS_SIZE: f64 = 24.0;
 const DESIGN_GRID_MID_MIN_ZOOM: f64 = 0.8;
 const DESIGN_GRID_MID_FINE: f64 = 8.0;
 const DESIGN_GRID_MID_COARSE_N: u32 = 4;
-const DESIGN_GRID_CLOSE_MIN_ZOOM: f64 = 4.0;
+const DESIGN_GRID_CLOSE_MIN_ZOOM: f64 = 8.0;
 const DESIGN_GRID_CLOSE_FINE: f64 = 2.0;
 const DESIGN_GRID_CLOSE_COARSE_N: u32 = 4;
 const DESIGN_GRID_FINE_LINE_PX: f64 = 0.5;
@@ -377,16 +386,16 @@ impl Renderer {
     }
 
     fn point_scale(&self, zoom: f64) -> f64 {
-        // xilem grows point affordances slightly at high zoom. In comfy,
-        // viewport zoom is measured in backing pixels, so convert it back
-        // to CSS/logical pixels before applying the same curve.
-        const THRESHOLD: f64 = 4.0;
+        // Keep point affordances readable at close zoom. Viewport zoom is
+        // measured in backing pixels, so convert it back to CSS/logical
+        // pixels before applying the ramp.
+        const THRESHOLD: f64 = 1.5;
+        const MAX_ZOOM_SCALE: f64 = 1.75;
         let logical_zoom = zoom / self.device_scale.max(1.0);
-        let zoom_scale = if logical_zoom <= THRESHOLD {
-            1.0
-        } else {
-            1.0 + (logical_zoom / THRESHOLD).ln() * 0.5
-        };
+        let zoom_scale = (logical_zoom / THRESHOLD)
+            .max(1.0)
+            .sqrt()
+            .min(MAX_ZOOM_SCALE);
         self.device_scale * zoom_scale
     }
 
@@ -427,7 +436,7 @@ impl Renderer {
         let has_text_session = state.has_text_session;
 
         if !preview_mode {
-            self.draw_design_grid(state, view, active_sort_origin.x);
+            self.draw_design_grid(state, view, active_sort_origin.x, active_sort_origin.y);
 
             // Metric guides go in first so the glyph fill paints on top.
             if !has_text_session {
@@ -862,9 +871,9 @@ impl Renderer {
     }
 
     /// Draw an outlined node at every PathPoint. Shape + color
-    /// depend on the point type, matching runebender-xilem:
-    ///   - smooth on-curve  → blue circle
-    ///   - corner on-curve  → green square
+    /// depend on the point type, using the same mark palette as the glyph grid:
+    ///   - smooth on-curve  → green circle
+    ///   - corner on-curve  → orange square
     ///   - off-curve        → purple circle
     ///   - any selected     → yellow inner + orange outline
     fn draw_points(
@@ -1081,9 +1090,17 @@ impl Renderer {
     /// The mid level shows 8-unit spacing with 32-unit coarse lines;
     /// the close level adds a 2-unit grid with 8-unit coarse lines.
     /// Match xilem's calibration so the coarser grid remains visible
-    /// near the default editing zoom, while the dense 2-unit grid still
-    /// waits until the user is meaningfully zoomed in.
-    fn draw_design_grid(&mut self, state: &EditorState, view: Affine, origin_x: f64) {
+    /// near the default editing zoom, while the dense 2-unit grid waits
+    /// until the user is very close in. Anchor both axes to the active
+    /// sort origin so the primary horizontal gridline lands on the
+    /// font baseline in text mode.
+    fn draw_design_grid(
+        &mut self,
+        state: &EditorState,
+        view: Affine,
+        origin_x: f64,
+        origin_y: f64,
+    ) {
         let zoom = state.viewport.zoom;
         if zoom < DESIGN_GRID_MID_MIN_ZOOM {
             return;
@@ -1107,6 +1124,7 @@ impl Renderer {
             min_y,
             max_y,
             origin_x,
+            origin_y,
         );
 
         if zoom >= DESIGN_GRID_CLOSE_MIN_ZOOM {
@@ -1119,6 +1137,7 @@ impl Renderer {
                 min_y,
                 max_y,
                 origin_x,
+                origin_y,
             );
         }
     }
@@ -1133,13 +1152,14 @@ impl Renderer {
         min_y: f64,
         max_y: f64,
         origin_x: f64,
+        origin_y: f64,
     ) {
         let fine_stroke = Stroke::new(DESIGN_GRID_FINE_LINE_PX);
         let coarse_stroke = Stroke::new(DESIGN_GRID_COARSE_LINE_PX);
         let start_x = ((min_x - origin_x) / spacing).floor() as i64;
         let end_x = ((max_x - origin_x) / spacing).ceil() as i64;
-        let start_y = (min_y / spacing).floor() as i64;
-        let end_y = (max_y / spacing).ceil() as i64;
+        let start_y = ((min_y - origin_y) / spacing).floor() as i64;
+        let end_y = ((max_y - origin_y) / spacing).ceil() as i64;
 
         for ix in start_x..=end_x {
             let x = origin_x + ix as f64 * spacing;
@@ -1156,7 +1176,7 @@ impl Renderer {
         }
 
         for iy in start_y..=end_y {
-            let y = iy as f64 * spacing;
+            let y = origin_y + iy as f64 * spacing;
             let is_coarse = coarse_n > 0 && (iy.unsigned_abs() % coarse_n as u64 == 0);
             let (stroke, color) = if is_coarse {
                 (&coarse_stroke, self.theme.design_grid_coarse)
@@ -1332,7 +1352,8 @@ impl Renderer {
     }
 
     fn draw_knife_preview(&mut self, preview: &KnifePreview) {
-        let stroke = Stroke::new(TOOL_PREVIEW_LINE_PX);
+        let stroke =
+            Stroke::new(TOOL_PREVIEW_LINE_PX).with_dashes(0.0, KNIFE_PREVIEW_DASH.to_vec());
         self.scene.stroke(
             &stroke,
             Affine::IDENTITY,
@@ -1340,28 +1361,22 @@ impl Renderer {
             None,
             &preview.line,
         );
+
+        for point in [preview.line.p0, preview.line.p1] {
+            let dot = Circle::new(point, KNIFE_ENDPOINT_RADIUS_PX);
+            self.scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                POINT_MARK_ORANGE,
+                None,
+                &dot,
+            );
+        }
+
         for point in &preview.intersections {
-            let size = TOOL_PREVIEW_DOT_RADIUS_PX * 1.8;
-            self.scene.stroke(
-                &stroke,
-                Affine::IDENTITY,
-                self.theme.tool_preview,
-                None,
-                &Line::new(
-                    (point.x - size, point.y - size),
-                    (point.x + size, point.y + size),
-                ),
-            );
-            self.scene.stroke(
-                &stroke,
-                Affine::IDENTITY,
-                self.theme.tool_preview,
-                None,
-                &Line::new(
-                    (point.x - size, point.y + size),
-                    (point.x + size, point.y - size),
-                ),
-            );
+            let dot = Circle::new(*point, KNIFE_HIT_RADIUS_PX);
+            self.scene
+                .fill(Fill::NonZero, Affine::IDENTITY, POINT_MARK_RED, None, &dot);
         }
     }
 

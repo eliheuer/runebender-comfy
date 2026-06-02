@@ -629,13 +629,13 @@ fn anatomy_svg_from_bezpath_and_contours(
     let height = (y1 - y0).max(1.0);
     let side = width.max(height);
     let outline_stroke = 1.5;
-    let handle_stroke = 1.5;
-    let point_outline = 1.5;
+    let handle_stroke = 1.875;
+    let point_outline = 1.875;
     // Match the edit renderer's screen-space marker proportions, then
     // convert them into this SVG viewBox's design-space units.
     let unit_per_px = side / 300.0;
     let smooth_radius = (4.5 * unit_per_px).clamp(2.0, 8.0);
-    let offcurve_radius = (3.0 * unit_per_px).clamp(1.5, 6.0);
+    let offcurve_radius = smooth_radius;
     let corner_half = (3.5 * unit_per_px).clamp(2.0, 7.0);
     // The anatomy panel is a small, read-only version of the edit view.
     // Its fit must include off-curve handles and point marker geometry,
@@ -1101,19 +1101,20 @@ impl GlyphEditor {
             return Ok(String::new());
         };
 
-        // Match xilem's MultiGlyphWidget::with_fit_to_bounds: the combined
-        // outline bounds are scaled into 80% of the panel, leaving equal
-        // visual margin around the rendered text strip.
-        let margin_x = bbox.width().max(1.0) * 0.125;
-        let margin_y = bbox.height().max(1.0) * 0.125;
+        // Keep a small amount of visual margin in font units. The Vue
+        // preview strip scales this SVG by height and clips horizontal
+        // overflow, so long strings can still use the panel height instead
+        // of shrinking to fit the full run into one viewport.
+        let margin_x = bbox.width().max(1.0) * 0.06;
+        let margin_y = bbox.height().max(1.0) * 0.06;
         let view_x = bbox.x0 - margin_x;
         let view_y = -(bbox.y1 + margin_y);
         let view_width = (bbox.width() + margin_x * 2.0).max(1.0);
         let view_height = (bbox.height() + margin_y * 2.0).max(1.0);
 
         let mut svg = format!(
-            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="{} {} {} {}" preserveAspectRatio="xMidYMid meet">"#,
-            view_x, view_y, view_width, view_height,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}" viewBox="{} {} {} {}" preserveAspectRatio="xMidYMid meet">"#,
+            view_width, view_height, view_x, view_y, view_width, view_height,
         );
         for path in paths {
             write!(
@@ -1996,17 +1997,17 @@ fn write_point(
     let (fill, stroke) = if matches!(pt.typ, norad::PointType::OffCurve) {
         (
             "var(--rb-canvas-point-offcurve-inner, #181818)",
-            "var(--rb-canvas-point-offcurve-outer, #cc66ff)",
+            "var(--rb-canvas-point-offcurve-outer, #8c6cff)",
         )
     } else if pt.smooth {
         (
             "var(--rb-canvas-point-smooth-inner, #181818)",
-            "var(--rb-canvas-point-smooth-outer, #4088ff)",
+            "var(--rb-canvas-point-smooth-outer, #18b86f)",
         )
     } else {
         (
             "var(--rb-canvas-point-corner-inner, #181818)",
-            "var(--rb-canvas-point-corner-outer, #66ee88)",
+            "var(--rb-canvas-point-corner-outer, #ff980f)",
         )
     };
 

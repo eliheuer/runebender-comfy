@@ -64,12 +64,12 @@ button {
   cursor: pointer;
 }
 button:hover {
-  color: var(--rb-accent, #66ee88);
-  border-color: var(--rb-accent, #66ee88);
+  color: var(--rb-accent, #18b86f);
+  border-color: var(--rb-accent, #18b86f);
 }
 code {
   font: 12px ui-monospace, monospace;
-  color: var(--rb-accent, #66ee88);
+  color: var(--rb-accent, #18b86f);
   background: color-mix(in srgb, var(--rb-panel-background, #1c1c1c) 70%, transparent);
   padding: 1px 5px;
   border-radius: 3px;

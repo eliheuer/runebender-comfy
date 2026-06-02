@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <glyph name="duplicate" format="2">
 	<advance width="768"/>
+	<unicode hex="E001"/>
 	<outline>
 		<contour>
 			<point x="451.59" y="550.53" type="line"/>
@@ -61,4 +62,10 @@
 			<point x="594.61" y="78.37"/>
 		</contour>
 	</outline>
+	<lib>
+		<dict>
+			<key>public.markColor</key>
+			<string>1,0.29,0.24,1</string>
+		</dict>
+	</lib>
 </glyph>

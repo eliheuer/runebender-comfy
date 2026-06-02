@@ -24,6 +24,7 @@ if ! "$PYTHON" -c 'import ufoLib2, fontTools' >/dev/null 2>&1; then
 fi
 
 echo "==> Rebuilding generated toolbar icons from assets/runebender-icons.ufo"
+"$PYTHON" scripts/assign_icon_codepoints.py
 "$PYTHON" scripts/build_toolbar_icons.py
 
 echo "==> Bumping web bundle fingerprint"

@@ -231,6 +231,25 @@ class WebBundleTests(unittest.TestCase):
         self.assertFalse(any(" @ file:" in line for line in requirement_lines))
         self.assertFalse(any("git+" in line and "git+https://" not in line for line in requirement_lines))
 
+    def test_runebender_icons_have_stable_pua_codepoints(self) -> None:
+        manifest = json.loads(
+            (ROOT / "assets" / "runebender-icons.codepoints.json").read_text(encoding="utf-8")
+        )
+        contents = (ROOT / "assets" / "runebender-icons.ufo" / "glyphs" / "contents.plist").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertEqual(len(manifest), 26)
+        seen: set[int] = set()
+        for glyph_name, value in manifest.items():
+            codepoint = int(value, 16)
+            with self.subTest(glyph_name=glyph_name):
+                self.assertGreaterEqual(codepoint, 0xE000)
+                self.assertLessEqual(codepoint, 0xF8FF)
+                self.assertNotIn(codepoint, seen)
+                self.assertIn(f"<key>{glyph_name}</key>", contents)
+                seen.add(codepoint)
+
     def test_readme_documents_publish_readiness_gate(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
 

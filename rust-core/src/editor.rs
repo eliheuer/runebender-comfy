@@ -2155,29 +2155,49 @@ fn maintain_smooth_handle_tangents(
         if let Some(on_index) = previous_index(index, len, closed)
             && matches!(points[on_index].typ, PointType::OnCurve { smooth: true })
             && let Some(opposite_index) = previous_index(on_index, len, closed)
-            && points[opposite_index].is_off_curve()
             && !selection.contains(&points[opposite_index].id)
-            && let Some(point) = mirrored_smooth_handle(
-                points[index].point,
-                points[on_index].point,
-                points[opposite_index].point,
-            )
         {
-            updates.push((opposite_index, point));
+            if points[opposite_index].is_off_curve() {
+                if let Some(point) = mirrored_smooth_handle(
+                    points[index].point,
+                    points[on_index].point,
+                    points[opposite_index].point,
+                ) {
+                    updates.push((opposite_index, point));
+                }
+            } else if points[opposite_index].is_on_curve()
+                && let Some(point) = projected_smooth_handle(
+                    points[index].point,
+                    points[on_index].point,
+                    points[opposite_index].point,
+                )
+            {
+                updates.push((index, point));
+            }
         }
 
         if let Some(on_index) = next_index(index, len, closed)
             && matches!(points[on_index].typ, PointType::OnCurve { smooth: true })
             && let Some(opposite_index) = next_index(on_index, len, closed)
-            && points[opposite_index].is_off_curve()
             && !selection.contains(&points[opposite_index].id)
-            && let Some(point) = mirrored_smooth_handle(
-                points[index].point,
-                points[on_index].point,
-                points[opposite_index].point,
-            )
         {
-            updates.push((opposite_index, point));
+            if points[opposite_index].is_off_curve() {
+                if let Some(point) = mirrored_smooth_handle(
+                    points[index].point,
+                    points[on_index].point,
+                    points[opposite_index].point,
+                ) {
+                    updates.push((opposite_index, point));
+                }
+            } else if points[opposite_index].is_on_curve()
+                && let Some(point) = projected_smooth_handle(
+                    points[index].point,
+                    points[on_index].point,
+                    points[opposite_index].point,
+                )
+            {
+                updates.push((index, point));
+            }
         }
     }
 
@@ -2199,15 +2219,54 @@ fn mirrored_smooth_handle(moved: Point, anchor: Point, _opposite: Point) -> Opti
     Some(snap_point_to_grid(anchor - v))
 }
 
+fn projected_smooth_handle(moved: Point, anchor: Point, line_point: Point) -> Option<Point> {
+    let tangent = anchor - line_point;
+    let tangent_len = tangent.hypot();
+    if tangent_len < 1e-9 {
+        return None;
+    }
+    let unit = tangent / tangent_len;
+    let distance = ((moved - anchor).x * unit.x + (moved - anchor).y * unit.y).abs();
+    let projected = anchor + unit * distance;
+    if tangent.x.abs() < 1e-9 || tangent.y.abs() < 1e-9 {
+        Some(snap_point_to_grid(projected))
+    } else {
+        Some(projected)
+    }
+}
+
 fn translate_in_path_with_handles(path: &mut Path, selection: &Selection, delta: Vec2) {
     let ids = selected_and_adjacent_offcurve_ids(path, selection);
-    for point in path_points_mut(path) {
-        if ids.contains(&point.id) {
-            point.point += delta;
+    match path {
+        Path::Cubic(cubic) => {
+            let closed = cubic.closed;
+            let points = cubic.points.make_mut();
+            let mut changed = false;
+            for point in points.iter_mut() {
+                if ids.contains(&point.id) {
+                    point.point += delta;
+                    changed = true;
+                }
+            }
+            if changed {
+                maintain_smooth_handle_tangents(points, selection, closed);
+            }
         }
-    }
-    if let Path::Hyper(hyper) = path {
-        hyper.after_change();
+        Path::Quadratic(_) => {
+            for point in path_points_mut(path) {
+                if ids.contains(&point.id) {
+                    point.point += delta;
+                }
+            }
+        }
+        Path::Hyper(hyper) => {
+            for point in hyper.points.make_mut() {
+                if ids.contains(&point.id) {
+                    point.point += delta;
+                }
+            }
+            hyper.after_change();
+        }
     }
 }
 
@@ -3111,6 +3170,50 @@ mod tests {
         let points = state.paths[0].points().to_vec();
         assert_eq!(points[0].point, Point::new(10.0, 10.0));
         assert_eq!(points[2].point, Point::new(10.0, -10.0));
+    }
+
+    #[test]
+    fn moving_handle_after_smooth_line_endpoint_stays_tangent_to_line() {
+        let mut state = EditorState::default();
+        let moved = off_curve(Point::new(20.0, 0.0));
+        let moved_id = moved.id;
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![
+                on_curve(Point::new(0.0, 0.0), false),
+                on_curve(Point::new(10.0, 0.0), true),
+                moved,
+                on_curve(Point::new(30.0, -20.0), false),
+            ]),
+            false,
+        )));
+        state.selection.insert(moved_id);
+
+        state.translate_selection(Vec2::new(0.0, -10.0));
+
+        let points = state.paths[0].points().to_vec();
+        assert_eq!(points[2].point, Point::new(20.0, 0.0));
+    }
+
+    #[test]
+    fn moving_handle_before_smooth_line_endpoint_stays_tangent_to_line() {
+        let mut state = EditorState::default();
+        let moved = off_curve(Point::new(0.0, 0.0));
+        let moved_id = moved.id;
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![
+                on_curve(Point::new(-20.0, -20.0), false),
+                moved,
+                on_curve(Point::new(10.0, 0.0), true),
+                on_curve(Point::new(20.0, 0.0), false),
+            ]),
+            false,
+        )));
+        state.selection.insert(moved_id);
+
+        state.translate_selection(Vec2::new(0.0, 10.0));
+
+        let points = state.paths[0].points().to_vec();
+        assert_eq!(points[1].point, Point::new(0.0, 0.0));
     }
 
     #[test]

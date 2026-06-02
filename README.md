@@ -110,10 +110,10 @@ need to know about either upstream namespace.
 | `--rb-subdued-text` | `color-mix(--rb-primary-text 35%)` | — |
 | `--rb-overlay-text` | `--content-fg` | `#d0d0d0` |
 | `--rb-glyph-preview` | `--fg-color` | `#a0a0a0` |
-| `--rb-accent` | `--p-primary-color` | `#66ee88` |
-| `--rb-warning` | (static; no ComfyUI analog) | `#ffdd33` |
-| `--rb-danger` | `--p-red-500` | `#f43f5e` |
-| `--rb-danger-text` | `--p-button-text-danger-color` | `#ffe0e0` |
+| `--rb-accent` | core green | `#18b86f` |
+| `--rb-warning` | core yellow | `#ffdc32` |
+| `--rb-danger` | core red | `#ff4a3d` |
+| `--rb-danger-text` | core red | `#ff4a3d` |
 | `--rb-mark-hover-ring` | derived from `--rb-accent` | — |
 | `--rb-mark-selected-ring` | `--rb-accent` | — |
 | `--rb-background-image-selection` | `--rb-accent` | — |
@@ -133,7 +133,7 @@ need to know about either upstream namespace.
 
 `themes/runebender-dark.json` is a ComfyUI color palette that recreates
 the runebender-xilem reference palette (`#101010` app background,
-`#1c1c1c` panels, `#606060` outlines, `#909090` text, `#66ee88`
+`#1c1c1c` panels, `#606060` outlines, `#909090` text, `#18b86f`
 accent). Importing it gives you a ComfyUI theme that drives the
 editor's `--rb-*` palette to match what runebender-xilem looks like
 standalone — useful while doing a UI/UX pass on the editor without
@@ -272,6 +272,18 @@ pnpm dev
 
 Opens at `http://localhost:5173/` — the editor runs standalone in
 Chrome/Edge/Safari (needs WebGPU).
+
+## Runebender Icons
+
+The toolbar icons live in `assets/runebender-icons.ufo`. The app reads
+them by glyph name after `scripts/build_toolbar_icons.py` exports SVG
+geometry, but the UFO also assigns stable Unicode Private Use Area
+values so the icons can be used in DrawBot specimens and text previews.
+
+The PUA contract is tracked in
+`assets/runebender-icons.codepoints.json`. Current icons use `U+E000`
+upward. Run `./rebuild-icons.sh` after editing the UFO; it reassigns
+the codepoints before rebuilding the generated toolbar assets.
 
 ## Supply-chain checks
 

@@ -108,7 +108,7 @@ defineEmits<{
  *   PANEL_OUTLINE / BASE_F #606060
  *   PRIMARY_UI_TEXT / BASE_I #909090
  *   SECONDARY_UI_TEXT / BASE_G #707070
- *   GRID_CELL_SELECTED_OUTLINE / TOOLBAR_ICON_HOVERED #66EE88
+ *   GRID_CELL_SELECTED_OUTLINE / TOOLBAR_ICON_HOVERED #18B86F
  *   MARK_YELLOW (Not saved) #FFDD33
  *
  * Sizes:
@@ -151,7 +151,7 @@ defineEmits<{
   min-width: 0;
 }
 .save-status {
-  color: var(--rb-warning, #ffdd33);
+  color: var(--rb-warning, #ffdc32);
   font: 16px ui-sans-serif, system-ui, sans-serif;
   display: flex;
   flex-shrink: 1;
@@ -160,7 +160,7 @@ defineEmits<{
   min-width: 0;
 }
 .save-status.saved {
-  color: var(--rb-accent, #66ee88);
+  color: var(--rb-accent, #18b86f);
 }
 .save-state {
   flex: 0 0 auto;
@@ -192,11 +192,11 @@ defineEmits<{
   justify-content: center;
 }
 .master-btn:hover {
-  color: var(--rb-accent, #66ee88);
+  color: var(--rb-accent, #18b86f);
 }
 .master-btn.active {
-  color: var(--rb-accent, #66ee88);
-  border-color: var(--rb-accent, #66ee88);
+  color: var(--rb-accent, #18b86f);
+  border-color: var(--rb-accent, #18b86f);
 }
 
 .master-preview {

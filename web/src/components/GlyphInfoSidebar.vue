@@ -88,7 +88,7 @@ function displayGroup(group: string | undefined, prefix: string): string {
  *   PANEL_OUTLINE / BASE_F         #606060
  *   PRIMARY_UI_TEXT / BASE_I       #909090
  *   SECONDARY_UI_TEXT / BASE_G     #707070
- *   GRID_CELL_SELECTED_OUTLINE     #66EE88 (used for labels)
+ *   GRID_CELL_SELECTED_OUTLINE     #18B86F (used for labels)
  *
  * Width matches xilem's GLYPH_INFO_PANEL_WIDTH (220px).
  */
@@ -119,7 +119,7 @@ function displayGroup(group: string | undefined, prefix: string): string {
 }
 
 .label {
-  color: var(--rb-accent, #66ee88);
+  color: var(--rb-accent, #18b86f);
   font: 16px ui-sans-serif, system-ui, sans-serif;
 }
 .value {

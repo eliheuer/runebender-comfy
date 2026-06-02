@@ -21,8 +21,8 @@ const directions = [
 ] as const;
 
 const DIRECTION_ICONS: Record<TextDirection, string> = {
-  ltr: "text-rtl",
-  rtl: "text-ltr",
+  ltr: "text-ltr",
+  rtl: "text-rtl",
 };
 </script>
 
@@ -79,8 +79,8 @@ const DIRECTION_ICONS: Record<TextDirection, string> = {
 
 .direction-btn:hover,
 .direction-btn.active {
-  color: var(--rb-accent, #66ee88);
-  border-color: var(--rb-accent, #66ee88);
+  color: var(--rb-accent, #18b86f);
+  border-color: var(--rb-accent, #18b86f);
 }
 
 </style>

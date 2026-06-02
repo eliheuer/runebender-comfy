@@ -14,6 +14,7 @@ Run with an interpreter that has fontTools + ufoLib2, e.g.:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import ufoLib2
@@ -88,6 +89,14 @@ VIRTUA_COPIES = {
 }
 
 
+def load_icon_codepoints(repo_root: Path) -> dict[str, int]:
+    path = repo_root / "assets" / "runebender-icons.codepoints.json"
+    return {
+        name: int(str(value).removeprefix("U+"), 16)
+        for name, value in json.loads(path.read_text(encoding="utf-8")).items()
+    }
+
+
 def replace_glyph(font: ufoLib2.Font, name: str):
     if name in font:
         del font[name]
@@ -98,6 +107,7 @@ def main() -> None:
     repo_root = Path(__file__).resolve().parent.parent
     icon_ufo = repo_root / "assets" / "runebender-icons.ufo"
     virtua_ufo = repo_root / "web" / "assets" / "test-fonts" / "VirtuaGrotesk-Regular.ufo"
+    icon_codepoints = load_icon_codepoints(repo_root)
 
     font = ufoLib2.Font.open(icon_ufo)
     virtua = ufoLib2.Font.open(virtua_ufo)
@@ -105,11 +115,12 @@ def main() -> None:
     for target_name, source_name in VIRTUA_COPIES.items():
         glyph = replace_glyph(font, target_name)
         glyph.copyDataFromGlyph(virtua[source_name])
-        glyph.unicodes = []
+        glyph.unicodes = [icon_codepoints[target_name]]
         glyph.lib[UFO_TOOLS_KEY] = "fill"
 
     for name, path_data in STROKE_ICONS.items():
         glyph = replace_glyph(font, name)
+        glyph.unicodes = [icon_codepoints[name]]
         parse_path(path_data, TransformPen(glyph.getPen(), SCREEN_TO_UFO))
         glyph.width = 24
         glyph.lib[UFO_TOOLS_KEY] = "stroke"

@@ -155,8 +155,8 @@ function runAction(
   justify-content: center;
 }
 .action-btn:not(.disabled):hover {
-  color: var(--rb-accent, #66ee88);
-  border-color: var(--rb-accent, #66ee88);
+  color: var(--rb-accent, #18b86f);
+  border-color: var(--rb-accent, #18b86f);
 }
 .action-btn.disabled {
   color: var(--rb-glyph-preview, #808080);

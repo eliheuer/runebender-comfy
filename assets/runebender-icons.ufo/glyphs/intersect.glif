@@ -1,18 +1,25 @@
-<?xml version='1.0' encoding='UTF-8'?>
+<?xml version="1.0" encoding="UTF-8"?>
 <glyph name="intersect" format="2">
-  <advance width="768" />
-  <outline>
-    <contour>
-      <point x="224" y="224" type="line" />
-      <point x="544" y="224" type="line" />
-      <point x="544" y="544" type="line" />
-      <point x="224" y="544" type="line" />
-    </contour>
-    <contour>
-      <point x="344" y="224" type="line" />
-      <point x="544" y="224" type="line" />
-      <point x="544" y="544" type="line" />
-      <point x="344" y="544" type="line" />
-    </contour>
-  </outline>
+	<advance width="768"/>
+	<unicode hex="E008"/>
+	<outline>
+		<contour>
+			<point x="224" y="224" type="line"/>
+			<point x="544" y="224" type="line"/>
+			<point x="544" y="544" type="line"/>
+			<point x="224" y="544" type="line"/>
+		</contour>
+		<contour>
+			<point x="344" y="224" type="line"/>
+			<point x="544" y="224" type="line"/>
+			<point x="544" y="544" type="line"/>
+			<point x="344" y="544" type="line"/>
+		</contour>
+	</outline>
+	<lib>
+		<dict>
+			<key>public.markColor</key>
+			<string>0.09,0.72,0.44,1</string>
+		</dict>
+	</lib>
 </glyph>

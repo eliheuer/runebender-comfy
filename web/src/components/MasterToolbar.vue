@@ -72,12 +72,12 @@ function labelFor(name: string): string {
 }
 
 .master-btn:hover {
-  color: var(--rb-accent, #66ee88);
+  color: var(--rb-accent, #18b86f);
 }
 
 .master-btn.active {
-  color: var(--rb-accent, #66ee88);
-  border-color: var(--rb-accent, #66ee88);
+  color: var(--rb-accent, #18b86f);
+  border-color: var(--rb-accent, #18b86f);
 }
 
 .master-preview {
