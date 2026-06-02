@@ -3,7 +3,7 @@
 // Renderer reads from this; mouse/keyboard handlers mutate it. Lives
 // outside the wasm-bindgen surface so it's testable on native too.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use kurbo::{Affine, BezPath, Line, PathEl, Point, Rect, Shape, Vec2};
 use kurbo_012::{BezPath as BezPath012, PathEl as PathEl012, Point as Point012};
@@ -19,6 +19,8 @@ use crate::path::{
     SegmentInfo,
 };
 use crate::text::TextBuffer;
+
+const DESIGN_GRID_SPACING: f64 = 2.0;
 
 // ============================================================================
 // FontMetrics
@@ -684,6 +686,7 @@ impl EditorState {
         for path in &mut self.paths {
             translate_in_path_with_handles(path, &self.selection, delta);
         }
+        self.snap_selection_points_to_grid(true);
         self.bump_edit_revision();
     }
 
@@ -698,6 +701,7 @@ impl EditorState {
         for path in &mut self.paths {
             translate_in_path(path, &self.selection, delta);
         }
+        self.snap_selection_points_to_grid(false);
         self.bump_edit_revision();
     }
 
@@ -743,38 +747,21 @@ impl EditorState {
         if self.selection.is_empty() {
             return false;
         }
-
-        let mut offsets: HashMap<EntityId, Vec2> = HashMap::new();
-        for path in &self.paths {
-            let points = path.points().iter().collect::<Vec<_>>();
-            let len = points.len();
-            let closed = path_is_closed(path);
-            for (index, point) in points.iter().enumerate() {
-                if !self.selection.contains(&point.id) || !point.is_on_curve() {
-                    continue;
-                }
-
-                let snapped = snap_point_to_grid(point.point);
-                let offset = snapped - point.point;
-                if offset == Vec2::ZERO {
-                    continue;
-                }
-
-                offsets.insert(point.id, offset);
-                if let Some(prev) = previous_index(index, len, closed)
-                    && points[prev].is_off_curve()
-                {
-                    offsets.entry(points[prev].id).or_insert(offset);
-                }
-                if let Some(next) = next_index(index, len, closed)
-                    && points[next].is_off_curve()
-                {
-                    offsets.entry(points[next].id).or_insert(offset);
-                }
-            }
+        let changed = self.snap_selection_points_to_grid(true);
+        if changed {
+            self.bump_edit_revision();
         }
+        changed
+    }
 
-        if offsets.is_empty() {
+    /// Snap selected off-curve handles to the 2-unit design grid.
+    ///
+    /// This is intentionally narrower than `snap_selection_to_grid`: pointer
+    /// dragging handles should not leave tiny floating-point residue, but
+    /// selected on-curve points keep the exact pointer delta until explicit
+    /// grid commands/nudges snap them.
+    pub fn snap_selected_offcurves_to_grid(&mut self) -> bool {
+        if self.selection.is_empty() {
             return false;
         }
 
@@ -782,28 +769,91 @@ impl EditorState {
         for path in &mut self.paths {
             match path {
                 Path::Cubic(cubic) => {
-                    for point in cubic.points.make_mut() {
-                        if let Some(offset) = offsets.get(&point.id) {
-                            point.point += *offset;
-                            changed = true;
+                    let closed = cubic.closed;
+                    let points = cubic.points.make_mut();
+                    let mut path_changed = false;
+                    for point in points.iter_mut() {
+                        if self.selection.contains(&point.id) && point.is_off_curve() {
+                            let snapped = snap_point_to_grid(point.point);
+                            if snapped != point.point {
+                                point.point = snapped;
+                                changed = true;
+                                path_changed = true;
+                            }
                         }
+                    }
+                    if path_changed {
+                        maintain_smooth_handle_tangents(points, &self.selection, closed);
                     }
                 }
                 Path::Quadratic(quadratic) => {
                     for point in quadratic.points.make_mut() {
-                        if let Some(offset) = offsets.get(&point.id) {
-                            point.point += *offset;
-                            changed = true;
+                        if self.selection.contains(&point.id) && point.is_off_curve() {
+                            let snapped = snap_point_to_grid(point.point);
+                            if snapped != point.point {
+                                point.point = snapped;
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+                Path::Hyper(_) => {}
+            }
+        }
+        if changed {
+            self.bump_edit_revision();
+        }
+        changed
+    }
+
+    fn snap_selection_points_to_grid(&mut self, include_adjacent_handles: bool) -> bool {
+        let snap_ids = self.snap_target_ids(include_adjacent_handles);
+        if snap_ids.is_empty() {
+            return false;
+        }
+
+        let mut changed = false;
+        for path in &mut self.paths {
+            match path {
+                Path::Cubic(cubic) => {
+                    let closed = cubic.closed;
+                    let points = cubic.points.make_mut();
+                    let mut path_changed = false;
+                    for point in points.iter_mut() {
+                        if snap_ids.contains(&point.id) {
+                            let snapped = snap_point_to_grid(point.point);
+                            if snapped != point.point {
+                                point.point = snapped;
+                                changed = true;
+                                path_changed = true;
+                            }
+                        }
+                    }
+                    if path_changed {
+                        changed |= maintain_smooth_handle_tangents(points, &self.selection, closed);
+                    }
+                }
+                Path::Quadratic(quadratic) => {
+                    for point in quadratic.points.make_mut() {
+                        if snap_ids.contains(&point.id) {
+                            let snapped = snap_point_to_grid(point.point);
+                            if snapped != point.point {
+                                point.point = snapped;
+                                changed = true;
+                            }
                         }
                     }
                 }
                 Path::Hyper(hyper) => {
                     let mut hyper_changed = false;
                     for point in hyper.points.make_mut() {
-                        if let Some(offset) = offsets.get(&point.id) {
-                            point.point += *offset;
-                            changed = true;
-                            hyper_changed = true;
+                        if snap_ids.contains(&point.id) {
+                            let snapped = snap_point_to_grid(point.point);
+                            if snapped != point.point {
+                                point.point = snapped;
+                                changed = true;
+                                hyper_changed = true;
+                            }
                         }
                     }
                     if hyper_changed {
@@ -812,10 +862,35 @@ impl EditorState {
                 }
             }
         }
-        if changed {
-            self.bump_edit_revision();
-        }
         changed
+    }
+
+    fn snap_target_ids(&self, include_adjacent_handles: bool) -> HashSet<EntityId> {
+        let mut ids = self.selection.iter().copied().collect::<HashSet<_>>();
+        if !include_adjacent_handles {
+            return ids;
+        }
+        for path in &self.paths {
+            let points = path.points().iter().cloned().collect::<Vec<_>>();
+            let closed = path_is_closed(path);
+            for (index, point) in points.iter().enumerate() {
+                if !self.selection.contains(&point.id) || !point.is_on_curve() {
+                    continue;
+                }
+                for neighbor in [
+                    previous_index(index, points.len(), closed),
+                    next_index(index, points.len(), closed),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    if points[neighbor].is_off_curve() {
+                        ids.insert(points[neighbor].id);
+                    }
+                }
+            }
+        }
+        ids
     }
 
     /// Move the active coordinate-panel reference point to the given
@@ -949,7 +1024,7 @@ impl EditorState {
     }
 
     pub fn start_pen_path(&mut self, point: Point) -> usize {
-        let pt = on_curve(point, false);
+        let pt = on_curve(snap_point_to_grid(point), false);
         let id = pt.id;
         let path = Path::Cubic(CubicPath::new(PathPoints::from_vec(vec![pt]), false));
         self.paths.push(path);
@@ -966,7 +1041,7 @@ impl EditorState {
         if path.closed {
             return None;
         }
-        let pt = on_curve(point, false);
+        let pt = on_curve(snap_point_to_grid(point), false);
         let id = pt.id;
         path.points.make_mut().push(pt);
         self.selection = Selection::new();
@@ -981,6 +1056,8 @@ impl EditorState {
         origin: Point,
         handle_out: Point,
     ) -> usize {
+        let origin = snap_point_to_grid(origin);
+        let handle_out = snap_point_to_grid(handle_out);
         let delta = handle_out - origin;
         let smooth_points = vec![
             PathPoint {
@@ -1053,6 +1130,8 @@ impl EditorState {
             return false;
         }
         let len = points.len();
+        let origin = snap_point_to_grid(origin);
+        let handle_out = snap_point_to_grid(handle_out);
         let delta = handle_out - origin;
         if len >= 3 && points[len - 3].is_off_curve() {
             points[len - 3].point = origin - delta;
@@ -1119,7 +1198,7 @@ impl EditorState {
     }
 
     pub fn start_hyper_path(&mut self, point: Point) -> usize {
-        let path = Path::Hyper(crate::path::HyperPath::new(point));
+        let path = Path::Hyper(crate::path::HyperPath::new(snap_point_to_grid(point)));
         self.paths.push(path);
         self.selection = Selection::new();
         if let Some(Path::Hyper(path)) = self.paths.last()
@@ -1138,7 +1217,7 @@ impl EditorState {
         if path.closed {
             return None;
         }
-        path.add_on_curve_point(point);
+        path.add_on_curve_point(snap_point_to_grid(point));
         let id = path.points.to_vec().last().map(|pt| pt.id)?;
         self.selection = Selection::new();
         self.selection.insert(id);
@@ -1480,6 +1559,90 @@ impl EditorState {
         self.toggle_point_type()
     }
 
+    /// Select the editable segment nearest to `point`.
+    ///
+    /// A line segment selects its two endpoints. A curve segment selects
+    /// the start point, its interior off-curve handles, and the end point.
+    /// Returns `Some(true)` when the caller should begin a translate drag,
+    /// `Some(false)` when a Shift-click removed the segment from selection,
+    /// and `None` when no segment was hit.
+    pub fn select_segment_at_point(
+        &mut self,
+        point: Point,
+        radius: f64,
+        extend: bool,
+    ) -> Option<bool> {
+        let segment_info = self.nearest_segment(point, radius)?;
+        let path = self.paths.get(segment_info.path_index)?;
+        let ids = segment_point_ids(path, &segment_info);
+        if ids.is_empty() {
+            return None;
+        }
+
+        self.clear_component_selection();
+        if extend {
+            let all_selected = ids.iter().all(|id| self.selection.contains(id));
+            if all_selected {
+                for id in ids {
+                    self.selection.remove(&id);
+                }
+                return Some(false);
+            }
+            for id in ids {
+                self.selection.insert(id);
+            }
+            return Some(true);
+        }
+
+        let mut selection = Selection::new();
+        for id in ids {
+            selection.insert(id);
+        }
+        self.selection = selection;
+        Some(true)
+    }
+
+    /// Select the full contour nearest to `point`.
+    ///
+    /// This is the double-click path selection used by font editors:
+    /// double-clicking a segment selects the complete outline so it can
+    /// be moved or deleted as one unit. Point hits are intentionally
+    /// excluded so double-clicking on-curve/off-curve points keeps
+    /// point-specific editing behavior available.
+    pub fn select_contour_at_point(
+        &mut self,
+        point: Point,
+        segment_radius: f64,
+        point_guard_radius: f64,
+    ) -> bool {
+        if self
+            .hit_test_point_with_path_index(point, point_guard_radius)
+            .is_some()
+        {
+            return false;
+        }
+
+        let Some(segment_info) = self.nearest_segment(point, segment_radius) else {
+            return false;
+        };
+        let path_index = segment_info.path_index;
+        let Some(path) = self.paths.get(path_index) else {
+            return false;
+        };
+
+        let mut selection = Selection::new();
+        for point in path.points().iter() {
+            selection.insert(point.id);
+        }
+        if selection.is_empty() {
+            return false;
+        }
+
+        self.clear_component_selection();
+        self.selection = selection;
+        true
+    }
+
     /// Convert the nearest editable line segment to a cubic curve by
     /// inserting two off-curve handles at 1/3 and 2/3 along the line.
     pub fn convert_line_segment_at_point(&mut self, point: Point, radius: f64) -> bool {
@@ -1500,8 +1663,10 @@ impl EditorState {
             return false;
         };
 
-        let ctrl1_pt = off_curve(line.p0 + (line.p1 - line.p0) / 3.0);
-        let ctrl2_pt = off_curve(line.p0 + (line.p1 - line.p0) * (2.0 / 3.0));
+        let ctrl1_pt = off_curve(snap_point_to_grid(line.p0 + (line.p1 - line.p0) / 3.0));
+        let ctrl2_pt = off_curve(snap_point_to_grid(
+            line.p0 + (line.p1 - line.p0) * (2.0 / 3.0),
+        ));
         let ctrl1_id = ctrl1_pt.id;
         let ctrl2_id = ctrl2_pt.id;
 
@@ -1637,18 +1802,8 @@ impl EditorState {
     /// Hit-test for a point near `design_pt` within `radius` design-
     /// space units. Returns the hit point's id if any.
     pub fn hit_test_point(&self, design_pt: Point, radius: f64) -> Option<EntityId> {
-        use crate::editing::hit_test::find_closest;
-        let candidates: Vec<_> = self
-            .paths
-            .iter()
-            .flat_map(|p| {
-                p.points()
-                    .iter()
-                    .map(|pt| (pt.id, pt.point, pt.is_on_curve()))
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        find_closest(design_pt, candidates.into_iter(), radius).map(|h| h.entity)
+        self.hit_test_point_with_path_index(design_pt, radius)
+            .map(|(_, id)| id)
     }
 
     pub fn hit_test_on_curve_point(&self, design_pt: Point, radius: f64) -> Option<EntityId> {
@@ -1912,6 +2067,27 @@ impl EditorState {
             .map(|(idx, _)| idx)
             .collect()
     }
+
+    fn hit_test_point_with_path_index(
+        &self,
+        design_pt: Point,
+        radius: f64,
+    ) -> Option<(usize, EntityId)> {
+        let max_dist_sq = radius * radius;
+        let mut best: Option<(usize, EntityId, f64)> = None;
+        for (path_index, path) in self.paths.iter().enumerate() {
+            for point in path.points().iter() {
+                let dist_sq = point.point.distance_squared(design_pt);
+                if dist_sq > max_dist_sq {
+                    continue;
+                }
+                if best.is_none_or(|(_, _, best_dist)| dist_sq < best_dist) {
+                    best = Some((path_index, point.id, dist_sq));
+                }
+            }
+        }
+        best.map(|(path_index, id, _)| (path_index, id))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1939,7 +2115,88 @@ fn off_curve(p: Point) -> PathPoint {
 }
 
 fn translate_in_path(path: &mut Path, selection: &Selection, delta: Vec2) {
-    map_selected_points(path, selection, |pt| pt + delta);
+    match path {
+        Path::Cubic(cubic) => {
+            let closed = cubic.closed;
+            let points = cubic.points.make_mut();
+            let mut changed = false;
+            for pt in points.iter_mut() {
+                if selection.contains(&pt.id) {
+                    pt.point += delta;
+                    changed = true;
+                }
+            }
+            if changed {
+                maintain_smooth_handle_tangents(points, selection, closed);
+            }
+        }
+        Path::Quadratic(_) | Path::Hyper(_) => {
+            map_selected_points(path, selection, |pt| pt + delta);
+        }
+    }
+}
+
+fn maintain_smooth_handle_tangents(
+    points: &mut [PathPoint],
+    selection: &Selection,
+    closed: bool,
+) -> bool {
+    let len = points.len();
+    if len < 3 {
+        return false;
+    }
+
+    let mut updates = Vec::new();
+    for index in 0..len {
+        if !selection.contains(&points[index].id) || !points[index].is_off_curve() {
+            continue;
+        }
+
+        if let Some(on_index) = previous_index(index, len, closed)
+            && matches!(points[on_index].typ, PointType::OnCurve { smooth: true })
+            && let Some(opposite_index) = previous_index(on_index, len, closed)
+            && points[opposite_index].is_off_curve()
+            && !selection.contains(&points[opposite_index].id)
+            && let Some(point) = mirrored_smooth_handle(
+                points[index].point,
+                points[on_index].point,
+                points[opposite_index].point,
+            )
+        {
+            updates.push((opposite_index, point));
+        }
+
+        if let Some(on_index) = next_index(index, len, closed)
+            && matches!(points[on_index].typ, PointType::OnCurve { smooth: true })
+            && let Some(opposite_index) = next_index(on_index, len, closed)
+            && points[opposite_index].is_off_curve()
+            && !selection.contains(&points[opposite_index].id)
+            && let Some(point) = mirrored_smooth_handle(
+                points[index].point,
+                points[on_index].point,
+                points[opposite_index].point,
+            )
+        {
+            updates.push((opposite_index, point));
+        }
+    }
+
+    let mut changed = false;
+    for (index, point) in updates {
+        if points[index].point != point {
+            points[index].point = point;
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn mirrored_smooth_handle(moved: Point, anchor: Point, _opposite: Point) -> Option<Point> {
+    let v = moved - anchor;
+    if v.hypot() < 1e-9 {
+        return None;
+    }
+    Some(snap_point_to_grid(anchor - v))
 }
 
 fn translate_in_path_with_handles(path: &mut Path, selection: &Selection, delta: Vec2) {
@@ -2154,10 +2411,9 @@ fn path_points_mut(path: &mut Path) -> &mut Vec<PathPoint> {
 }
 
 fn snap_point_to_grid(point: Point) -> Point {
-    let spacing = 2.0;
     Point::new(
-        (point.x / spacing).round() * spacing,
-        (point.y / spacing).round() * spacing,
+        (point.x / DESIGN_GRID_SPACING).round() * DESIGN_GRID_SPACING,
+        (point.y / DESIGN_GRID_SPACING).round() * DESIGN_GRID_SPACING,
     )
 }
 
@@ -2188,14 +2444,14 @@ fn insert_point_on_cubic(
     };
     let points = path.points.make_mut();
     let (left, right) = Segment::subdivide_cubic(cubic, t);
-    let split = on_curve(left.p3, false);
+    let split = on_curve(snap_point_to_grid(left.p3), false);
     let split_id = split.id;
     let new_points = vec![
-        off_curve(left.p1),
-        off_curve(left.p2),
+        off_curve(snap_point_to_grid(left.p1)),
+        off_curve(snap_point_to_grid(left.p2)),
         split,
-        off_curve(right.p1),
-        off_curve(right.p2),
+        off_curve(snap_point_to_grid(right.p1)),
+        off_curve(snap_point_to_grid(right.p2)),
     ];
     replace_segment_interior(points, segment_info, new_points);
     Some(split_id)
@@ -2212,9 +2468,13 @@ fn insert_point_on_quadratic(
     };
     let points = path.points.make_mut();
     let (left, right) = Segment::subdivide_quadratic(quad, t);
-    let split = on_curve(left.p2, false);
+    let split = on_curve(snap_point_to_grid(left.p2), false);
     let split_id = split.id;
-    let new_points = vec![off_curve(left.p1), split, off_curve(right.p1)];
+    let new_points = vec![
+        off_curve(snap_point_to_grid(left.p1)),
+        split,
+        off_curve(snap_point_to_grid(right.p1)),
+    ];
     replace_segment_interior(points, segment_info, new_points);
     Some(split_id)
 }
@@ -2595,6 +2855,35 @@ fn rect_contains(rect: &Rect, p: Point) -> bool {
     p.x >= rect.min_x() && p.x <= rect.max_x() && p.y >= rect.min_y() && p.y <= rect.max_y()
 }
 
+fn segment_point_ids(path: &Path, segment: &SegmentInfo) -> Vec<EntityId> {
+    let points = path.points().iter().collect::<Vec<_>>();
+    if points.is_empty() {
+        return Vec::new();
+    }
+
+    segment_point_indices(points.len(), segment.start_index, segment.end_index)
+        .into_iter()
+        .filter_map(|idx| points.get(idx).map(|point| point.id))
+        .collect()
+}
+
+fn segment_point_indices(len: usize, start: usize, end: usize) -> Vec<usize> {
+    if len == 0 || start >= len || end >= len {
+        return Vec::new();
+    }
+
+    let mut indices = vec![start];
+    let mut idx = start;
+    while idx != end {
+        idx = (idx + 1) % len;
+        indices.push(idx);
+        if indices.len() > len {
+            return Vec::new();
+        }
+    }
+    indices
+}
+
 /// Convert a norad Glyph into a single combined BezPath. Used by
 /// both the live editor (via `set_glyph_from_norad`) and any callers
 /// that just need a renderable path — e.g. the wasm `glifToSvg`
@@ -2673,6 +2962,208 @@ mod tests {
         assert!(!state.selection.contains(&second_id));
         let point = state.paths[0].points().iter().next().expect("point exists");
         assert!(matches!(point.typ, PointType::OnCurve { smooth: true }));
+    }
+
+    #[test]
+    fn select_segment_at_point_selects_curve_endpoints_and_handles() {
+        let mut state = EditorState::default();
+        let start = on_curve(Point::new(0.0, 0.0), false);
+        let handle_a = off_curve(Point::new(0.0, 100.0));
+        let handle_b = off_curve(Point::new(100.0, 100.0));
+        let end = on_curve(Point::new(100.0, 0.0), false);
+        let ids = [start.id, handle_a.id, handle_b.id, end.id];
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![start, handle_a, handle_b, end]),
+            false,
+        )));
+
+        assert_eq!(
+            state.select_segment_at_point(Point::new(50.0, 75.0), 10.0, false),
+            Some(true)
+        );
+
+        for id in ids {
+            assert!(state.selection.contains(&id));
+        }
+        assert_eq!(state.selection.len(), 4);
+    }
+
+    #[test]
+    fn shift_clicking_selected_segment_removes_it_from_selection() {
+        let mut state = EditorState::default();
+        let start = on_curve(Point::new(0.0, 0.0), false);
+        let end = on_curve(Point::new(100.0, 0.0), false);
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![start, end]),
+            false,
+        )));
+
+        assert_eq!(
+            state.select_segment_at_point(Point::new(50.0, 0.0), 10.0, false),
+            Some(true)
+        );
+        assert_eq!(
+            state.select_segment_at_point(Point::new(50.0, 0.0), 10.0, true),
+            Some(false)
+        );
+
+        assert!(state.selection.is_empty());
+    }
+
+    #[test]
+    fn select_contour_at_point_selects_full_hit_outline_only() {
+        let mut state = EditorState::default();
+        let first_a = on_curve(Point::new(0.0, 0.0), false);
+        let first_b = on_curve(Point::new(100.0, 0.0), false);
+        let first_ids = [first_a.id, first_b.id];
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![first_a, first_b]),
+            false,
+        )));
+
+        let second_a = on_curve(Point::new(200.0, 0.0), false);
+        let second_handle_a = off_curve(Point::new(200.0, 100.0));
+        let second_handle_b = off_curve(Point::new(300.0, 100.0));
+        let second_b = on_curve(Point::new(300.0, 0.0), false);
+        let second_ids = [
+            second_a.id,
+            second_handle_a.id,
+            second_handle_b.id,
+            second_b.id,
+        ];
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![second_a, second_handle_a, second_handle_b, second_b]),
+            false,
+        )));
+
+        assert!(state.select_contour_at_point(Point::new(250.0, 75.0), 10.0, 20.0));
+
+        for id in second_ids {
+            assert!(state.selection.contains(&id));
+        }
+        for id in first_ids {
+            assert!(!state.selection.contains(&id));
+        }
+        assert_eq!(state.selection.len(), 4);
+    }
+
+    #[test]
+    fn select_contour_at_point_ignores_on_curve_point_hits() {
+        let mut state = EditorState::default();
+        let start = on_curve(Point::new(0.0, 0.0), false);
+        let end = on_curve(Point::new(100.0, 0.0), false);
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![start, end]),
+            false,
+        )));
+
+        assert!(!state.select_contour_at_point(Point::new(0.0, 0.0), 10.0, 20.0));
+        assert!(state.selection.is_empty());
+    }
+
+    #[test]
+    fn select_contour_at_point_ignores_off_curve_point_hits() {
+        let mut state = EditorState::default();
+        let start = on_curve(Point::new(0.0, 0.0), false);
+        let handle_a = off_curve(Point::new(0.0, 100.0));
+        let handle_b = off_curve(Point::new(100.0, 100.0));
+        let end = on_curve(Point::new(100.0, 0.0), false);
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![start, handle_a, handle_b, end]),
+            false,
+        )));
+
+        assert!(!state.select_contour_at_point(Point::new(0.0, 100.0), 10.0, 20.0));
+        assert!(state.selection.is_empty());
+    }
+
+    #[test]
+    fn select_contour_at_point_uses_larger_point_guard_than_segment_hitbox() {
+        let mut state = EditorState::default();
+        let start = on_curve(Point::new(0.0, 0.0), false);
+        let end = on_curve(Point::new(100.0, 0.0), false);
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![start, end]),
+            false,
+        )));
+
+        assert!(!state.select_contour_at_point(Point::new(12.0, 0.0), 10.0, 20.0));
+        assert!(state.selection.is_empty());
+    }
+
+    #[test]
+    fn moving_smooth_handle_keeps_opposite_handle_collinear() {
+        let mut state = EditorState::default();
+        let moved = off_curve(Point::new(0.0, 0.0));
+        let moved_id = moved.id;
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![
+                moved,
+                on_curve(Point::new(10.0, 0.0), true),
+                off_curve(Point::new(20.0, 0.0)),
+            ]),
+            false,
+        )));
+        state.selection.insert(moved_id);
+
+        state.translate_selection_independent(Vec2::new(10.0, 10.0));
+
+        let points = state.paths[0].points().to_vec();
+        assert_eq!(points[0].point, Point::new(10.0, 10.0));
+        assert_eq!(points[2].point, Point::new(10.0, -10.0));
+    }
+
+    #[test]
+    fn snapping_selected_offcurve_handles_uses_two_unit_grid() {
+        let mut state = EditorState::default();
+        let selected = off_curve(Point::new(1.25, 3.75));
+        let selected_id = selected.id;
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![
+                selected,
+                on_curve(Point::new(10.0, 0.0), true),
+                off_curve(Point::new(20.0, 0.0)),
+            ]),
+            false,
+        )));
+        state.selection.insert(selected_id);
+
+        assert!(state.snap_selected_offcurves_to_grid());
+
+        let points = state.paths[0].points().to_vec();
+        assert_eq!(points[0].point, Point::new(2.0, 4.0));
+        let moved = points[0].point - points[1].point;
+        let opposite = points[2].point - points[1].point;
+        assert!((moved.x * opposite.y - moved.y * opposite.x).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pointer_translate_snaps_selected_offcurve_handles_by_default() {
+        let mut state = EditorState::default();
+        let selected = off_curve(Point::new(1.25, 3.75));
+        let selected_id = selected.id;
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![selected, on_curve(Point::new(100.0, 100.0), false)]),
+            false,
+        )));
+        state.selection.insert(selected_id);
+
+        state.translate_selection_independent(Vec2::new(0.2, 0.2));
+
+        let point = state.paths[0].points().iter().next().expect("point exists");
+        assert_eq!(point.point, Point::new(2.0, 4.0));
+    }
+
+    #[test]
+    fn pen_smooth_handles_snap_to_grid_while_dragging() {
+        let mut state = EditorState::default();
+
+        let path_index =
+            state.append_smooth_pen_point(None, Point::new(10.4, 20.6), Point::new(15.1, 25.7));
+
+        let points = state.paths[path_index].points().to_vec();
+        assert_eq!(points[0].point, Point::new(10.0, 20.0));
+        assert_eq!(points[1].point, Point::new(16.0, 26.0));
     }
 
     #[test]

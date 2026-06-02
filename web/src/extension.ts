@@ -11,7 +11,7 @@ import { runebenderHostKey, type WorkspaceChoice } from "./host/runebenderHost";
 import { comfyHost } from "./hosts/comfy/comfyHost";
 import Runebender from "./Runebender.vue";
 
-const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-05-30-icons-125159";
+const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-01-contour-point-guard";
 
 // Mirror our own console output to the ComfyUI terminal through the
 // injected Comfy host. Filters to messages prefixed with
@@ -932,15 +932,10 @@ app.registerExtension({
         "pointer-events:none",
       ].join(";");
 
-      // Latin specimen sent as a single string. The backend picks the
-      // line count (1..8) that maximizes per-glyph scale on the canvas,
-      // so the glyphs fill the preview box instead of being pinned by
-      // a 26-letter line. TODO: language-specific default character
-      // sets for Arabic, Hebrew, CJK, etc. once Latin lands cleanly.
-      const SPECIMEN_TEXT =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZ" +
-        "abcdefghijklmnopqrstuvwxyz" +
-        "0123456789";
+      // Ask the backend for a source-driven preview. It renders a grid
+      // from the actual drawable glyph inventory so icon fonts, non-Latin
+      // fonts, and normal text fonts all get a useful graph-node window.
+      const SPECIMEN_TEXT = "auto";
       // Square 1024x1024 backing image. The browser downsamples to the
       // displayed widget size; the square aspect ratio matches what
       // node-based editor previews typically use and gives the

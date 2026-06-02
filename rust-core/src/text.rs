@@ -583,7 +583,8 @@ impl TextBuffer {
         let original_value = self
             .glyph_pair_names(sort_index)
             .map(|(left, right)| self.lookup_kerning(&left, &right))
-            .unwrap_or(0.0);
+            .unwrap_or(0.0)
+            .round();
         self.manual_kerning = Some(ManualKerningSession {
             sort_index,
             start_x,
@@ -596,13 +597,16 @@ impl TextBuffer {
 
     pub fn drag_manual_kerning(&mut self, current_x: f64) -> Option<f64> {
         let session = self.manual_kerning?;
-        let current_offset = current_x - session.start_x;
+        let current_offset = (current_x - session.start_x).round();
+        if current_offset == session.current_offset {
+            return None;
+        }
         self.manual_kerning = Some(ManualKerningSession {
             current_offset,
             ..session
         });
         let (left, right) = self.glyph_pair_names(session.sort_index)?;
-        let value = session.original_value + current_offset;
+        let value = (session.original_value + current_offset).round();
         self.set_direct_kerning(&left, &right, value);
         Some(value)
     }
@@ -2064,13 +2068,13 @@ mod tests {
     }
 
     #[test]
-    fn manual_kerning_drag_preserves_tiny_nonzero_pair_like_xilem() {
+    fn manual_kerning_drag_snaps_to_integer_units() {
         let mut buffer = TextBuffer::new();
         buffer.insert_glyph("A", Some('A'), 500.0);
         buffer.insert_glyph("V", Some('V'), 500.0);
 
         assert!(buffer.begin_manual_kerning(1, 0.0));
-        assert_eq!(buffer.drag_manual_kerning(f64::EPSILON), Some(f64::EPSILON));
+        assert_eq!(buffer.drag_manual_kerning(96.16), Some(96.0));
         assert_eq!(
             buffer
                 .kerning_model()
@@ -2078,7 +2082,7 @@ mod tests {
                 .get("A")
                 .and_then(|pairs| pairs.get("V"))
                 .copied(),
-            Some(f64::EPSILON)
+            Some(96.0)
         );
     }
 

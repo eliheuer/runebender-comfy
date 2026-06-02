@@ -42,7 +42,7 @@ const actions = [
   ["Rotate 90 CCW", "rot-ccw"],
   ["Duplicate", "duplicate"],
   ["Dup + Repeat", "duplicate-repeat"],
-  ["Union", "union"],
+  ["Union (Remove Overlap)", "union"],
   ["Subtract", "subtract"],
   ["Intersect", "intersect"],
   ["Exclude (XOR)", "exclude"],

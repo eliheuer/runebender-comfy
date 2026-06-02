@@ -1678,6 +1678,47 @@ class FontPreviewNodeTests(unittest.TestCase):
 
         self.assertEqual(image, "tensor")
 
+    def test_auto_workspace_preview_uses_source_inventory_not_compiled_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            slot_dir = Path(tmp)
+            ttf_path = slot_dir / "compiled.ttf"
+            ttf_path.write_bytes(b"ttf")
+
+            with mock.patch(
+                "nodes.font_preview._render_workspace_preview_png_drawbot",
+                side_effect=AssertionError("auto preview should not render through compiled text"),
+            ), mock.patch(
+                "nodes.font_preview._render_workspace_preview_png_skia",
+                return_value=b"auto-preview",
+            ):
+                png = font_preview.render_workspace_preview_png(
+                    slot_dir,
+                    "auto",
+                    1024,
+                    1024,
+                    ttf_path=ttf_path,
+                )
+
+        self.assertEqual(png, b"auto-preview")
+
+    def test_auto_inventory_preview_uses_one_shared_font_scale(self) -> None:
+        _cell_x, _cell_y, cell_w, cell_h = font_preview._inventory_grid_cell(0, 2, 400, 200)
+        scale, _line_height = font_preview._inventory_grid_font_scale(
+            total=2,
+            width=400,
+            height=200,
+            max_advance=1000,
+            ascender=800,
+            descender=-200,
+        )
+
+        old_large_per_cell_scale = min((cell_w * 0.78) / 800, (cell_h * 0.78) / 800)
+        old_small_per_cell_scale = min((cell_w * 0.78) / 200, (cell_h * 0.78) / 200)
+
+        self.assertLess(scale, old_small_per_cell_scale)
+        self.assertAlmostEqual((200 * scale) / (800 * scale), 0.25)
+        self.assertGreater(old_small_per_cell_scale / old_large_per_cell_scale, 3.0)
+
 
 class FontSpecimenNodeTests(unittest.TestCase):
     def test_font_specimen_exposes_scriptable_image_and_mask_outputs(self) -> None:

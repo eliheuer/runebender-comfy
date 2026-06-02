@@ -19,6 +19,7 @@ use crate::path::{
 
 const MAX_KNIFE_RECURSE: usize = 16;
 const MEASURE_FUZZY_TOLERANCE: f64 = 0.1;
+const KNIFE_HIT_CLUSTER_TOLERANCE: f64 = 1e-4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShapeKind {
@@ -247,7 +248,7 @@ impl MouseDelegate for SelectTool {
             return;
         }
 
-        self.drag_kind = Some(match (hit, event.mods.shift) {
+        let drag_kind = match (hit, event.mods.shift) {
             (Some(id), false) => {
                 state.clear_component_selection();
                 if !state.selection.contains(&id) {
@@ -266,21 +267,32 @@ impl MouseDelegate for SelectTool {
                     SelectDragKind::Translate
                 }
             }
-            (None, _) if component_hit.is_some() => {
-                state.select_component(component_hit.unwrap());
-                SelectDragKind::ComponentTranslate
-            }
-            (None, false) => {
-                state.selection = Selection::new();
-                state.clear_component_selection();
-                SelectDragKind::BoxSelect {
-                    initial: Selection::new(),
+            (None, _) => {
+                if let Some(should_drag) =
+                    state.select_segment_at_point(design_pt, hit_radius, event.mods.shift)
+                {
+                    if should_drag {
+                        SelectDragKind::Translate
+                    } else {
+                        SelectDragKind::None
+                    }
+                } else if let Some(component_id) = component_hit {
+                    state.select_component(component_id);
+                    SelectDragKind::ComponentTranslate
+                } else if event.mods.shift {
+                    SelectDragKind::BoxSelect {
+                        initial: state.selection.clone(),
+                    }
+                } else {
+                    state.selection = Selection::new();
+                    state.clear_component_selection();
+                    SelectDragKind::BoxSelect {
+                        initial: Selection::new(),
+                    }
                 }
             }
-            (None, true) => SelectDragKind::BoxSelect {
-                initial: state.selection.clone(),
-            },
-        });
+        };
+        self.drag_kind = Some(drag_kind);
     }
 
     fn left_drag_changed(&mut self, _event: MouseEvent, drag: Drag, state: &mut Self::Data) {
@@ -332,6 +344,9 @@ impl MouseDelegate for SelectTool {
     }
 
     fn left_drag_ended(&mut self, _event: MouseEvent, _drag: Drag, state: &mut Self::Data) {
+        if matches!(self.drag_kind, Some(SelectDragKind::Translate)) {
+            state.snap_selected_offcurves_to_grid();
+        }
         state.marquee = None;
         state.segment_hover = None;
         self.drag_kind = None;
@@ -791,12 +806,7 @@ fn slice_quadratic_path_impl(
         return;
     }
 
-    hit_buf.sort_by(|a, b| a.line_t.total_cmp(&b.line_t));
-    hit_buf.dedup_by(|a, b| {
-        (a.line_t - b.line_t).abs() < 1e-6
-            && a.segment_info.start_index == b.segment_info.start_index
-            && (a.segment_t - b.segment_t).abs() < 1e-6
-    });
+    sort_and_dedup_knife_hits(hit_buf, line);
 
     if hit_buf.len() <= 1 {
         acc.push(Path::Quadratic(path));
@@ -845,12 +855,7 @@ fn slice_path_impl(
         return;
     }
 
-    hit_buf.sort_by(|a, b| a.line_t.total_cmp(&b.line_t));
-    hit_buf.dedup_by(|a, b| {
-        (a.line_t - b.line_t).abs() < 1e-6
-            && a.segment_info.start_index == b.segment_info.start_index
-            && (a.segment_t - b.segment_t).abs() < 1e-6
-    });
+    sort_and_dedup_knife_hits(hit_buf, line);
 
     if hit_buf.len() <= 1 {
         acc.push(Path::Cubic(path));
@@ -889,6 +894,81 @@ fn order_points(path: &CubicPath, start: Hit, end: Hit) -> (Hit, Hit) {
         }
     }
     (start, end)
+}
+
+fn sort_and_dedup_knife_hits(hits: &mut Vec<Hit>, line: Line) {
+    hits.sort_by(|a, b| a.line_t.total_cmp(&b.line_t));
+
+    if hits.len() <= 1 {
+        return;
+    }
+
+    let line_len = (line.p1 - line.p0).hypot();
+    let line_t_tolerance = if line_len > 1e-6 {
+        KNIFE_HIT_CLUSTER_TOLERANCE / line_len
+    } else {
+        f64::INFINITY
+    };
+
+    let mut deduped = Vec::with_capacity(hits.len());
+    let mut cluster = Vec::new();
+    for hit in hits.drain(..) {
+        if cluster
+            .last()
+            .map(|previous: &Hit| {
+                (hit.line_t - previous.line_t).abs() <= line_t_tolerance
+                    || hit.point.distance(previous.point) <= KNIFE_HIT_CLUSTER_TOLERANCE
+            })
+            .unwrap_or(false)
+        {
+            cluster.push(hit);
+        } else {
+            push_preferred_knife_hit(&mut deduped, &cluster);
+            cluster.clear();
+            cluster.push(hit);
+        }
+    }
+    push_preferred_knife_hit(&mut deduped, &cluster);
+    *hits = deduped;
+}
+
+fn push_preferred_knife_hit(dest: &mut Vec<Hit>, cluster: &[Hit]) {
+    const ENDPOINT_TOLERANCE: f64 = 1e-6;
+    if cluster
+        .iter()
+        .any(|hit| hit.segment_t > ENDPOINT_TOLERANCE && hit.segment_t < 1.0 - ENDPOINT_TOLERANCE)
+        || cluster.len() != 2
+        || !are_adjacent_endpoint_hits(cluster[0], cluster[1])
+    {
+        dest.extend_from_slice(cluster);
+        return;
+    }
+
+    let Some(best) = cluster.iter().min_by(|a, b| {
+        let a_endpoint = a.segment_t.min(1.0 - a.segment_t);
+        let b_endpoint = b.segment_t.min(1.0 - b.segment_t);
+        a_endpoint
+            .total_cmp(&b_endpoint)
+            .then_with(|| a.segment_t.total_cmp(&b.segment_t))
+            .then_with(|| a.segment_info.start_index.cmp(&b.segment_info.start_index))
+    }) else {
+        return;
+    };
+    dest.push(*best);
+}
+
+fn are_adjacent_endpoint_hits(a: Hit, b: Hit) -> bool {
+    let a_endpoint_index = if a.segment_t <= 1e-6 {
+        a.segment_info.start_index
+    } else {
+        a.segment_info.end_index
+    };
+    let b_endpoint_index = if b.segment_t <= 1e-6 {
+        b.segment_info.start_index
+    } else {
+        b.segment_info.end_index
+    };
+    a_endpoint_index == b_endpoint_index
 }
 
 fn order_quadratic_points(path: &QuadraticPath, start: Hit, end: Hit) -> (Hit, Hit) {
@@ -1118,15 +1198,18 @@ fn append_segment_points(dest: &mut Vec<PathPoint>, points: &[PathPoint], segmen
                 push_path_point(dest, cubic.p0, start_typ);
                 push_path_point(dest, cubic.p1, PointType::OffCurve { auto: false });
                 push_path_point(dest, cubic.p2, PointType::OffCurve { auto: false });
+                push_path_point(dest, cubic.p3, points[end].typ);
                 return;
             }
             Segment::Line(line) => {
                 push_path_point(dest, line.p0, start_typ);
+                push_path_point(dest, line.p1, points[end].typ);
                 return;
             }
             Segment::Quadratic(quad) => {
                 push_path_point(dest, quad.p0, start_typ);
                 push_path_point(dest, quad.p1, PointType::OffCurve { auto: false });
+                push_path_point(dest, quad.p2, points[end].typ);
                 return;
             }
         }
@@ -2550,6 +2633,42 @@ mod tests {
             assert!(path.closed);
             assert!(path.points.len() >= 4);
         }
+    }
+
+    #[test]
+    fn knife_splits_closed_rectangle_through_on_curve_vertices() {
+        let paths = vec![rect_path(Rect::new(0.0, 0.0, 100.0, 100.0))];
+        let sliced = slice_paths(
+            &paths,
+            Line::new(Point::new(-10.0, -10.0), Point::new(110.0, 110.0)),
+        );
+
+        assert_eq!(sliced.len(), 2);
+        for path in sliced {
+            let Path::Cubic(path) = path else {
+                panic!("knife should preserve cubic path type");
+            };
+            assert!(path.closed);
+            assert!(path.points.len() >= 3);
+        }
+    }
+
+    #[test]
+    fn knife_splits_each_closed_contour_crossed_by_line() {
+        let paths = vec![
+            rect_path(Rect::new(0.0, 0.0, 100.0, 100.0)),
+            rect_path(Rect::new(25.0, 25.0, 75.0, 75.0)),
+        ];
+        let sliced = slice_paths(
+            &paths,
+            Line::new(Point::new(50.0, -10.0), Point::new(50.0, 110.0)),
+        );
+
+        assert_eq!(sliced.len(), 4);
+        assert!(sliced.iter().all(|path| match path {
+            Path::Cubic(path) => path.closed,
+            _ => false,
+        }));
     }
 
     #[test]

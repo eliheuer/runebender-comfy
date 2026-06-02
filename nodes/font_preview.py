@@ -25,6 +25,10 @@ from .workspace import compiled_path, resolve_slot
 # bumps the executor's worker count we're still safe.
 _DRAWBOT_LOCK = threading.Lock()
 
+_INVENTORY_GRID_MARGIN = 0.035
+_INVENTORY_GRID_GAP = 0.009
+_INVENTORY_GRID_FIT = 0.94
+
 
 def _image_stack():
     try:
@@ -92,7 +96,7 @@ def render_workspace_preview_png(
       2. Direct skia-python + raw UFO. Works without a compiled TTF.
       3. PIL polygon fallback for environments without skia.
     """
-    if ttf_path is not None and Path(ttf_path).exists():
+    if ttf_path is not None and Path(ttf_path).exists() and not _auto_preview_requested(text):
         try:
             return _render_workspace_preview_png_drawbot(Path(ttf_path), text, width, height)
         except Exception:
@@ -235,6 +239,15 @@ def _render_workspace_preview_png_skia(slot_dir: Path, text: str, width: int, he
         return render_preview_png(None, text, width, height)
 
     font = ufoLib2.Font.open(ufo_dir)
+    if _auto_preview_requested(text):
+        return _render_ufo_inventory_preview_png_skia(
+            font,
+            width,
+            height,
+            DecomposingRecordingPen,
+            skia,
+        )
+
     glyphs_by_char = _ufo_glyphs_by_char(font)
     has_explicit_newlines = "\n" in text
     entries: list[object | None] = []
@@ -311,6 +324,16 @@ def _render_workspace_preview_png_polygon(slot_dir: Path, text: str, width: int,
         return render_preview_png(None, text, width, height)
 
     glyphs = _load_ufo_glyphs(ufo_dir)
+    if _auto_preview_requested(text):
+        _units_per_em, ascender, descender = _read_ufo_metrics(ufo_dir)
+        return _render_ufo_inventory_preview_png_polygon(
+            glyphs,
+            width,
+            height,
+            ascender,
+            descender,
+        )
+
     entries = []
     for char in text:
         glyph = _glyph_for_char(glyphs, char)
@@ -343,6 +366,162 @@ def _render_workspace_preview_png_polygon(slot_dir: Path, text: str, width: int,
     bio = BytesIO()
     img.convert("RGB").save(bio, format="PNG")
     return bio.getvalue()
+
+
+def _auto_preview_requested(text: str | None) -> bool:
+    return (text or "").strip().lower() in {"", "auto", "__runebender_auto__"}
+
+
+def _render_ufo_inventory_preview_png_skia(
+    font,
+    width: int,
+    height: int,
+    pen_cls,
+    skia,
+) -> bytes:
+    glyphs = []
+    for glyph in font:
+        name = str(getattr(glyph, "name", "") or "")
+        if name == ".notdef" or name.startswith("public."):
+            continue
+        path = _glyph_to_skia_path(font, glyph, pen_cls, skia)
+        if path.isEmpty():
+            continue
+        bounds = path.getBounds()
+        glyph_w = max(1.0, float(bounds.width()))
+        glyph_h = max(1.0, float(bounds.height()))
+        glyphs.append((glyph, path, bounds, glyph_w, glyph_h))
+        if len(glyphs) >= 64:
+            break
+
+    if not glyphs:
+        return render_preview_png(None, "No drawable glyphs", width, height)
+
+    units_per_em, ascender, descender = _font_metrics(font)
+    max_advance = max(
+        max(1.0, float(getattr(glyph, "width", None) or units_per_em * 0.6))
+        for glyph, _path, _bounds, _glyph_w, _glyph_h in glyphs
+    )
+    scale, line_height = _inventory_grid_font_scale(
+        len(glyphs),
+        width,
+        height,
+        max_advance,
+        ascender,
+        descender,
+    )
+
+    surface = skia.Surface(width, height)
+    canvas = surface.getCanvas()
+    canvas.clear(skia.Color(16, 16, 16, 255))
+
+    paint = skia.Paint(
+        AntiAlias=True,
+        Color=skia.Color(220, 220, 220, 255),
+        Style=skia.Paint.kFill_Style,
+    )
+
+    for index, (glyph, path, _bounds, _glyph_w, _glyph_h) in enumerate(glyphs):
+        cell_x, cell_y, cell_w, cell_h = _inventory_grid_cell(index, len(glyphs), width, height)
+        advance = max(1.0, float(getattr(glyph, "width", None) or units_per_em * 0.6))
+        x = cell_x + (cell_w - advance * scale) / 2
+        y = cell_y + (cell_h - line_height * scale) / 2 + ascender * scale
+
+        canvas.save()
+        canvas.translate(x, y)
+        canvas.scale(scale, -scale)
+        canvas.drawPath(path, paint)
+        canvas.restore()
+
+    data = surface.makeImageSnapshot().encodeToData(skia.kPNG, 100)
+    if data is None:
+        return render_preview_png(None, "No preview", width, height)
+    return bytes(data)
+
+
+def _render_ufo_inventory_preview_png_polygon(
+    glyphs: dict[str, dict],
+    width: int,
+    height: int,
+    ascender: int = 800,
+    descender: int = -200,
+) -> bytes:
+    _np, Image, ImageDraw, _image_font, _torch = _image_stack()
+    img = Image.new("RGBA", (width, height), (16, 16, 16, 255))
+    draw = ImageDraw.Draw(img)
+    drawable = [
+        glyph
+        for name, glyph in glyphs.items()
+        if name != ".notdef" and not name.startswith("public.") and glyph["polygons"]
+    ][:64]
+    if not drawable:
+        return render_preview_png(None, "No drawable glyphs", width, height)
+
+    max_advance = max(max(1.0, float(glyph["advance"])) for glyph in drawable)
+    scale, line_height = _inventory_grid_font_scale(
+        len(drawable),
+        width,
+        height,
+        max_advance,
+        ascender,
+        descender,
+    )
+
+    for index, glyph in enumerate(drawable):
+        cell_x, cell_y, cell_w, cell_h = _inventory_grid_cell(index, len(drawable), width, height)
+        advance = max(1.0, float(glyph["advance"]))
+        origin_x = cell_x + (cell_w - advance * scale) / 2
+        baseline_y = cell_y + (cell_h - line_height * scale) / 2 + ascender * scale
+        for polygon in glyph["polygons"]:
+            if len(polygon) < 2:
+                continue
+            points = [(origin_x + x * scale, baseline_y - y * scale) for x, y in polygon]
+            draw.polygon(points, fill=(220, 220, 220, 255))
+
+    bio = BytesIO()
+    img.convert("RGB").save(bio, format="PNG")
+    return bio.getvalue()
+
+
+def _inventory_grid_cell(
+    index: int,
+    total: int,
+    width: int,
+    height: int,
+) -> tuple[float, float, float, float]:
+    margin = min(width, height) * _INVENTORY_GRID_MARGIN
+    gap = min(width, height) * _INVENTORY_GRID_GAP
+    avail_w = max(1.0, width - margin * 2)
+    avail_h = max(1.0, height - margin * 2)
+    cols = max(1, int((total * (avail_w / max(1.0, avail_h))) ** 0.5 + 0.999))
+    rows = max(1, (total + cols - 1) // cols)
+    cell_w = max(1.0, (avail_w - gap * (cols - 1)) / cols)
+    cell_h = max(1.0, (avail_h - gap * (rows - 1)) / rows)
+    col = index % cols
+    row = index // cols
+    return (
+        margin + col * (cell_w + gap),
+        margin + row * (cell_h + gap),
+        cell_w,
+        cell_h,
+    )
+
+
+def _inventory_grid_font_scale(
+    total: int,
+    width: int,
+    height: int,
+    max_advance: float,
+    ascender: int,
+    descender: int,
+) -> tuple[float, float]:
+    _cell_x, _cell_y, cell_w, cell_h = _inventory_grid_cell(0, total, width, height)
+    line_height = max(1.0, float(ascender - descender))
+    scale = min(
+        (cell_w * _INVENTORY_GRID_FIT) / max(1.0, max_advance),
+        (cell_h * _INVENTORY_GRID_FIT) / line_height,
+    )
+    return max(0.01, scale), line_height
 
 
 def _ufo_glyphs_by_char(font) -> dict[str, object]:

@@ -32,7 +32,10 @@ const quadrants = ["tl", "tc", "tr", "cl", "cc", "cr", "bl", "bc", "br"] as cons
 export type CoordinateQuadrant = (typeof quadrants)[number];
 
 function displayNumber(value: number | undefined): string {
-  return value === undefined || !Number.isFinite(value) ? "" : Math.round(value).toString();
+  if (value === undefined || !Number.isFinite(value)) return "";
+  const rounded = Math.round(value);
+  if (Math.abs(value - rounded) < 0.001) return rounded.toString();
+  return value.toFixed(2).replace(/\.?0+$/, "");
 }
 
 function displayDimension(value: number | undefined): string {

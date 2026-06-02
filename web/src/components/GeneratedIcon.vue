@@ -9,7 +9,7 @@ const props = withDefaults(
     strokeWidth?: number;
   }>(),
   {
-    size: 32,
+    size: 28,
     strokeWidth: 1.5,
   },
 );

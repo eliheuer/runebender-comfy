@@ -35,6 +35,8 @@ defineProps<{
   /** True when the host wants a Close button next to Save (e.g. when
    *  embedded as a ComfyUI overlay). */
   closeEnabled?: boolean;
+  /** Show only the status/file panel, used above the editor canvas. */
+  fileOnly?: boolean;
 }>();
 
 function masterLabel(name: string): string {
@@ -61,13 +63,13 @@ defineEmits<{
         class="save-status"
         :class="{ saved: !unsaved && lastSaved }"
       >
-        {{ !unsaved && lastSaved ? `Saved ${lastSaved}` : "Not saved" }}
+        <span class="save-state">{{ !unsaved && lastSaved ? `Saved ${lastSaved}` : "Not saved" }}</span>
         <span v-if="sourceLabel" class="source-label" :title="sourceLabel"> · {{ sourceLabel }}</span>
       </div>
     </div>
 
     <!-- Master switcher -->
-    <div v-if="masters && masters.length > 1" class="panel masters">
+    <div v-if="!fileOnly && masters && masters.length > 1" class="panel masters">
       <button
         v-for="(name, i) in masters"
         :key="name"
@@ -88,6 +90,7 @@ defineEmits<{
     </div>
 
     <SystemToolbar
+      v-if="!fileOnly"
       :save-enabled="saveEnabled"
       :save-as-enabled="saveAsEnabled"
       :close-enabled="closeEnabled"
@@ -150,17 +153,23 @@ defineEmits<{
 .save-status {
   color: var(--rb-warning, #ffdd33);
   font: 16px ui-sans-serif, system-ui, sans-serif;
-  flex-shrink: 0;
+  display: flex;
+  flex-shrink: 1;
   max-width: 100%;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  min-width: 0;
 }
 .save-status.saved {
   color: var(--rb-accent, #66ee88);
 }
+.save-state {
+  flex: 0 0 auto;
+}
 .source-label {
   color: var(--rb-secondary-text, #707070);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .masters {

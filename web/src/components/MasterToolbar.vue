@@ -81,8 +81,8 @@ function labelFor(name: string): string {
 }
 
 .master-preview {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   color: currentColor;
   display: flex;
   align-items: center;

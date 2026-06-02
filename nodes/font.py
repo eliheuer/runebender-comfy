@@ -237,6 +237,7 @@ async def preview_workspace_slot(request):
     text = str(request.query.get("text", "Aa"))
     width = int(request.query.get("width", "320"))
     height = int(request.query.get("height", "180"))
+    auto_preview = text.strip().lower() in {"", "auto", "__runebender_auto__"}
     request_started = time.monotonic()
     _preview_log("request", slot=slot, text=text, width=width, height=height)
 
@@ -264,14 +265,14 @@ async def preview_workspace_slot(request):
         # build one via fontc so drawbot-skia can render. Skipped when
         # the TTF already exists (compile_slot is itself idempotent
         # when not forced).
-        if slot_info.compiled_path is None and slot_info.source_path is not None:
+        if not auto_preview and slot_info.compiled_path is None and slot_info.source_path is not None:
             _preview_log("compiling for drawbot-skia preview", slot=slot)
             try:
                 await loop.run_in_executor(None, lambda: compile_slot(slot))
                 slot_info = slot_from_name(slot)
             except Exception as exc:
                 _preview_log("compile failed (will fall back to direct skia)", slot=slot, error=str(exc))
-        elif slot_info.source_path is None and slot_info.compiled_path is None:
+        elif not auto_preview and slot_info.source_path is None and slot_info.compiled_path is None:
             _preview_log("slot has no source or compiled artifact; attempting compile", slot=slot)
             try:
                 await loop.run_in_executor(None, lambda: compile_slot(slot))

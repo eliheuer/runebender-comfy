@@ -1628,6 +1628,19 @@ impl GlyphEditor {
         }
     }
 
+    #[wasm_bindgen(js_name = selectContourAt)]
+    pub fn select_contour_at(&mut self, x: f64, y: f64) -> bool {
+        const MIN_CLICK_DISTANCE: f64 = 10.0;
+        const POINT_GUARD_DISTANCE: f64 = 20.0;
+        let screen = Point::new(x, y);
+        let design = self.state.screen_to_glyph_design(screen);
+        let zoom = self.state.viewport.zoom.max(1e-6);
+        let segment_radius = MIN_CLICK_DISTANCE / zoom;
+        let point_guard_radius = POINT_GUARD_DISTANCE / zoom;
+        self.state
+            .select_contour_at_point(design, segment_radius, point_guard_radius)
+    }
+
     #[wasm_bindgen(js_name = unionSelection)]
     pub fn union_selection(&mut self) -> bool {
         let snapshot = self.discrete_edit_snapshot();

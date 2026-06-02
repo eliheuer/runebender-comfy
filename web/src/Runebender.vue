@@ -867,6 +867,7 @@ type Editor = {
   deleteSelection(): boolean;
   togglePointType(): boolean;
   togglePointTypeAt(x: number, y: number): boolean;
+  selectContourAt(x: number, y: number): boolean;
   unionSelection(): boolean;
   subtractSelection(): boolean;
   intersectSelection(): boolean;
@@ -982,8 +983,8 @@ onMounted(async () => {
       });
     }
     updateGridViewportSize();
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("keydown", onGlobalKeyDownCapture, { capture: true });
+    window.addEventListener("keyup", onGlobalKeyUpCapture, { capture: true });
     window.addEventListener("pointerdown", onWindowPointerDown);
     // Window-level drag listeners stop the browser from "opening" a
     // dropped .ufo as a file:// URL when the drop lands outside the
@@ -2022,13 +2023,7 @@ function onActiveGlyphUnicodeChange(event: Event) {
       data.glyphUnicodes.delete(currentGlyph.value);
       data.glyphCategories.set(currentGlyph.value, "Other");
     }
-    const svg = gridGlyphSvgWithComponents(
-      currentGlyph.value,
-      bytes,
-      data.glyphBytes,
-      data.unitsPerEm,
-    );
-    if (svg) data.glyphSvgs.set(currentGlyph.value, svg);
+    refreshGridGlyphSvg(data, currentGlyph.value, bytes);
     masterDataMap.value = new Map(masterDataMap.value);
     if (input) input.value = info.unicode ?? "";
     markGlyphDirty(currentGlyph.value);
@@ -2201,8 +2196,7 @@ function onActiveGlyphNameChange(event: Event) {
     data.glyphMarkColors.delete(oldName);
     if (markColor) data.glyphMarkColors.set(newName, markColor);
     data.glyphSvgs.delete(oldName);
-    const svg = gridGlyphSvgWithComponents(newName, bytes, data.glyphBytes, data.unitsPerEm);
-    if (svg) data.glyphSvgs.set(newName, svg);
+    refreshGridGlyphSvg(data, newName, bytes);
 
     replaceGlyphNameInGroups(data.groups, oldName, newName);
     data.glyphKerningGroups = buildGlyphKerningGroups(data.groups);
@@ -2820,14 +2814,9 @@ function onCanvasDoubleClick(e: MouseEvent) {
   if (!editor) return;
   const c = canvasMouseCoords(e);
   if (!c) return;
-  if (editor.togglePointTypeAt(c[0], c[1])) {
-    syncCurrentGlyphBytesFromEditor();
-    if (currentGlyph.value) {
-      markGlyphDirty(currentGlyph.value);
-    }
+  if (editor.selectContourAt(c[0], c[1])) {
     refreshSelectionState();
     requestRender();
-    queueComfyStateSync();
     return;
   }
   const baseName = editor.componentBaseAt(c[0], c[1]);
@@ -3359,6 +3348,20 @@ function gridGlyphSvgWithComponents(
     console.warn("[runebender] edited glyph grid SVG refresh failed", err);
   }
   return glifToSvgWithComponents(bytes, glyphXmlMapJson(glyphBytes)) || glifToSvg(bytes);
+}
+
+function refreshGridGlyphSvg(
+  data: MasterData,
+  glyphName: string,
+  bytes: Uint8Array,
+): string {
+  const svg = gridGlyphSvgWithComponents(glyphName, bytes, data.glyphBytes, data.unitsPerEm);
+  if (svg) {
+    data.glyphSvgs.set(glyphName, svg);
+  } else {
+    data.glyphSvgs.delete(glyphName);
+  }
+  return svg;
 }
 
 async function loadGlifFiles(
@@ -4008,8 +4011,7 @@ function pasteGridGlyph(): boolean {
       } else {
         data.glyphUnicodes.delete(name);
       }
-      const svg = gridGlyphSvgWithComponents(name, bytes, data.glyphBytes, data.unitsPerEm);
-      if (svg) data.glyphSvgs.set(name, svg);
+      refreshGridGlyphSvg(data, name, bytes);
       if (hasTextBufferSession.value) {
         syncTextSortsForGlyph(name, name, metadata);
       }
@@ -4218,8 +4220,7 @@ function setMarkOnSelected(rgba: string) {
         try {
           const bytes = glifWithMarkColor(originalBytes, rgba);
           data.glyphBytes.set(name, bytes);
-          const svg = gridGlyphSvgWithComponents(name, bytes, data.glyphBytes, data.unitsPerEm);
-          if (svg) data.glyphSvgs.set(name, svg);
+          refreshGridGlyphSvg(data, name, bytes);
         } catch (e) {
           console.warn("serializing mark color failed:", e);
         }
@@ -5001,13 +5002,7 @@ function syncCurrentGlyphBytesFromEditor(
     } else {
       data.glyphUnicodes.delete(currentGlyph.value);
     }
-    const svg = gridGlyphSvgWithComponents(
-      currentGlyph.value,
-      bytes,
-      data.glyphBytes,
-      data.unitsPerEm,
-    );
-    if (svg) data.glyphSvgs.set(currentGlyph.value, svg);
+    refreshGridGlyphSvg(data, currentGlyph.value, bytes);
     currentWidth.value = info.width;
     currentContours.value = info.contours;
     refreshSidebearingsFromEditor();
@@ -5596,6 +5591,23 @@ function onKeyUp(e: KeyboardEvent) {
   }
 }
 
+function ownsGlobalKeyboardEvent(e: KeyboardEvent): boolean {
+  if (!editor || eventTargetAcceptsText(e)) return false;
+  return viewMode.value === "editor" || viewMode.value === "grid";
+}
+
+function onGlobalKeyDownCapture(e: KeyboardEvent) {
+  if (!ownsGlobalKeyboardEvent(e)) return;
+  onKeyDown(e);
+  e.stopImmediatePropagation();
+}
+
+function onGlobalKeyUpCapture(e: KeyboardEvent) {
+  if (!ownsGlobalKeyboardEvent(e)) return;
+  onKeyUp(e);
+  e.stopImmediatePropagation();
+}
+
 onBeforeUnmount(() => {
   if (raf !== null) {
     cancelAnimationFrame(raf);
@@ -5622,8 +5634,8 @@ onBeforeUnmount(() => {
   themeObserver?.disconnect();
   stopBottomPreviewResize();
   clearBackgroundImage();
-  window.removeEventListener("keydown", onKeyDown);
-  window.removeEventListener("keyup", onKeyUp);
+  window.removeEventListener("keydown", onGlobalKeyDownCapture, { capture: true });
+  window.removeEventListener("keyup", onGlobalKeyUpCapture, { capture: true });
   window.removeEventListener("pointerdown", onWindowPointerDown);
   window.removeEventListener("dragenter", onWindowDragOver, { capture: true });
   window.removeEventListener("dragover", onWindowDragOver, { capture: true });
@@ -5742,46 +5754,52 @@ onBeforeUnmount(() => {
           />
         </div>
 
-        <div
-          v-if="viewMode === 'editor'"
-          class="editor-tools-overlay"
-        >
-          <EditModeToolbar
-            :active="activeTool"
-            @select="onToolSelect"
-          />
-          <ShapesToolbar
-            v-if="activeTool === 'Shapes'"
-            :active="activeShape"
-            @select="onShapeSelect"
-          />
-          <TextDirectionToolbar
-            v-if="activeTool === 'Text'"
-            :active="textDirection"
-            @select="onTextDirectionSelect"
-          />
-        </div>
+        <div v-if="viewMode === 'editor'" class="editor-top-overlay">
+          <div class="editor-tools-cluster">
+            <EditModeToolbar
+              :active="activeTool"
+              @select="onToolSelect"
+            />
+            <ShapesToolbar
+              v-if="activeTool === 'Shapes'"
+              :active="activeShape"
+              @select="onShapeSelect"
+            />
+            <TextDirectionToolbar
+              v-if="activeTool === 'Text'"
+              :active="textDirection"
+              @select="onTextDirectionSelect"
+            />
+          </div>
 
-        <div
-          v-if="viewMode === 'editor'"
-          class="workspace-overlay"
-        >
-          <MasterToolbar
-            v-if="masters.length > 1"
-            :masters="masters"
-            :active-master="activeMasterIndex"
-            :previews="masterPreviewSvgs"
-            @select-master="onSelectMaster"
+          <TopBar
+            v-if="glyphNames.length > 0"
+            class="editor-status-topbar"
+            :font-label="fontLabel"
+            :unsaved="hasDirtyChanges"
+            :last-saved="lastSavedDisplay"
+            :source-label="sourceSaveLabel"
+            file-only
           />
-          <WorkspaceToolbar @glyph-grid="backToGrid" />
-          <SystemToolbar
-            :save-enabled="glyphNames.length > 0"
-            :save-as-enabled="!!currentFontPath && glyphNames.length > 0"
-            :close-enabled="!!props.onCloseRequested"
-            @save="onSave"
-            @save-as="onSaveAs"
-            @close="props.onCloseRequested?.()"
-          />
+
+          <div class="workspace-overlay">
+            <MasterToolbar
+              v-if="masters.length > 1"
+              :masters="masters"
+              :active-master="activeMasterIndex"
+              :previews="masterPreviewSvgs"
+              @select-master="onSelectMaster"
+            />
+            <WorkspaceToolbar @glyph-grid="backToGrid" />
+            <SystemToolbar
+              :save-enabled="glyphNames.length > 0"
+              :save-as-enabled="!!currentFontPath && glyphNames.length > 0"
+              :close-enabled="!!props.onCloseRequested"
+              @save="onSave"
+              @save-as="onSaveAs"
+              @close="props.onCloseRequested?.()"
+            />
+          </div>
         </div>
 
         <!-- Welcome / file-picker panel. Only show when there's
@@ -5985,6 +6003,30 @@ onBeforeUnmount(() => {
                 @keydown.enter.prevent="onActiveGlyphSidebearingChange('left', $event)"
               />
             </label>
+            <label class="metric-field kern-field">
+              <span>Left Kern</span>
+              <input
+                type="number"
+                :value="activeLeftKern ?? ''"
+                aria-label="Left kern"
+                placeholder="Auto"
+                :disabled="!canEditActiveLeftKern"
+                @change="updateActiveTextKern('left', ($event.target as HTMLInputElement).value)"
+                @keydown.enter.prevent="updateActiveTextKern('left', ($event.target as HTMLInputElement).value)"
+              />
+            </label>
+            <label class="metric-field kern-field">
+              <span>Right Kern</span>
+              <input
+                type="number"
+                :value="activeRightKern ?? ''"
+                aria-label="Right kern"
+                placeholder="Auto"
+                :disabled="!canEditActiveRightKern"
+                @change="updateActiveTextKern('right', ($event.target as HTMLInputElement).value)"
+                @keydown.enter.prevent="updateActiveTextKern('right', ($event.target as HTMLInputElement).value)"
+              />
+            </label>
             <label class="metric-field metric-compact">
               <span>RSB</span>
               <input
@@ -6004,36 +6046,6 @@ onBeforeUnmount(() => {
                 placeholder="None"
                 @change="updateGlyphKerningGroup('right', ($event.target as HTMLInputElement).value)"
                 @keydown.enter.prevent="updateGlyphKerningGroup('right', ($event.target as HTMLInputElement).value)"
-              />
-            </label>
-          </div>
-
-          <div
-            v-if="activeTool === 'Text' && activeTextSortIndex !== null"
-            class="kern-strip"
-          >
-            <label class="metric-field">
-              <span>Left Kern</span>
-              <input
-                type="number"
-                :value="activeLeftKern ?? ''"
-                aria-label="Left kern"
-                placeholder="Auto"
-                :disabled="!canEditActiveLeftKern"
-                @change="updateActiveTextKern('left', ($event.target as HTMLInputElement).value)"
-                @keydown.enter.prevent="updateActiveTextKern('left', ($event.target as HTMLInputElement).value)"
-              />
-            </label>
-            <label class="metric-field">
-              <span>Right Kern</span>
-              <input
-                type="number"
-                :value="activeRightKern ?? ''"
-                aria-label="Right kern"
-                placeholder="Auto"
-                :disabled="!canEditActiveRightKern"
-                @change="updateActiveTextKern('right', ($event.target as HTMLInputElement).value)"
-                @keydown.enter.prevent="updateActiveTextKern('right', ($event.target as HTMLInputElement).value)"
               />
             </label>
           </div>
@@ -6407,24 +6419,38 @@ onBeforeUnmount(() => {
   bottom: calc(var(--rb-editor-bottom-preview-height) + var(--rb-editor-edge-inset, 8px) + 92px);
 }
 
-.editor-tools-overlay {
+.editor-top-overlay {
   position: absolute;
   left: var(--rb-editor-edge-inset, 8px);
   top: var(--rb-editor-edge-inset, 8px);
+  right: var(--rb-editor-edge-inset, 8px);
   z-index: 4;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.editor-top-overlay > * {
+  pointer-events: auto;
+}
+
+.editor-tools-cluster {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 6px;
-  pointer-events: auto;
+  flex: 0 0 auto;
+}
+
+.editor-status-topbar {
+  flex: 1 1 auto;
+  min-width: 180px;
 }
 
 .workspace-overlay {
-  position: absolute;
-  right: var(--rb-editor-edge-inset, 8px);
-  top: var(--rb-editor-edge-inset, 8px);
-  z-index: 4;
   display: flex;
+  flex: 0 0 auto;
   gap: 6px;
   align-items: flex-start;
 }
@@ -6626,7 +6652,7 @@ onBeforeUnmount(() => {
 
 .active-glyph-overlay {
   left: 50%;
-  width: min(680px, calc(100% - 32px));
+  width: min(860px, calc(100% - 32px));
   padding: 8px;
   transform: translateX(-50%);
   display: grid;
@@ -6637,8 +6663,7 @@ onBeforeUnmount(() => {
 }
 
 .active-glyph-header,
-.metrics-strip,
-.kern-strip {
+.metrics-strip {
   display: grid;
   gap: 6px;
 }
@@ -6648,11 +6673,13 @@ onBeforeUnmount(() => {
 }
 
 .metrics-strip {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.kern-strip {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns:
+    minmax(0, 1.25fr)
+    minmax(0, 0.72fr)
+    minmax(0, 1fr)
+    minmax(0, 1fr)
+    minmax(0, 0.72fr)
+    minmax(0, 1.25fr);
 }
 
 .metric-field {
@@ -6710,6 +6737,10 @@ onBeforeUnmount(() => {
 }
 
 .group-field {
+  grid-template-columns: 70px minmax(0, 1fr);
+}
+
+.kern-field {
   grid-template-columns: 70px minmax(0, 1fr);
 }
 

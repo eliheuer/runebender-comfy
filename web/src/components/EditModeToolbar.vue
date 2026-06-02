@@ -120,8 +120,8 @@ function iconFor(id: ToolId): ToolbarIcon {
 }
 
 .tool-icon {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   display: block;
 }
 </style>
