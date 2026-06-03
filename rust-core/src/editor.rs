@@ -1265,30 +1265,32 @@ impl EditorState {
         Some(path.len())
     }
 
-    /// Mirror selected points horizontally around the selected bounds
-    /// center. Returns true when at least one point actually moved.
+    /// Mirror selected points horizontally around the active
+    /// coordinate-panel reference point. Returns true when at least one
+    /// point actually moved.
     pub fn flip_selection_horizontal(&mut self) -> bool {
         let Some((_count, bounds)) = self.selection_bounds() else {
             return false;
         };
-        let center = bounds.center();
-        let transform = Affine::translate(center.to_vec2())
+        let reference = self.selection_reference_point(bounds);
+        let transform = Affine::translate(-reference.to_vec2())
             .then_scale_non_uniform(-1.0, 1.0)
-            .then_translate(-center.to_vec2());
+            .then_translate(reference.to_vec2());
         self.last_transform = Some(transform);
         self.transform_selection(transform)
     }
 
-    /// Mirror selected points vertically around the selected bounds
-    /// center. Returns true when at least one point actually moved.
+    /// Mirror selected points vertically around the active
+    /// coordinate-panel reference point. Returns true when at least one
+    /// point actually moved.
     pub fn flip_selection_vertical(&mut self) -> bool {
         let Some((_count, bounds)) = self.selection_bounds() else {
             return false;
         };
-        let center = bounds.center();
-        let transform = Affine::translate(center.to_vec2())
+        let reference = self.selection_reference_point(bounds);
+        let transform = Affine::translate(-reference.to_vec2())
             .then_scale_non_uniform(1.0, -1.0)
-            .then_translate(-center.to_vec2());
+            .then_translate(reference.to_vec2());
         self.last_transform = Some(transform);
         self.transform_selection(transform)
     }
@@ -3706,6 +3708,83 @@ mod tests {
         let transform = state.component_transform(0).expect("component transform");
         assert_ne!(transform, Affine::IDENTITY);
         assert!(state.edit_revision > revision);
+    }
+
+    #[test]
+    fn flip_selection_horizontal_uses_center_reference_in_place() {
+        let mut state = EditorState::default();
+        let p0 = on_curve(Point::new(0.0, 0.0), false);
+        let p1 = on_curve(Point::new(100.0, 0.0), false);
+        let p2 = on_curve(Point::new(100.0, 50.0), false);
+        let p3 = on_curve(Point::new(0.0, 50.0), false);
+        for id in [p0.id, p1.id, p2.id, p3.id] {
+            state.selection.insert(id);
+        }
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![p0, p1, p2, p3]),
+            true,
+        )));
+
+        assert!(state.flip_selection_horizontal());
+
+        let points = state.paths[0].points().iter().collect::<Vec<_>>();
+        assert_eq!(points[0].point, Point::new(100.0, 0.0));
+        assert_eq!(points[1].point, Point::new(0.0, 0.0));
+        assert_eq!(points[2].point, Point::new(0.0, 50.0));
+        assert_eq!(points[3].point, Point::new(100.0, 50.0));
+        let Some((_count, bounds)) = state.selection_bounds() else {
+            panic!("flipped selection should still have bounds");
+        };
+        assert_eq!(bounds.center(), Point::new(50.0, 25.0));
+    }
+
+    #[test]
+    fn flip_selection_vertical_uses_center_reference_in_place() {
+        let mut state = EditorState::default();
+        let p0 = on_curve(Point::new(0.0, 0.0), false);
+        let p1 = on_curve(Point::new(100.0, 0.0), false);
+        let p2 = on_curve(Point::new(100.0, 50.0), false);
+        let p3 = on_curve(Point::new(0.0, 50.0), false);
+        for id in [p0.id, p1.id, p2.id, p3.id] {
+            state.selection.insert(id);
+        }
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![p0, p1, p2, p3]),
+            true,
+        )));
+
+        assert!(state.flip_selection_vertical());
+
+        let points = state.paths[0].points().iter().collect::<Vec<_>>();
+        assert_eq!(points[0].point, Point::new(0.0, 50.0));
+        assert_eq!(points[1].point, Point::new(100.0, 50.0));
+        assert_eq!(points[2].point, Point::new(100.0, 0.0));
+        assert_eq!(points[3].point, Point::new(0.0, 0.0));
+        let Some((_count, bounds)) = state.selection_bounds() else {
+            panic!("flipped selection should still have bounds");
+        };
+        assert_eq!(bounds.center(), Point::new(50.0, 25.0));
+    }
+
+    #[test]
+    fn flip_selection_uses_active_coordinate_reference() {
+        let mut state = EditorState::default();
+        state.set_coord_quadrant(Quadrant::Left);
+        let p0 = on_curve(Point::new(20.0, 0.0), false);
+        let p1 = on_curve(Point::new(100.0, 0.0), false);
+        for id in [p0.id, p1.id] {
+            state.selection.insert(id);
+        }
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![p0, p1]),
+            false,
+        )));
+
+        assert!(state.flip_selection_horizontal());
+
+        let points = state.paths[0].points().iter().collect::<Vec<_>>();
+        assert_eq!(points[0].point, Point::new(20.0, 0.0));
+        assert_eq!(points[1].point, Point::new(-60.0, 0.0));
     }
 
     #[test]
