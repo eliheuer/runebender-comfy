@@ -694,7 +694,6 @@ impl MouseDelegate for KnifeTool {
         self.drag_current = Some(event.pos);
         let current = self.drag_current.unwrap_or(drag.current);
         let end = constrain_measure_end(start, current, self.shift_locked);
-        state.knife_preview = Some(knife_preview(start, end, state));
         let design_line = Line::new(
             state.screen_to_glyph_design(start),
             state.screen_to_glyph_design(end),
@@ -707,6 +706,13 @@ impl MouseDelegate for KnifeTool {
         }
         self.drag_start = None;
         self.drag_current = None;
+        state.knife_preview = None;
+    }
+
+    fn left_up(&mut self, _event: MouseEvent, state: &mut Self::Data) {
+        self.drag_start = None;
+        self.drag_current = None;
+        state.knife_preview = None;
     }
 
     fn cancel(&mut self, state: &mut Self::Data) {
@@ -1492,7 +1498,10 @@ fn append_quadratic_subsegment_points(
 }
 
 fn push_path_point(dest: &mut Vec<PathPoint>, point: Point, typ: PointType) {
-    if dest.last().map(|pt| pt.point) == Some(point) {
+    if dest
+        .last()
+        .is_some_and(|pt| pt.point == point && pt.typ.is_on_curve() && typ.is_on_curve())
+    {
         return;
     }
     dest.push(PathPoint {
@@ -2692,6 +2701,70 @@ mod tests {
     }
 
     #[test]
+    fn knife_drag_end_clears_preview_after_cut() {
+        let mut state = EditorState::default();
+        state.paths = vec![rect_path(Rect::new(0.0, 0.0, 100.0, 100.0))];
+        let mut tool = KnifeTool::default();
+        let start = state.viewport.to_screen(Point::new(50.0, -10.0));
+        let current = state.viewport.to_screen(Point::new(50.0, 110.0));
+
+        tool.left_down(
+            MouseEvent {
+                pos: start,
+                button: None,
+                mods: Default::default(),
+            },
+            &mut state,
+        );
+        assert!(state.knife_preview.is_some());
+
+        tool.left_drag_ended(
+            MouseEvent {
+                pos: current,
+                button: None,
+                mods: Default::default(),
+            },
+            Drag {
+                start,
+                prev: start,
+                current,
+            },
+            &mut state,
+        );
+
+        assert_eq!(state.paths.len(), 2);
+        assert!(state.knife_preview.is_none());
+    }
+
+    #[test]
+    fn knife_mouse_up_without_drag_clears_preview() {
+        let mut state = EditorState::default();
+        let mut tool = KnifeTool::default();
+        let point = state.viewport.to_screen(Point::new(0.0, 0.0));
+
+        tool.left_down(
+            MouseEvent {
+                pos: point,
+                button: None,
+                mods: Default::default(),
+            },
+            &mut state,
+        );
+        assert!(state.knife_preview.is_some());
+
+        tool.left_up(
+            MouseEvent {
+                pos: point,
+                button: None,
+                mods: Default::default(),
+            },
+            &mut state,
+        );
+
+        assert!(state.knife_preview.is_none());
+    }
+
+    #[test]
     fn measure_intersects_inactive_text_sorts() {
         let mut state = EditorState::default();
         state.text_buffer.set_glyph_inventory(
@@ -3025,6 +3098,42 @@ mod tests {
                 "sliced hyperbezier should retain explicit cubic controls"
             );
         }
+    }
+
+    #[test]
+    fn knife_subsegments_keep_endpoint_overlapping_cubic_handles() {
+        let points = vec![
+            path_point(Point::new(0.0, 0.0), true),
+            off_curve(Point::new(0.0, 0.0)),
+            off_curve(Point::new(80.0, 100.0)),
+            path_point(Point::new(100.0, 0.0), true),
+        ];
+        let path = CubicPath::new(PathPoints::from_vec(points.clone()), false);
+        let segment = path
+            .iter_segments()
+            .next()
+            .expect("test path should have a cubic segment");
+        let mut split_points = vec![path_point(Point::new(0.0, 0.0), false)];
+
+        append_subsegment_points(&mut split_points, &points, &segment, 0.0, 1.0);
+
+        assert_eq!(
+            split_points
+                .iter()
+                .filter(|point| point.is_off_curve())
+                .count(),
+            2,
+            "endpoint-overlapping handles must not be deduped away"
+        );
+        let rebuilt = CubicPath::new(PathPoints::from_vec(split_points), false);
+        assert!(
+            rebuilt
+                .to_bezpath()
+                .elements()
+                .iter()
+                .any(|element| matches!(element, PathEl::CurveTo(_, _, _))),
+            "the rebuilt segment should remain cubic, not collapse to a line"
+        );
     }
 
     #[test]

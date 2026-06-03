@@ -1377,7 +1377,7 @@ impl Renderer {
         self.scene.stroke(
             &stroke,
             Affine::IDENTITY,
-            self.theme.tool_preview,
+            self.theme.point_smooth_outer,
             None,
             &preview.line,
         );
