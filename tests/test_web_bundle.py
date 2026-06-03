@@ -4,6 +4,7 @@ import ast
 import fnmatch
 import importlib.util
 import json
+import plistlib
 import subprocess
 import sys
 import types
@@ -235,11 +236,43 @@ class WebBundleTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "assets" / "runebender-icons.codepoints.json").read_text(encoding="utf-8")
         )
-        contents = (ROOT / "assets" / "runebender-icons.ufo" / "glyphs" / "contents.plist").read_text(
-            encoding="utf-8"
+        glyphs_dir = ROOT / "assets" / "runebender-icons.ufo" / "glyphs"
+        contents = plistlib.loads(
+            (glyphs_dir / "contents.plist").read_bytes()
         )
 
         self.assertEqual(len(manifest), 26)
+        self.assertEqual(
+            manifest,
+            {
+                "select": "E000",
+                "pen": "E001",
+                "hyperpen": "E002",
+                "knife": "E003",
+                "measure": "E004",
+                "shapes": "E005",
+                "preview": "E006",
+                "text": "E007",
+                "shape-rectangle": "E010",
+                "shape-ellipse": "E011",
+                "text-ltr": "E012",
+                "text-rtl": "E013",
+                "flip-h": "E020",
+                "flip-v": "E021",
+                "rot-cw": "E022",
+                "rot-ccw": "E023",
+                "duplicate": "E024",
+                "duplicate-repeat": "E025",
+                "union": "E030",
+                "subtract": "E031",
+                "intersect": "E032",
+                "exclude": "E033",
+                "glyph-grid": "E040",
+                "save": "E050",
+                "save-as": "E051",
+                "close": "E052",
+            },
+        )
         seen: set[int] = set()
         for glyph_name, value in manifest.items():
             codepoint = int(value, 16)
@@ -247,8 +280,29 @@ class WebBundleTests(unittest.TestCase):
                 self.assertGreaterEqual(codepoint, 0xE000)
                 self.assertLessEqual(codepoint, 0xF8FF)
                 self.assertNotIn(codepoint, seen)
-                self.assertIn(f"<key>{glyph_name}</key>", contents)
+                self.assertIn(glyph_name, contents)
+                glif = (glyphs_dir / contents[glyph_name]).read_text(encoding="utf-8")
+                self.assertIn(f'<unicode hex="{value}"/>', glif)
                 seen.add(codepoint)
+
+    def test_glyph_grid_orders_encoded_glyphs_by_codepoint(self) -> None:
+        source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
+        sidebar = (ROOT / "web" / "src" / "components" / "CategorySidebar.vue").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("function compareGlyphNamesByCodepoint", source)
+        self.assertIn("data.glyphUnicodes", source)
+        self.assertIn("aCodepoint - bCodepoint", source)
+        self.assertIn('const glyphSortMode = ref<GlyphSortMode>("unicode")', source)
+        self.assertIn('glyphSortMode.value === "unicode"', source)
+        self.assertIn("v-model:sort-mode", source)
+        self.assertIn("sortMode: GlyphSortMode", sidebar)
+        self.assertIn("Glyph sort order", sidebar)
+        self.assertNotIn(
+            "Array.from(activeMasterData.value.glyphBytes.keys()).sort()",
+            source,
+        )
 
     def test_readme_documents_publish_readiness_gate(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")

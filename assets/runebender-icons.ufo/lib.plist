@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>public.glyphOrder</key>
+	<array>
+		<string>select</string>
+		<string>pen</string>
+		<string>hyperpen</string>
+		<string>knife</string>
+		<string>measure</string>
+		<string>shapes</string>
+		<string>preview</string>
+		<string>text</string>
+		<string>shape-rectangle</string>
+		<string>shape-ellipse</string>
+		<string>text-ltr</string>
+		<string>text-rtl</string>
+		<string>flip-h</string>
+		<string>flip-v</string>
+		<string>rot-cw</string>
+		<string>rot-ccw</string>
+		<string>duplicate</string>
+		<string>duplicate-repeat</string>
+		<string>union</string>
+		<string>subtract</string>
+		<string>intersect</string>
+		<string>exclude</string>
+		<string>glyph-grid</string>
+		<string>save</string>
+		<string>save-as</string>
+		<string>close</string>
+	</array>
+</dict>
+</plist>

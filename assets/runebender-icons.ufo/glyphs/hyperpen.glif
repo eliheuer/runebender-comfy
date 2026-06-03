@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <glyph name="hyperpen" format="2">
 	<advance width="768"/>
-	<unicode hex="E007"/>
+	<unicode hex="E002"/>
 	<outline>
 		<contour>
 			<point x="330" y="348" type="curve" smooth="yes"/>

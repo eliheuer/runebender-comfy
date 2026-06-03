@@ -227,12 +227,12 @@ const TOOL_PREVIEW_LINE_PX: f64 = 1.0 * STROKE_SCALE;
 const SEGMENT_HOVER_LINE_PX: f64 = 3.0;
 const TOOL_PREVIEW_DOT_RADIUS_PX: f64 = 3.0;
 const KNIFE_PREVIEW_DASH: [f64; 2] = [4.0, 4.0];
-const KNIFE_ENDPOINT_RADIUS_PX: f64 = TOOL_PREVIEW_DOT_RADIUS_PX * 1.5;
-const KNIFE_HIT_RADIUS_PX: f64 = TOOL_PREVIEW_DOT_RADIUS_PX * 2.0;
 const TEXT_CURSOR_LINE_PX: f64 = 1.5;
+const TEXT_CURSOR_LINE_MAX_PX: f64 = 4.0;
 const TEXT_CURSOR_TRIANGLE_WIDTH_PX: f64 = 24.0;
 const TEXT_CURSOR_TRIANGLE_HEIGHT_PX: f64 = 16.0;
 const TEXT_METRIC_CROSS_SIZE: f64 = 24.0;
+const TEXT_METRIC_CROSS_MIN_SIZE: f64 = 12.0;
 const DESIGN_GRID_MID_MIN_ZOOM: f64 = 0.8;
 const DESIGN_GRID_MID_FINE: f64 = 8.0;
 const DESIGN_GRID_MID_COARSE_N: u32 = 4;
@@ -386,17 +386,55 @@ impl Renderer {
     }
 
     fn point_scale(&self, zoom: f64) -> f64 {
-        // Keep point affordances readable at close zoom. Viewport zoom is
-        // measured in backing pixels, so convert it back to CSS/logical
-        // pixels before applying the ramp.
-        const THRESHOLD: f64 = 1.5;
+        // Keep points readable at close zoom without letting them dominate
+        // the outline at wide zoom. Viewport zoom is measured in backing
+        // pixels, so compute the scale curve in CSS/logical pixels.
+        const MIN_ZOOM_SCALE: f64 = 0.72;
+        const BASE_ZOOM_SCALE: f64 = 1.0;
+        const FINE_GRID_ZOOM_SCALE: f64 = 1.34;
         const MAX_ZOOM_SCALE: f64 = 1.75;
         let logical_zoom = zoom / self.device_scale.max(1.0);
-        let zoom_scale = (logical_zoom / THRESHOLD)
-            .max(1.0)
-            .sqrt()
-            .min(MAX_ZOOM_SCALE);
+        let fine_grid_zoom = DESIGN_GRID_CLOSE_MIN_ZOOM / self.device_scale.max(1.0);
+        let wide_t = (logical_zoom / DESIGN_GRID_MID_MIN_ZOOM).clamp(0.0, 1.0);
+        let mid_t = ((logical_zoom - DESIGN_GRID_MID_MIN_ZOOM)
+            / (fine_grid_zoom - DESIGN_GRID_MID_MIN_ZOOM).max(1e-6))
+        .clamp(0.0, 1.0);
+        let close_t =
+            ((logical_zoom - fine_grid_zoom) / (fine_grid_zoom * 2.5).max(1e-6)).clamp(0.0, 1.0);
+        let zoom_scale = if logical_zoom <= DESIGN_GRID_MID_MIN_ZOOM {
+            lerp(MIN_ZOOM_SCALE, BASE_ZOOM_SCALE, smoothstep(wide_t))
+        } else if logical_zoom <= fine_grid_zoom {
+            lerp(BASE_ZOOM_SCALE, FINE_GRID_ZOOM_SCALE, smoothstep(mid_t))
+        } else {
+            lerp(FINE_GRID_ZOOM_SCALE, MAX_ZOOM_SCALE, smoothstep(close_t))
+        };
         self.device_scale * zoom_scale
+    }
+
+    fn text_overlay_zoom_t(&self, zoom: f64) -> f64 {
+        let logical_zoom = zoom / self.device_scale.max(1.0);
+        let fine_grid_zoom = DESIGN_GRID_CLOSE_MIN_ZOOM / self.device_scale.max(1.0);
+        (logical_zoom / (fine_grid_zoom * 1.5).max(1e-6)).clamp(0.0, 1.0)
+    }
+
+    fn text_cursor_line_px(&self, zoom: f64) -> f64 {
+        lerp(
+            TEXT_CURSOR_LINE_PX,
+            TEXT_CURSOR_LINE_MAX_PX,
+            smoothstep(self.text_overlay_zoom_t(zoom)),
+        )
+    }
+
+    fn text_cursor_marker_scale(&self, zoom: f64) -> f64 {
+        lerp(1.0, 1.45, smoothstep(self.text_overlay_zoom_t(zoom)))
+    }
+
+    fn text_metric_cross_size(&self, zoom: f64) -> f64 {
+        lerp(
+            TEXT_METRIC_CROSS_MIN_SIZE,
+            TEXT_METRIC_CROSS_SIZE,
+            smoothstep(self.text_overlay_zoom_t(zoom)),
+        )
     }
 
     fn stroke_screen_line(
@@ -549,7 +587,7 @@ impl Renderer {
             self.draw_measure_preview(preview);
         }
         if let Some(preview) = state.knife_preview.as_ref() {
-            self.draw_knife_preview(preview);
+            self.draw_knife_preview(preview, state.viewport.zoom);
         }
     }
 
@@ -594,6 +632,7 @@ impl Renderer {
                     ascender,
                     descender,
                     view,
+                    state.viewport.zoom,
                     metric_color,
                 );
             }
@@ -677,7 +716,14 @@ impl Renderer {
         }
 
         if !preview_mode && text_mode_active {
-            self.draw_text_cursor(layout.cursor_x, layout.cursor_y, ascender, descender, view);
+            self.draw_text_cursor(
+                layout.cursor_x,
+                layout.cursor_y,
+                ascender,
+                descender,
+                view,
+                state.viewport.zoom,
+            );
         }
     }
 
@@ -688,11 +734,17 @@ impl Renderer {
         ascender: f64,
         descender: f64,
         view: Affine,
+        zoom: f64,
     ) {
         let top = view * Point::new(cursor_x, baseline_y + ascender);
         let bottom = view * Point::new(cursor_x, baseline_y + descender);
+        let line_width = self.px(self.text_cursor_line_px(zoom));
+        let marker_scale = self.text_cursor_marker_scale(zoom);
+        let triangle_width = self.px(TEXT_CURSOR_TRIANGLE_WIDTH_PX * marker_scale);
+        let triangle_height = self.px(TEXT_CURSOR_TRIANGLE_HEIGHT_PX * marker_scale);
+
         self.scene.stroke(
-            &Stroke::new(TEXT_CURSOR_LINE_PX),
+            &Stroke::new(line_width),
             Affine::IDENTITY,
             self.theme.text_cursor,
             None,
@@ -700,9 +752,9 @@ impl Renderer {
         );
 
         let mut top_triangle = BezPath::new();
-        top_triangle.move_to((top.x - TEXT_CURSOR_TRIANGLE_WIDTH_PX / 2.0, top.y));
-        top_triangle.line_to((top.x + TEXT_CURSOR_TRIANGLE_WIDTH_PX / 2.0, top.y));
-        top_triangle.line_to((top.x, top.y + TEXT_CURSOR_TRIANGLE_HEIGHT_PX));
+        top_triangle.move_to((top.x - triangle_width / 2.0, top.y));
+        top_triangle.line_to((top.x + triangle_width / 2.0, top.y));
+        top_triangle.line_to((top.x, top.y + triangle_height));
         top_triangle.close_path();
         self.scene.fill(
             Fill::NonZero,
@@ -713,9 +765,9 @@ impl Renderer {
         );
 
         let mut bottom_triangle = BezPath::new();
-        bottom_triangle.move_to((bottom.x - TEXT_CURSOR_TRIANGLE_WIDTH_PX / 2.0, bottom.y));
-        bottom_triangle.line_to((bottom.x + TEXT_CURSOR_TRIANGLE_WIDTH_PX / 2.0, bottom.y));
-        bottom_triangle.line_to((bottom.x, bottom.y - TEXT_CURSOR_TRIANGLE_HEIGHT_PX));
+        bottom_triangle.move_to((bottom.x - triangle_width / 2.0, bottom.y));
+        bottom_triangle.line_to((bottom.x + triangle_width / 2.0, bottom.y));
+        bottom_triangle.line_to((bottom.x, bottom.y - triangle_height));
         bottom_triangle.close_path();
         self.scene.fill(
             Fill::NonZero,
@@ -734,13 +786,14 @@ impl Renderer {
         ascender: f64,
         descender: f64,
         view: Affine,
+        zoom: f64,
         color: Srgb,
     ) {
+        let size = self.px(self.text_metric_cross_size(zoom));
+        let stroke = Stroke::new(self.px(METRIC_LINE_PX));
         for edge_x in [x, x + advance_width] {
             for y in [baseline_y + descender, baseline_y, baseline_y + ascender] {
                 let center = view * Point::new(edge_x, y);
-                let size = self.px(TEXT_METRIC_CROSS_SIZE);
-                let stroke = Stroke::new(self.px(METRIC_LINE_PX));
                 let h = Line::new(
                     Point::new(center.x - size, center.y),
                     Point::new(center.x + size, center.y),
@@ -1351,9 +1404,9 @@ impl Renderer {
         }
     }
 
-    fn draw_knife_preview(&mut self, preview: &KnifePreview) {
-        let stroke =
-            Stroke::new(TOOL_PREVIEW_LINE_PX).with_dashes(0.0, KNIFE_PREVIEW_DASH.to_vec());
+    fn draw_knife_preview(&mut self, preview: &KnifePreview, zoom: f64) {
+        let stroke = Stroke::new(self.px(TOOL_PREVIEW_LINE_PX))
+            .with_dashes(0.0, KNIFE_PREVIEW_DASH.map(|dash| self.px(dash)).to_vec());
         self.scene.stroke(
             &stroke,
             Affine::IDENTITY,
@@ -1362,8 +1415,9 @@ impl Renderer {
             &preview.line,
         );
 
+        let marker_radius = SMOOTH_POINT_RADIUS_PX * self.point_scale(zoom);
         for point in [preview.line.p0, preview.line.p1] {
-            let dot = Circle::new(point, KNIFE_ENDPOINT_RADIUS_PX);
+            let dot = Circle::new(point, marker_radius);
             self.scene.fill(
                 Fill::NonZero,
                 Affine::IDENTITY,
@@ -1374,7 +1428,7 @@ impl Renderer {
         }
 
         for point in &preview.intersections {
-            let dot = Circle::new(*point, KNIFE_HIT_RADIUS_PX);
+            let dot = Circle::new(*point, marker_radius);
             self.scene
                 .fill(Fill::NonZero, Affine::IDENTITY, POINT_MARK_RED, None, &dot);
         }
@@ -1453,6 +1507,14 @@ fn path_is_closed(path: &Path) -> bool {
         Path::Quadratic(q) => q.closed,
         Path::Hyper(h) => h.closed,
     }
+}
+
+fn smoothstep(t: f64) -> f64 {
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn lerp(a: f64, b: f64, t: f64) -> f64 {
+    a + (b - a) * t
 }
 
 fn next_point_pos(points: &[PathPoint], index: usize, closed: bool) -> Point {

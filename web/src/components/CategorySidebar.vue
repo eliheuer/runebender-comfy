@@ -6,6 +6,7 @@ import type {
   SidebarLanguageGroup,
   SidebarBuiltinFilter,
   SidebarSearchMode,
+  GlyphSortMode,
 } from "../glyphSidebarData";
 
 export type Category =
@@ -24,6 +25,7 @@ const props = defineProps<{
   searchMode: SidebarSearchMode;
   searchMatchCase: boolean;
   searchRegex: boolean;
+  sortMode: GlyphSortMode;
   categoryGroups: SidebarCategoryGroup[];
   languageGroups: SidebarLanguageGroup[];
   filters: SidebarBuiltinFilter[];
@@ -37,6 +39,7 @@ const emit = defineEmits<{
   (e: "update:searchMode", value: SidebarSearchMode): void;
   (e: "update:searchMatchCase", value: boolean): void;
   (e: "update:searchRegex", value: boolean): void;
+  (e: "update:sortMode", value: GlyphSortMode): void;
 }>();
 
 const expandedCategories = ref(new Set<Category>());
@@ -45,6 +48,11 @@ const searchMenuOpen = ref(false);
 
 const searchModes: Array<{ value: SidebarSearchMode; label: string }> = [
   { value: "all", label: "All" },
+  { value: "name", label: "Name" },
+  { value: "unicode", label: "Unicode" },
+];
+
+const sortModes: Array<{ value: GlyphSortMode; label: string }> = [
   { value: "name", label: "Name" },
   { value: "unicode", label: "Unicode" },
 ];
@@ -98,6 +106,20 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
 
 <template>
   <aside class="category-sidebar">
+    <div class="sort-toggle" role="group" aria-label="Glyph sort order">
+      <button
+        v-for="mode in sortModes"
+        :key="mode.value"
+        type="button"
+        class="sort-btn"
+        :class="{ active: sortMode === mode.value }"
+        :aria-pressed="sortMode === mode.value"
+        @click="$emit('update:sortMode', mode.value)"
+      >
+        {{ mode.label }}
+      </button>
+    </div>
+
     <div class="search-wrap">
       <button
         type="button"
@@ -294,11 +316,49 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
   position: relative;
   display: flex;
   align-items: center;
-  margin: 8px 8px 6px;
+  margin: 6px 8px 6px;
   height: 30px;
   border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
   border-radius: 7px;
   background: var(--rb-canvas-background, #0c0c0c);
+}
+
+.sort-toggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin: 8px 8px 0;
+  padding: 3px;
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
+  border-radius: 7px;
+  background: var(--rb-canvas-background, #0c0c0c);
+}
+
+.sort-btn {
+  appearance: none;
+  height: 24px;
+  min-width: 0;
+  padding: 0 8px;
+  border: var(--rb-stroke-width, 1px) solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--rb-primary-text, #909090);
+  cursor: pointer;
+  font: 13px ui-sans-serif, system-ui, sans-serif;
+}
+
+.sort-btn.active {
+  border-color: var(--rb-accent, #18b86f);
+  color: var(--rb-accent, #18b86f);
+}
+
+.sort-btn:focus {
+  outline: none;
+}
+
+.sort-btn:focus-visible {
+  outline: var(--rb-stroke-width, 1px) solid var(--rb-accent, #18b86f);
+  outline-offset: var(--rb-stroke-width, 1px);
 }
 
 .search-wrap:focus-within {

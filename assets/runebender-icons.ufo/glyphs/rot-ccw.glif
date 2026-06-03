@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <glyph name="rot-ccw" format="2">
 	<advance width="768"/>
-	<unicode hex="E00D"/>
+	<unicode hex="E023"/>
 	<outline>
 		<contour>
 			<point x="222" y="258" type="curve"/>
@@ -30,7 +30,7 @@
 	<lib>
 		<dict>
 			<key>public.markColor</key>
-			<string>1,0.6,0.06,1</string>
+			<string>0.91,0.42,0.72,1</string>
 		</dict>
 	</lib>
 </glyph>

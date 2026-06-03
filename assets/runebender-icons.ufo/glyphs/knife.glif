@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <glyph name="knife" format="2">
 	<advance width="768"/>
-	<unicode hex="E009"/>
+	<unicode hex="E003"/>
 	<outline>
 		<contour>
 			<point x="731.66" y="373.2" type="curve" smooth="yes"/>

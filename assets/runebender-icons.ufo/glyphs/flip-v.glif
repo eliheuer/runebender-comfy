@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <glyph name="flip-v" format="2">
 	<advance width="768"/>
-	<unicode hex="E005"/>
+	<unicode hex="E021"/>
 	<outline>
 		<contour>
 			<point x="448" y="352" type="curve" smooth="yes"/>

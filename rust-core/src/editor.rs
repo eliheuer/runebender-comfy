@@ -2211,12 +2211,19 @@ fn maintain_smooth_handle_tangents(
     changed
 }
 
-fn mirrored_smooth_handle(moved: Point, anchor: Point, _opposite: Point) -> Option<Point> {
-    let v = moved - anchor;
-    if v.hypot() < 1e-9 {
+fn mirrored_smooth_handle(moved: Point, anchor: Point, opposite: Point) -> Option<Point> {
+    let moved_vector = moved - anchor;
+    let moved_len = moved_vector.hypot();
+    if moved_len < 1e-9 {
         return None;
     }
-    Some(snap_point_to_grid(anchor - v))
+    let opposite_len = (opposite - anchor).hypot();
+    if opposite_len < 1e-9 {
+        return None;
+    }
+    Some(snap_point_to_grid(
+        anchor - (moved_vector / moved_len) * opposite_len,
+    ))
 }
 
 fn projected_smooth_handle(moved: Point, anchor: Point, line_point: Point) -> Option<Point> {
@@ -3170,6 +3177,28 @@ mod tests {
         let points = state.paths[0].points().to_vec();
         assert_eq!(points[0].point, Point::new(10.0, 10.0));
         assert_eq!(points[2].point, Point::new(10.0, -10.0));
+    }
+
+    #[test]
+    fn moving_smooth_handle_preserves_opposite_handle_length() {
+        let mut state = EditorState::default();
+        let moved = off_curve(Point::new(0.0, 0.0));
+        let moved_id = moved.id;
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![
+                moved,
+                on_curve(Point::new(10.0, 0.0), true),
+                off_curve(Point::new(30.0, 0.0)),
+            ]),
+            false,
+        )));
+        state.selection.insert(moved_id);
+
+        state.translate_selection_independent(Vec2::new(10.0, 10.0));
+
+        let points = state.paths[0].points().to_vec();
+        assert_eq!(points[0].point, Point::new(10.0, 10.0));
+        assert_eq!(points[2].point, Point::new(10.0, -20.0));
     }
 
     #[test]

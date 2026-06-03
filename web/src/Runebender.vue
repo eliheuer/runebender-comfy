@@ -29,6 +29,7 @@ import {
   SIDEBAR_FILTERS,
   SIDEBAR_LANGUAGE_GROUPS,
   type GlyphSidebarFilter,
+  type GlyphSortMode,
   type SidebarBuiltinFilter,
   type SidebarCharacterFilter,
   type SidebarSearchMode,
@@ -370,6 +371,7 @@ const dirtyKerningMasters = ref<Set<string>>(new Set());
 const dirtyGroupsMasters = ref<Set<string>>(new Set());
 const gridGlyphClipboard = ref<Uint8Array | null>(null);
 const markColorApplyAllMasters = ref(false);
+const glyphSortMode = ref<GlyphSortMode>("unicode");
 
 const activeMasterData = computed(() => masterDataMap.value.get(activeMasterName.value));
 const glyphUnicodes = computed(
@@ -401,9 +403,40 @@ const glyphCategories = computed(
 const glyphMarkColors = computed(
   () => activeMasterData.value?.glyphMarkColors ?? (new Map<string, string>()),
 );
-const glyphNames = computed(() =>
-  activeMasterData.value ? Array.from(activeMasterData.value.glyphBytes.keys()).sort() : [],
-);
+function firstGlyphCodepointFromUnicode(unicode?: string): number | null {
+  if (!unicode) return null;
+  for (const hex of unicode.split(/[\s,]+/)) {
+    const codepoint = Number.parseInt(hex.replace(/^U\+/i, ""), 16);
+    if (Number.isFinite(codepoint)) return codepoint;
+  }
+  return null;
+}
+
+function compareGlyphNamesByCodepoint(
+  a: string,
+  b: string,
+  unicodes: Map<string, string>,
+): number {
+  const aCodepoint = firstGlyphCodepointFromUnicode(unicodes.get(a));
+  const bCodepoint = firstGlyphCodepointFromUnicode(unicodes.get(b));
+  if (aCodepoint !== null && bCodepoint !== null && aCodepoint !== bCodepoint) {
+    return aCodepoint - bCodepoint;
+  }
+  if (aCodepoint !== null && bCodepoint === null) return -1;
+  if (aCodepoint === null && bCodepoint !== null) return 1;
+  return a.localeCompare(b);
+}
+
+const glyphNames = computed(() => {
+  const data = activeMasterData.value;
+  if (!data) return [];
+  return Array.from(data.glyphBytes.keys()).sort((a, b) => {
+    if (glyphSortMode.value === "unicode") {
+      return compareGlyphNamesByCodepoint(a, b, data.glyphUnicodes);
+    }
+    return a.localeCompare(b);
+  });
+});
 const masters = computed(() => Array.from(masterDataMap.value.keys()));
 const activeMasterIndex = computed(() => masters.value.indexOf(activeMasterName.value));
 const masterPreviewSvgs = computed(() =>
@@ -5695,6 +5728,7 @@ onBeforeUnmount(() => {
             v-model:search-mode="sidebarSearchMode"
             v-model:search-match-case="sidebarSearchMatchCase"
             v-model:search-regex="sidebarSearchRegex"
+            v-model:sort-mode="glyphSortMode"
             :selected="selectedSidebarFilter"
             :counts="categoryCounts"
             :total-count="glyphNames.length"

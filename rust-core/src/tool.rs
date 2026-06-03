@@ -20,6 +20,7 @@ use crate::path::{
 const MAX_KNIFE_RECURSE: usize = 16;
 const MEASURE_FUZZY_TOLERANCE: f64 = 0.1;
 const KNIFE_HIT_CLUSTER_TOLERANCE: f64 = 1e-4;
+const SELECT_POINT_HIT_DISTANCE: f64 = 16.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShapeKind {
@@ -235,7 +236,8 @@ impl MouseDelegate for SelectTool {
     fn left_down(&mut self, event: MouseEvent, state: &mut Self::Data) {
         let design_pt = state.screen_to_glyph_design(event.pos);
         let hit_radius = MIN_CLICK_DISTANCE / state.viewport.zoom.max(1e-6);
-        let hit = state.hit_test_point(design_pt, hit_radius);
+        let point_hit_radius = SELECT_POINT_HIT_DISTANCE / state.viewport.zoom.max(1e-6);
+        let hit = state.hit_test_point(design_pt, point_hit_radius);
         let component_hit = state.hit_test_component(design_pt);
 
         if event.mods.alt {
@@ -2789,6 +2791,29 @@ mod tests {
         assert!(state.selection.contains(&first_id));
         assert!(state.selection.contains(&second_id));
         assert_eq!(state.selection.len(), 2);
+    }
+
+    #[test]
+    fn select_click_uses_larger_point_hit_target_than_segment_hitbox() {
+        let mut state = EditorState::default();
+        let point = path_point(Point::new(0.0, 0.0), false);
+        let point_id = point.id;
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![point]),
+            false,
+        )));
+
+        let mut tool = SelectTool::default();
+        tool.left_down(
+            MouseEvent {
+                pos: state.viewport.to_screen(Point::new(13.0, 0.0)),
+                button: None,
+                mods: Default::default(),
+            },
+            &mut state,
+        );
+
+        assert!(state.selection.contains(&point_id));
     }
 
     #[test]

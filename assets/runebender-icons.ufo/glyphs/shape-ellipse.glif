@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <glyph name="shape-ellipse" format="2">
 	<advance width="768"/>
-	<unicode hex="E012"/>
+	<unicode hex="E011"/>
 	<outline>
 		<contour>
 			<point x="654" y="384" type="curve"/>
@@ -21,7 +21,7 @@
 	<lib>
 		<dict>
 			<key>public.markColor</key>
-			<string>1,0.6,0.06,1</string>
+			<string>0.55,0.42,1,1</string>
 		</dict>
 	</lib>
 </glyph>

@@ -46,6 +46,7 @@ def main() -> None:
     ufo_path = repo_root / "assets" / "runebender-icons.ufo"
     glyphs_path = ufo_path / "glyphs"
     contents_path = glyphs_path / "contents.plist"
+    lib_path = ufo_path / "lib.plist"
     manifest_path = repo_root / "assets" / "runebender-icons.codepoints.json"
 
     codepoints = load_codepoints(manifest_path)
@@ -97,6 +98,12 @@ def main() -> None:
         if updated != text:
             glif_path.write_text(updated, encoding="utf-8")
         assigned += 1
+
+    lib = plistlib.loads(lib_path.read_bytes()) if lib_path.exists() else {}
+    lib["public.glyphOrder"] = [
+        glyph_name for glyph_name in codepoints if glyph_name in contents
+    ]
+    lib_path.write_bytes(plistlib.dumps(lib, sort_keys=False))
 
     print(f"assigned {assigned} PUA codepoints in {ufo_path}")
 

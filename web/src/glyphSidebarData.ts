@@ -10,6 +10,7 @@ export type GlyphSidebarFilter =
   | { kind: "builtin"; id: string };
 
 export type SidebarSearchMode = "all" | "name" | "unicode";
+export type GlyphSortMode = "name" | "unicode";
 
 export type SidebarCategorySubfilter = {
   id: string;
