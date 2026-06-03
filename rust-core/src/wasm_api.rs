@@ -1613,6 +1613,18 @@ impl GlyphEditor {
         }
     }
 
+    #[wasm_bindgen(js_name = roundSelectedCorners)]
+    pub fn round_selected_corners(&mut self) -> bool {
+        let snapshot = self.discrete_edit_snapshot();
+        if self.state.round_selected_corners() {
+            self.undo.add_undo_group(snapshot);
+            self.pending_snapshot = None;
+            true
+        } else {
+            false
+        }
+    }
+
     #[wasm_bindgen(js_name = togglePointTypeAt)]
     pub fn toggle_point_type_at(&mut self, x: f64, y: f64) -> bool {
         const MIN_CLICK_DISTANCE: f64 = 10.0;

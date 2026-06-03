@@ -21,6 +21,9 @@ use crate::path::{
 use crate::text::TextBuffer;
 
 const DESIGN_GRID_SPACING: f64 = 2.0;
+const DEFAULT_ROUND_CORNER_OFFSET: f64 = 32.0;
+const DEFAULT_ROUND_CORNER_HANDLE_RATIO: f64 = 0.552_284_749_830_793_6;
+const MAX_ROUND_CORNER_SIDE_FRACTION: f64 = 0.45;
 
 // ============================================================================
 // FontMetrics
@@ -1685,6 +1688,48 @@ impl EditorState {
         true
     }
 
+    /// Replace selected sharp line-line corners with rounded cubic
+    /// corners. The generated points are snapped to the design grid
+    /// and the offset/handle proportions are inferred from existing
+    /// rounded corners in the current glyph when possible.
+    pub fn round_selected_corners(&mut self) -> bool {
+        if self.selection.is_empty() {
+            return false;
+        }
+
+        let profile = infer_round_corner_profile(&self.paths);
+        let selection = self.selection.clone();
+        let mut next_selection = Selection::new();
+        let mut changed = false;
+
+        for path in &mut self.paths {
+            let Path::Cubic(cubic) = path else {
+                continue;
+            };
+            let points = cubic.points.to_vec();
+            let Some(next_points) = round_selected_corners_in_cubic_points(
+                &points,
+                cubic.closed,
+                &selection,
+                profile,
+                &mut next_selection,
+            ) else {
+                continue;
+            };
+            cubic.points = PathPoints::from_vec(next_points);
+            changed = true;
+        }
+
+        if !changed {
+            return false;
+        }
+
+        self.clear_component_selection();
+        self.selection = next_selection;
+        self.bump_edit_revision();
+        true
+    }
+
     pub fn insert_point_on_segment(&mut self, segment_info: &SegmentInfo, t: f64) -> bool {
         let Some(path) = self.paths.get_mut(segment_info.path_index) else {
             return false;
@@ -2481,6 +2526,224 @@ fn snap_point_to_grid(point: Point) -> Point {
         (point.x / DESIGN_GRID_SPACING).round() * DESIGN_GRID_SPACING,
         (point.y / DESIGN_GRID_SPACING).round() * DESIGN_GRID_SPACING,
     )
+}
+
+#[derive(Clone, Copy)]
+struct RoundCornerProfile {
+    offset: f64,
+    handle_ratio: f64,
+}
+
+fn infer_round_corner_profile(paths: &[Path]) -> RoundCornerProfile {
+    let mut offsets = Vec::new();
+    let mut handle_ratios = Vec::new();
+
+    for path in paths {
+        let Path::Cubic(cubic) = path else {
+            continue;
+        };
+        collect_round_corner_samples(
+            &cubic.points.to_vec(),
+            cubic.closed,
+            &mut offsets,
+            &mut handle_ratios,
+        );
+    }
+
+    RoundCornerProfile {
+        offset: median_or_default(offsets, DEFAULT_ROUND_CORNER_OFFSET),
+        handle_ratio: median_or_default(handle_ratios, DEFAULT_ROUND_CORNER_HANDLE_RATIO)
+            .clamp(0.1, 1.0),
+    }
+}
+
+fn collect_round_corner_samples(
+    points: &[PathPoint],
+    closed: bool,
+    offsets: &mut Vec<f64>,
+    handle_ratios: &mut Vec<f64>,
+) {
+    for start in 0..points.len() {
+        let Some(cp1) = next_raw_index(start, points.len(), closed) else {
+            continue;
+        };
+        let Some(cp2) = next_raw_index(cp1, points.len(), closed) else {
+            continue;
+        };
+        let Some(end) = next_raw_index(cp2, points.len(), closed) else {
+            continue;
+        };
+        let Some(prev) = previous_raw_index(start, points.len(), closed) else {
+            continue;
+        };
+        let Some(next) = next_raw_index(end, points.len(), closed) else {
+            continue;
+        };
+        if !all_distinct(&[prev, start, cp1, cp2, end, next]) {
+            continue;
+        }
+        if !points[start].is_on_curve()
+            || !points[cp1].is_off_curve()
+            || !points[cp2].is_off_curve()
+            || !points[end].is_on_curve()
+            || !points[prev].is_on_curve()
+            || !points[next].is_on_curve()
+        {
+            continue;
+        }
+
+        let Some(corner) = line_intersection(
+            points[prev].point,
+            points[start].point,
+            points[end].point,
+            points[next].point,
+        ) else {
+            continue;
+        };
+        let start_offset = corner.distance(points[start].point);
+        let end_offset = corner.distance(points[end].point);
+        if start_offset < DESIGN_GRID_SPACING || end_offset < DESIGN_GRID_SPACING {
+            continue;
+        }
+
+        let handle_one = points[cp1].point.distance(points[start].point);
+        let handle_two = points[end].point.distance(points[cp2].point);
+        offsets.push((start_offset + end_offset) * 0.5);
+        if handle_one > 0.0 {
+            handle_ratios.push(handle_one / start_offset);
+        }
+        if handle_two > 0.0 {
+            handle_ratios.push(handle_two / end_offset);
+        }
+    }
+}
+
+fn round_selected_corners_in_cubic_points(
+    points: &[PathPoint],
+    closed: bool,
+    selection: &Selection,
+    profile: RoundCornerProfile,
+    next_selection: &mut Selection,
+) -> Option<Vec<PathPoint>> {
+    let mut next_points = Vec::with_capacity(points.len());
+    let mut changed = false;
+
+    for (index, point) in points.iter().enumerate() {
+        if selection.contains(&point.id)
+            && let Some(rounded) = rounded_corner_points(points, index, closed, profile)
+        {
+            for point in rounded {
+                if point.is_on_curve() {
+                    next_selection.insert(point.id);
+                }
+                next_points.push(point);
+            }
+            changed = true;
+        } else {
+            next_points.push(point.clone());
+        }
+    }
+
+    changed.then_some(next_points)
+}
+
+fn rounded_corner_points(
+    points: &[PathPoint],
+    index: usize,
+    closed: bool,
+    profile: RoundCornerProfile,
+) -> Option<[PathPoint; 4]> {
+    if !points.get(index)?.is_on_curve() {
+        return None;
+    }
+    let prev = previous_raw_index(index, points.len(), closed)?;
+    let next = next_raw_index(index, points.len(), closed)?;
+    if !points[prev].is_on_curve() || !points[next].is_on_curve() {
+        return None;
+    }
+
+    let corner = points[index].point;
+    let prev_vec = points[prev].point - corner;
+    let next_vec = points[next].point - corner;
+    let prev_len = prev_vec.hypot();
+    let next_len = next_vec.hypot();
+    if prev_len < DESIGN_GRID_SPACING * 2.0 || next_len < DESIGN_GRID_SPACING * 2.0 {
+        return None;
+    }
+
+    let offset = profile
+        .offset
+        .min(prev_len * MAX_ROUND_CORNER_SIDE_FRACTION)
+        .min(next_len * MAX_ROUND_CORNER_SIDE_FRACTION);
+    if offset < DESIGN_GRID_SPACING {
+        return None;
+    }
+
+    let prev_unit = prev_vec / prev_len;
+    let next_unit = next_vec / next_len;
+    let handle_len = offset * profile.handle_ratio;
+    let first_on = snap_point_to_grid(corner + prev_unit * offset);
+    let second_on = snap_point_to_grid(corner + next_unit * offset);
+    let first_handle = snap_point_to_grid(first_on - prev_unit * handle_len);
+    let second_handle = snap_point_to_grid(second_on - next_unit * handle_len);
+    if first_on == corner || second_on == corner || first_on == second_on {
+        return None;
+    }
+
+    Some([
+        on_curve(first_on, true),
+        off_curve(first_handle),
+        off_curve(second_handle),
+        on_curve(second_on, true),
+    ])
+}
+
+fn median_or_default(mut values: Vec<f64>, default: f64) -> f64 {
+    values.retain(|value| value.is_finite() && *value > 0.0);
+    if values.is_empty() {
+        return default;
+    }
+    values.sort_by(f64::total_cmp);
+    values[values.len() / 2]
+}
+
+fn line_intersection(a: Point, b: Point, c: Point, d: Point) -> Option<Point> {
+    let r = b - a;
+    let s = d - c;
+    let cross = r.x * s.y - r.y * s.x;
+    if cross.abs() < 1e-6 {
+        return None;
+    }
+    let delta = c - a;
+    let t = (delta.x * s.y - delta.y * s.x) / cross;
+    Some(a + r * t)
+}
+
+fn all_distinct(indices: &[usize]) -> bool {
+    indices
+        .iter()
+        .enumerate()
+        .all(|(pos, index)| !indices[pos + 1..].contains(index))
+}
+
+fn previous_raw_index(index: usize, len: usize, closed: bool) -> Option<usize> {
+    if index > 0 {
+        Some(index - 1)
+    } else if closed && len > 0 {
+        Some(len - 1)
+    } else {
+        None
+    }
+}
+
+fn next_raw_index(index: usize, len: usize, closed: bool) -> Option<usize> {
+    if index + 1 < len {
+        Some(index + 1)
+    } else if closed && len > 0 {
+        Some(0)
+    } else {
+        None
+    }
 }
 
 fn insert_point_on_line(path: &mut Path, segment_info: &SegmentInfo, t: f64) -> Option<EntityId> {
@@ -3740,6 +4003,91 @@ mod tests {
         assert!(points[2].is_on_curve());
         assert!(points[3].is_off_curve());
         assert!(state.selection.contains(&points[2].id));
+    }
+
+    #[test]
+    fn round_selected_corners_matches_existing_corner_profile() {
+        let mut state = EditorState::default();
+        let selected = on_curve(Point::new(0.0, 100.0), false);
+        let selected_id = selected.id;
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![
+                selected,
+                on_curve(Point::new(0.0, 0.0), false),
+                on_curve(Point::new(80.0, 0.0), true),
+                off_curve(Point::new(92.0, 0.0)),
+                off_curve(Point::new(100.0, 8.0)),
+                on_curve(Point::new(100.0, 20.0), true),
+                on_curve(Point::new(100.0, 100.0), false),
+            ]),
+            true,
+        )));
+        state.selection.insert(selected_id);
+
+        assert!(state.round_selected_corners());
+
+        let Path::Cubic(path) = &state.paths[0] else {
+            panic!("rounded corners should preserve cubic path type");
+        };
+        let points = path.points.to_vec();
+        assert_eq!(points.len(), 10);
+        assert_eq!(points[0].point, Point::new(20.0, 100.0));
+        assert_eq!(points[1].point, Point::new(8.0, 100.0));
+        assert_eq!(points[2].point, Point::new(0.0, 92.0));
+        assert_eq!(points[3].point, Point::new(0.0, 80.0));
+        assert!(points[0].is_on_curve());
+        assert!(points[1].is_off_curve());
+        assert!(points[2].is_off_curve());
+        assert!(points[3].is_on_curve());
+        assert!(state.selection.contains(&points[0].id));
+        assert!(state.selection.contains(&points[3].id));
+        assert_eq!(state.selection.len(), 2);
+    }
+
+    #[test]
+    fn round_selected_corners_snaps_generated_points_to_grid() {
+        let mut state = EditorState::default();
+        let selected = on_curve(Point::new(0.3, 100.7), false);
+        let selected_id = selected.id;
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![
+                selected,
+                on_curve(Point::new(0.0, 0.0), false),
+                on_curve(Point::new(100.0, 0.0), false),
+                on_curve(Point::new(100.0, 100.0), false),
+            ]),
+            true,
+        )));
+        state.selection.insert(selected_id);
+
+        assert!(state.round_selected_corners());
+
+        let Path::Cubic(path) = &state.paths[0] else {
+            panic!("rounded corners should preserve cubic path type");
+        };
+        for point in path.points.iter().take(4) {
+            assert_eq!(point.point.x % DESIGN_GRID_SPACING, 0.0);
+            assert_eq!(point.point.y % DESIGN_GRID_SPACING, 0.0);
+        }
+    }
+
+    #[test]
+    fn round_selected_corners_ignores_curve_connected_points() {
+        let mut state = EditorState::default();
+        let selected = on_curve(Point::new(0.0, 0.0), true);
+        let selected_id = selected.id;
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![
+                selected,
+                off_curve(Point::new(20.0, 80.0)),
+                off_curve(Point::new(80.0, 80.0)),
+                on_curve(Point::new(100.0, 0.0), true),
+            ]),
+            false,
+        )));
+        state.selection.insert(selected_id);
+
+        assert!(!state.round_selected_corners());
     }
 
     #[test]

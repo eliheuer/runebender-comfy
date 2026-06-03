@@ -285,6 +285,7 @@ type ContourContextMenuState = {
   screenY: number;
   pathIndex: number;
   canSetStart: boolean;
+  canRoundCorners: boolean;
   canMoveUp: boolean;
   canMoveDown: boolean;
 };
@@ -899,6 +900,7 @@ type Editor = {
   pasteSelection(): boolean;
   deleteSelection(): boolean;
   togglePointType(): boolean;
+  roundSelectedCorners(): boolean;
   togglePointTypeAt(x: number, y: number): boolean;
   selectContourAt(x: number, y: number): boolean;
   unionSelection(): boolean;
@@ -2746,6 +2748,7 @@ function onCanvasContextMenu(e: MouseEvent) {
       screenY: info[5] ?? c[1],
       pathIndex: info[0],
       canSetStart: info[1] > 0,
+      canRoundCorners: selectionCount.value > 0,
       canMoveUp: info[2] > 0,
       canMoveDown: info[3] > 0,
     };
@@ -2757,7 +2760,7 @@ function onCanvasContextMenu(e: MouseEvent) {
 }
 
 function applyContourContextMenuAction(
-  action: "set-start" | "reverse" | "move-up" | "move-down",
+  action: "set-start" | "reverse" | "round-corners" | "move-up" | "move-down",
 ) {
   const menu = contourContextMenu.value;
   if (!editor || !menu) return;
@@ -2766,6 +2769,8 @@ function applyContourContextMenuAction(
       ? applyEditorMutation(() => editor.setStartPointAt(menu.screenX, menu.screenY))
       : action === "reverse"
         ? applyEditorMutation(() => editor.reverseContourAt(menu.screenX, menu.screenY))
+        : action === "round-corners"
+          ? applyEditorMutation(() => editor.roundSelectedCorners())
         : applyEditorMutation(() =>
             editor.moveContour(menu.pathIndex, action === "move-up" ? "up" : "down"),
           );
@@ -2776,6 +2781,8 @@ function applyContourContextMenuAction(
         ? "start point set"
         : action === "reverse"
           ? "contour reversed"
+          : action === "round-corners"
+            ? "corners rounded"
           : "contour reordered";
   }
 }
@@ -5922,6 +5929,14 @@ onBeforeUnmount(() => {
             @click="applyContourContextMenuAction('reverse')"
           >
             Reverse Contour
+          </button>
+          <button
+            v-if="contourContextMenu.canRoundCorners"
+            type="button"
+            role="menuitem"
+            @click="applyContourContextMenuAction('round-corners')"
+          >
+            Round Corners
           </button>
           <button
             v-if="contourContextMenu.canMoveUp"
