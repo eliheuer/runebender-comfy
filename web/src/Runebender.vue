@@ -6157,6 +6157,7 @@ onBeforeUnmount(() => {
         <div
           v-if="editorBottomPreviewVisible"
           class="editor-bottom-preview-panel"
+          :class="{ 'text-preview-panel': textBufferPreviewVisible }"
           :aria-label="textBufferPreviewVisible ? 'Text preview' : 'Active glyph filled preview'"
         >
           <div
@@ -6889,6 +6890,11 @@ onBeforeUnmount(() => {
   pointer-events: auto;
 }
 
+.editor-bottom-preview-panel.text-preview-panel {
+  padding-left: 0;
+  padding-right: 0;
+}
+
 .editor-bottom-preview-resizer {
   position: absolute;
   z-index: 1;
@@ -6950,7 +6956,7 @@ onBeforeUnmount(() => {
   color: var(--rb-warning, #ffdc32);
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   overflow: hidden;
 }
 .text-preview-glyphs :deep(svg) {
