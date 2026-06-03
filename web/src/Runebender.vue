@@ -6956,14 +6956,14 @@ onBeforeUnmount(() => {
   color: var(--rb-warning, #ffdc32);
   display: flex;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: center;
   overflow: hidden;
 }
 .text-preview-glyphs :deep(svg) {
+  width: 100%;
   height: 100%;
-  width: auto;
-  max-width: none;
-  flex: 0 0 auto;
+  max-width: 100%;
+  flex: 0 1 100%;
   display: block;
 }
 .text-preview-glyphs :deep(path) {
