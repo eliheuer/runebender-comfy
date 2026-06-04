@@ -12,7 +12,7 @@ use web_sys::HtmlCanvasElement;
 use runebender_core::{GlyphCategory, GlyphMetadata, mark_color};
 
 use crate::editing::{Modifiers, Mouse, MouseButton, MouseEvent, UndoState};
-use crate::editor::{ComponentPreview, EditorState, norad_glyph_to_bezpath};
+use crate::editor::{AnchorPoint, ComponentPreview, EditorState, norad_glyph_to_bezpath};
 use crate::model::workspace::{
     Contour as WsContour, ContourPoint as WsContourPoint, PointType as WsPointType,
 };
@@ -68,6 +68,14 @@ struct TextSortSnapshot {
     codepoint: Option<u32>,
     advance_width: Option<f64>,
     active: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AnchorSnapshot {
+    name: Option<String>,
+    x: f64,
+    y: f64,
 }
 
 /// Compare an active `.glif` against the same glyph in other masters.
@@ -513,6 +521,8 @@ fn build_component_previews(
             let mut path = norad_glyph_to_bezpath(base_glyph);
             append_norad_components_to_bezpath(&mut path, base_glyph, glyphs, Affine::IDENTITY, 0);
             let t = &component.transform;
+            let mut anchors = Vec::new();
+            collect_component_anchors(base_glyph, glyphs, Affine::IDENTITY, 0, &mut anchors);
             Some(ComponentPreview {
                 id: crate::model::EntityId::next(),
                 index,
@@ -521,9 +531,57 @@ fn build_component_previews(
                     t.x_scale, t.xy_scale, t.yx_scale, t.y_scale, t.x_offset, t.y_offset,
                 ]),
                 path,
+                anchors,
+                auto_align: !component_alignment_disabled(component),
             })
         })
         .collect()
+}
+
+fn collect_component_anchors(
+    glyph: &norad::Glyph,
+    glyphs: &HashMap<String, norad::Glyph>,
+    parent_transform: Affine,
+    depth: usize,
+    out: &mut Vec<AnchorPoint>,
+) {
+    if depth > 16 {
+        return;
+    }
+    glyph.components.iter().for_each(|component| {
+        let base_name = component.base.to_string();
+        let Some(base_glyph) = glyphs.get(&base_name) else {
+            return;
+        };
+        let t = &component.transform;
+        let transform = parent_transform
+            * Affine::new([
+                t.x_scale, t.xy_scale, t.yx_scale, t.y_scale, t.x_offset, t.y_offset,
+            ]);
+        for anchor in &base_glyph.anchors {
+            let point = transform * Point::new(anchor.x, anchor.y);
+            out.push(AnchorPoint {
+                id: crate::model::EntityId::next(),
+                index: out.len(),
+                name: anchor.name.as_ref().map(ToString::to_string),
+                point,
+                color: anchor.color.clone(),
+                identifier: anchor.identifier().cloned(),
+                lib: anchor.lib().cloned(),
+            });
+        }
+        collect_component_anchors(base_glyph, glyphs, transform, depth + 1, out);
+    });
+}
+
+fn component_alignment_disabled(component: &norad::Component) -> bool {
+    component
+        .lib()
+        .and_then(|lib| lib.get("com.glyphsapp.component.alignment"))
+        .is_some_and(|value| {
+            value.as_signed_integer().is_some_and(|value| value < 0)
+                || value.as_boolean() == Some(false)
+        })
 }
 
 #[cfg(test)]
@@ -564,6 +622,113 @@ mod tests {
                 .and_then(|value| value.as_string()),
             Some("bare-input")
         );
+    }
+
+    #[test]
+    fn to_norad_anchor_round_trips_ufo_anchor_fields() {
+        let mut state = EditorState::default();
+        let glyph = norad::Glyph::parse_raw(
+            br#"<glyph name="A" format="2"><advance width="500"/><anchor x="250" y="700" name="top"/></glyph>"#,
+        )
+        .expect("valid glyph");
+        state.set_glyph_from_norad(&glyph);
+        state.select_anchor(state.anchors[0].id);
+        assert!(state.translate_selected_anchor(Vec2::new(10.0, -20.0)));
+
+        let mut serialized = glyph.clone();
+        serialized.anchors = state
+            .anchors
+            .iter()
+            .map(to_norad_anchor)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("valid anchors");
+        let reparsed = norad::Glyph::parse_raw(
+            &serialized
+                .encode_xml()
+                .expect("serialized glyph encodes as XML"),
+        )
+        .expect("serialized glyph parses");
+
+        assert_eq!(reparsed.anchors.len(), 1);
+        assert_eq!(
+            reparsed.anchors[0].name.as_ref().map(ToString::to_string),
+            Some("top".to_string())
+        );
+        assert_eq!(reparsed.anchors[0].x, 260.0);
+        assert_eq!(reparsed.anchors[0].y, 680.0);
+    }
+
+    #[test]
+    fn component_anchors_are_propagated_through_component_transform() {
+        let composite = norad::Glyph::parse_raw(
+            br#"<glyph name="Aacute" format="2"><advance width="500"/><outline><component base="A" xOffset="25" yOffset="40"/></outline></glyph>"#,
+        )
+        .expect("valid composite");
+        let base = norad::Glyph::parse_raw(
+            br#"<glyph name="A" format="2"><advance width="500"/><anchor x="250" y="700" name="top"/></glyph>"#,
+        )
+        .expect("valid base");
+        let glyphs = HashMap::from([("A".to_string(), base)]);
+
+        let mut state = EditorState::default();
+        state.set_glyph_from_norad(&composite);
+        state.set_component_previews(build_component_previews(&composite, &glyphs));
+
+        assert_eq!(state.propagated_anchors.len(), 1);
+        assert_eq!(state.propagated_anchors[0].name.as_deref(), Some("top"));
+        assert_eq!(state.propagated_anchors[0].point, Point::new(275.0, 740.0));
+    }
+
+    #[test]
+    fn mark_component_aligns_to_previous_component_anchor() {
+        let composite = norad::Glyph::parse_raw(
+            br#"<glyph name="Aacute" format="2"><advance width="500"/><outline><component base="A"/><component base="acute"/></outline></glyph>"#,
+        )
+        .expect("valid composite");
+        let base = norad::Glyph::parse_raw(
+            br#"<glyph name="A" format="2"><advance width="500"/><anchor x="250" y="700" name="top"/></glyph>"#,
+        )
+        .expect("valid base");
+        let mark = norad::Glyph::parse_raw(
+            br#"<glyph name="acute" format="2"><advance width="200"/><anchor x="100" y="20" name="_top"/></glyph>"#,
+        )
+        .expect("valid mark");
+        let glyphs = HashMap::from([("A".to_string(), base), ("acute".to_string(), mark)]);
+        let mut state = EditorState::default();
+
+        state.set_glyph_from_norad(&composite);
+        state.set_component_previews(build_component_previews(&composite, &glyphs));
+
+        let transform = state.component_transform(1).expect("mark transform");
+        let coeffs = transform.as_coeffs();
+        assert_eq!(coeffs[4], 150.0);
+        assert_eq!(coeffs[5], 680.0);
+    }
+
+    #[test]
+    fn disabled_glyphs_component_alignment_preserves_transform() {
+        let composite = norad::Glyph::parse_raw(
+            br#"<glyph name="Aacute" format="2"><advance width="500"/><outline><component base="A"/><component base="acute" xOffset="10" yOffset="30"><lib><dict><key>com.glyphsapp.component.alignment</key><integer>-1</integer></dict></lib></component></outline></glyph>"#,
+        )
+        .expect("valid composite");
+        let base = norad::Glyph::parse_raw(
+            br#"<glyph name="A" format="2"><advance width="500"/><anchor x="250" y="700" name="top"/></glyph>"#,
+        )
+        .expect("valid base");
+        let mark = norad::Glyph::parse_raw(
+            br#"<glyph name="acute" format="2"><advance width="200"/><anchor x="100" y="20" name="_top"/></glyph>"#,
+        )
+        .expect("valid mark");
+        let glyphs = HashMap::from([("A".to_string(), base), ("acute".to_string(), mark)]);
+        let mut state = EditorState::default();
+
+        state.set_glyph_from_norad(&composite);
+        state.set_component_previews(build_component_previews(&composite, &glyphs));
+
+        let transform = state.component_transform(1).expect("mark transform");
+        let coeffs = transform.as_coeffs();
+        assert_eq!(coeffs[4], 10.0);
+        assert_eq!(coeffs[5], 30.0);
     }
 }
 
@@ -1314,6 +1479,72 @@ impl GlyphEditor {
         self.state.clear_component_selection();
     }
 
+    #[wasm_bindgen(js_name = anchorContextAt)]
+    pub fn anchor_context_at(&self, x: f64, y: f64) -> String {
+        let design = self.state.screen_to_glyph_design(Point::new(x, y));
+        let radius = 16.0 / self.state.viewport.zoom.max(1e-6);
+        let Some(id) = self.state.hit_test_anchor(design, radius) else {
+            return String::new();
+        };
+        let Some(anchor) = self.state.anchors.iter().find(|anchor| anchor.id == id) else {
+            return String::new();
+        };
+        let snapshot = AnchorSnapshot {
+            name: anchor.name.clone(),
+            x: anchor.point.x,
+            y: anchor.point.y,
+        };
+        serde_json::to_string(&snapshot).unwrap_or_default()
+    }
+
+    #[wasm_bindgen(js_name = selectedAnchorInfo)]
+    pub fn selected_anchor_info(&self) -> String {
+        let Some(anchor) = self.state.selected_anchor() else {
+            return String::new();
+        };
+        let snapshot = AnchorSnapshot {
+            name: anchor.name.clone(),
+            x: anchor.point.x,
+            y: anchor.point.y,
+        };
+        serde_json::to_string(&snapshot).unwrap_or_default()
+    }
+
+    #[wasm_bindgen(js_name = selectAnchorAt)]
+    pub fn select_anchor_at(&mut self, x: f64, y: f64) -> bool {
+        let design = self.state.screen_to_glyph_design(Point::new(x, y));
+        let radius = 16.0 / self.state.viewport.zoom.max(1e-6);
+        let Some(id) = self.state.hit_test_anchor(design, radius) else {
+            return false;
+        };
+        self.state.select_anchor(id);
+        true
+    }
+
+    #[wasm_bindgen(js_name = addAnchorAt)]
+    pub fn add_anchor_at(&mut self, x: f64, y: f64, name: &str) -> bool {
+        let snapshot = self.discrete_edit_snapshot();
+        let design = self.state.screen_to_glyph_design(Point::new(x, y));
+        let name = normalize_anchor_name(name);
+        self.state.add_anchor(design, name);
+        self.undo.add_undo_group(snapshot);
+        self.pending_snapshot = None;
+        true
+    }
+
+    #[wasm_bindgen(js_name = updateSelectedAnchor)]
+    pub fn update_selected_anchor(&mut self, name: &str, x: f64, y: f64) -> bool {
+        let snapshot = self.discrete_edit_snapshot();
+        let name = normalize_anchor_name(name);
+        if self.state.update_selected_anchor(name, Point::new(x, y)) {
+            self.undo.add_undo_group(snapshot);
+            self.pending_snapshot = None;
+            true
+        } else {
+            false
+        }
+    }
+
     #[wasm_bindgen(js_name = contourContextAt)]
     pub fn contour_context_at(&self, x: f64, y: f64) -> Vec<f64> {
         let design = self.state.screen_to_glyph_design(Point::new(x, y));
@@ -1741,7 +1972,7 @@ impl GlyphEditor {
         ctrl: bool,
         independent: bool,
     ) -> bool {
-        if self.state.selection.is_empty() {
+        if self.state.selection_entity_count() == 0 {
             return false;
         }
         if self.pending_nudge_snapshot.is_none() {
@@ -1763,7 +1994,7 @@ impl GlyphEditor {
     /// Number of currently selected entities. Useful for status UI.
     #[wasm_bindgen(js_name = selectionCount)]
     pub fn selection_count(&self) -> usize {
-        self.state.selection.len()
+        self.state.selection_entity_count()
     }
 
     /// Number of contours touched by the current point selection.
@@ -1842,8 +2073,16 @@ impl GlyphEditor {
             if self.state.deleted_component_indices.contains(&index) {
                 return false;
             }
-            if let Some(transform) = self.state.component_transform(index) {
-                component.transform = affine_to_norad_transform(transform);
+            if let Some(preview) = self
+                .state
+                .component_previews
+                .iter()
+                .find(|preview| preview.index == index)
+            {
+                component.transform = affine_to_norad_transform(preview.transform);
+                if !preview.auto_align {
+                    apply_component_alignment_disabled_lib(component);
+                }
             }
             true
         });
@@ -1861,9 +2100,15 @@ impl GlyphEditor {
                 base,
                 affine_to_norad_transform(component.transform),
                 None,
-                None,
+                (!component.auto_align).then(component_alignment_disabled_lib),
             ));
         }
+        glyph.anchors = self
+            .state
+            .anchors
+            .iter()
+            .map(to_norad_anchor)
+            .collect::<Result<Vec<_>, _>>()?;
 
         let mark_color = mark_color::canonical_ufo_mark_color(mark_color)
             .ok_or_else(|| JsValue::from_str("invalid UFO public.markColor value"))?;
@@ -1941,6 +2186,29 @@ fn quadrant_from_id(id: &str) -> Option<Quadrant> {
     }
 }
 
+fn normalize_anchor_name(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn component_alignment_disabled_lib() -> norad::Plist {
+    let mut lib = norad::Plist::new();
+    lib.insert(
+        "com.glyphsapp.component.alignment".to_string(),
+        plist::Value::Integer((-1).into()),
+    );
+    lib
+}
+
+fn apply_component_alignment_disabled_lib(component: &mut norad::Component) {
+    let mut lib = component.lib().cloned().unwrap_or_else(norad::Plist::new);
+    lib.insert(
+        "com.glyphsapp.component.alignment".to_string(),
+        plist::Value::Integer((-1).into()),
+    );
+    component.replace_lib(lib);
+}
+
 fn to_norad_contour(contour: &WsContour) -> norad::Contour {
     let points = contour.points.iter().map(to_norad_point).collect();
     let is_hyperbezier = contour
@@ -1953,6 +2221,24 @@ fn to_norad_contour(contour: &WsContour) -> norad::Contour {
         None
     };
     norad::Contour::new(points, identifier, None)
+}
+
+fn to_norad_anchor(anchor: &AnchorPoint) -> Result<norad::Anchor, JsValue> {
+    let name = anchor
+        .name
+        .as_ref()
+        .map(|name| {
+            norad::Name::new(name).map_err(|e| JsValue::from_str(&format!("anchor name: {e}")))
+        })
+        .transpose()?;
+    Ok(norad::Anchor::new(
+        anchor.point.x,
+        anchor.point.y,
+        name,
+        anchor.color.clone(),
+        anchor.identifier.clone(),
+        anchor.lib.clone(),
+    ))
 }
 
 fn to_norad_point(pt: &WsContourPoint) -> norad::ContourPoint {

@@ -34,6 +34,9 @@ import {
   type SidebarCharacterFilter,
   type SidebarSearchMode,
 } from "./glyphSidebarData";
+import AnchorPanel, {
+  type AnchorPanelValue,
+} from "./components/AnchorPanel.vue";
 import CoordinatePanel from "./components/CoordinatePanel.vue";
 import type { CoordinateQuadrant } from "./components/CoordinatePanel.vue";
 import EditModeToolbar from "./components/EditModeToolbar.vue";
@@ -283,11 +286,24 @@ type ContourContextMenuState = {
   y: number;
   screenX: number;
   screenY: number;
-  pathIndex: number;
+  designX: number;
+  designY: number;
+  pathIndex: number | null;
   canSetStart: boolean;
   canRoundCorners: boolean;
   canMoveUp: boolean;
   canMoveDown: boolean;
+  canAddAnchor: boolean;
+  canEditAnchor: boolean;
+  anchorName?: string;
+  anchorX?: number;
+  anchorY?: number;
+};
+
+type AnchorContext = {
+  name?: string | null;
+  x: number;
+  y: number;
 };
 
 type CompatError = {
@@ -366,6 +382,7 @@ type TextLayoutSnapshot = {
 const masterDataMap = ref<Map<string, MasterData>>(new Map());
 const activeMasterName = ref<string>("");
 const selectedBounds = ref<SelectionBounds | undefined>(undefined);
+const selectedAnchor = ref<AnchorPanelValue | null>(null);
 const measureInfo = ref<MeasureInfo | undefined>(undefined);
 const dirtyGlyphsByMaster = ref<Map<string, Set<string>>>(new Map());
 const dirtyKerningMasters = ref<Set<string>>(new Set());
@@ -857,6 +874,11 @@ type Editor = {
   pointerCancel(): boolean;
   componentBaseAt(x: number, y: number): string;
   clearComponentSelection(): void;
+  anchorContextAt(x: number, y: number): string;
+  selectedAnchorInfo(): string;
+  selectAnchorAt(x: number, y: number): boolean;
+  addAnchorAt(x: number, y: number, name: string): boolean;
+  updateSelectedAnchor(name: string, x: number, y: number): boolean;
   setTool(toolId: ToolId): boolean;
   setShapeTool(shape: ShapeKind): boolean;
   setShapeShiftLocked(locked: boolean): boolean;
@@ -1280,9 +1302,11 @@ async function publishComfyState(force = false) {
 function refreshSelectionState() {
   if (!editor) {
     setSelectionState(0, 0, undefined);
+    selectedAnchor.value = null;
     return;
   }
   const bounds = editor.selectionBounds();
+  const nextAnchor = parseAnchorContext(editor.selectedAnchorInfo());
   const nextBounds =
     bounds.length >= 5
       ? {
@@ -1298,6 +1322,9 @@ function refreshSelectionState() {
     editor.selectedContourCount(),
     nextBounds,
   );
+  if (!sameAnchorContext(selectedAnchor.value, nextAnchor)) {
+    selectedAnchor.value = nextAnchor;
+  }
 }
 
 function sameSelectionBounds(
@@ -1312,6 +1339,14 @@ function sameSelectionBounds(
     a.width === b.width &&
     a.height === b.height
   );
+}
+
+function sameAnchorContext(
+  a: AnchorPanelValue | null,
+  b: AnchorPanelValue | null,
+): boolean {
+  if (!a || !b) return a === b;
+  return a.name === b.name && a.x === b.x && a.y === b.y;
 }
 
 function setSelectionState(
@@ -1668,6 +1703,25 @@ function dismissContourContextMenu() {
   contourContextMenu.value = null;
 }
 
+function parseAnchorContext(raw: string): AnchorContext | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as Partial<AnchorContext>;
+    if (typeof value.x !== "number" || typeof value.y !== "number") return null;
+    return {
+      name: typeof value.name === "string" ? value.name : null,
+      x: value.x,
+      y: value.y,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function defaultAnchorNameForPosition(y: number): string {
+  return y < 0 ? "bottom" : "top";
+}
+
 function showClipboardNotice(message: string) {
   clipboardNotice.value = message;
   if (clipboardNoticeTimer !== null) {
@@ -1945,6 +1999,29 @@ function onCoordinateChange(axis: "x" | "y" | "width" | "height", value: number)
   currentContours.value = editor.contourCount();
   requestRender();
   queueComfyStateSync();
+}
+
+function onAnchorChange(field: "name" | "x" | "y", value: string | number) {
+  if (!editor || !currentGlyph.value || !selectedAnchor.value) return;
+  const next = {
+    name: selectedAnchor.value.name ?? "",
+    x: selectedAnchor.value.x,
+    y: selectedAnchor.value.y,
+  };
+  if (field === "name") {
+    next.name = String(value).trim();
+  } else if (field === "x" && typeof value === "number" && Number.isFinite(value)) {
+    next.x = value;
+  } else if (field === "y" && typeof value === "number" && Number.isFinite(value)) {
+    next.y = value;
+  } else {
+    refreshSelectionState();
+    return;
+  }
+  const changed = applyEditorMutation(() =>
+    editor.updateSelectedAnchor(next.name, next.x, next.y),
+  );
+  if (changed) status.value = "anchor updated";
 }
 
 function onActiveGlyphWidthChange(event: Event) {
@@ -2739,6 +2816,13 @@ function onCanvasContextMenu(e: MouseEvent) {
   if (!editor || viewMode.value !== "editor") return;
   const c = canvasMouseCoords(e);
   if (!c) return;
+  const design = editor.screenToDesign(c[0], c[1]);
+  const anchor = parseAnchorContext(editor.anchorContextAt(c[0], c[1]));
+  if (anchor) {
+    editor.selectAnchorAt(c[0], c[1]);
+    refreshSelectionState();
+    requestRender();
+  }
   const info = editor.contourContextAt(c[0], c[1]);
   if (info.length >= 4) {
     e.preventDefault();
@@ -2747,11 +2831,40 @@ function onCanvasContextMenu(e: MouseEvent) {
       y: e.clientY,
       screenX: info[4] ?? c[0],
       screenY: info[5] ?? c[1],
+      designX: design[0],
+      designY: design[1],
       pathIndex: info[0],
       canSetStart: info[1] > 0,
       canRoundCorners: selectionCount.value > 0,
       canMoveUp: info[2] > 0,
       canMoveDown: info[3] > 0,
+      canAddAnchor: true,
+      canEditAnchor: Boolean(anchor),
+      anchorName: anchor?.name ?? undefined,
+      anchorX: anchor?.x,
+      anchorY: anchor?.y,
+    };
+    return;
+  }
+  if (currentGlyph.value) {
+    e.preventDefault();
+    contourContextMenu.value = {
+      x: e.clientX,
+      y: e.clientY,
+      screenX: c[0],
+      screenY: c[1],
+      designX: design[0],
+      designY: design[1],
+      pathIndex: null,
+      canSetStart: false,
+      canRoundCorners: false,
+      canMoveUp: false,
+      canMoveDown: false,
+      canAddAnchor: true,
+      canEditAnchor: Boolean(anchor),
+      anchorName: anchor?.name ?? undefined,
+      anchorX: anchor?.x,
+      anchorY: anchor?.y,
     };
     return;
   }
@@ -2761,10 +2874,31 @@ function onCanvasContextMenu(e: MouseEvent) {
 }
 
 function applyContourContextMenuAction(
-  action: "set-start" | "reverse" | "round-corners" | "move-up" | "move-down",
+  action:
+    | "set-start"
+    | "reverse"
+    | "round-corners"
+    | "move-up"
+    | "move-down"
+    | "add-anchor"
+    | "delete-anchor",
 ) {
   const menu = contourContextMenu.value;
   if (!editor || !menu) return;
+  if (action === "add-anchor") {
+    const name = defaultAnchorNameForPosition(menu.designY);
+    const changed = applyEditorMutation(() => editor.addAnchorAt(menu.screenX, menu.screenY, name));
+    dismissContourContextMenu();
+    if (changed) status.value = "anchor added";
+    return;
+  }
+  if (action === "delete-anchor") {
+    const changed = applySelectionEdit("delete");
+    dismissContourContextMenu();
+    if (changed) status.value = "anchor deleted";
+    return;
+  }
+  if (menu.pathIndex === null) return;
   const changed =
     action === "set-start"
       ? applyEditorMutation(() => editor.setStartPointAt(menu.screenX, menu.screenY))
@@ -2773,7 +2907,7 @@ function applyContourContextMenuAction(
         : action === "round-corners"
           ? applyEditorMutation(() => editor.roundSelectedCorners())
         : applyEditorMutation(() =>
-            editor.moveContour(menu.pathIndex, action === "move-up" ? "up" : "down"),
+            editor.moveContour(menu.pathIndex ?? 0, action === "move-up" ? "up" : "down"),
           );
   dismissContourContextMenu();
   if (changed) {
@@ -5925,6 +6059,7 @@ onBeforeUnmount(() => {
             Set Start Point
           </button>
           <button
+            v-if="contourContextMenu.pathIndex !== null"
             type="button"
             role="menuitem"
             @click="applyContourContextMenuAction('reverse')"
@@ -5945,7 +6080,7 @@ onBeforeUnmount(() => {
             role="menuitem"
             @click="applyContourContextMenuAction('move-up')"
           >
-            Move Contour Up ({{ contourContextMenu.pathIndex }} -> {{ contourContextMenu.pathIndex - 1 }})
+            Move Contour Up ({{ contourContextMenu.pathIndex }} -> {{ (contourContextMenu.pathIndex ?? 0) - 1 }})
           </button>
           <button
             v-if="contourContextMenu.canMoveDown"
@@ -5953,7 +6088,23 @@ onBeforeUnmount(() => {
             role="menuitem"
             @click="applyContourContextMenuAction('move-down')"
           >
-            Move Contour Down ({{ contourContextMenu.pathIndex }} -> {{ contourContextMenu.pathIndex + 1 }})
+            Move Contour Down ({{ contourContextMenu.pathIndex }} -> {{ (contourContextMenu.pathIndex ?? 0) + 1 }})
+          </button>
+          <button
+            v-if="contourContextMenu.canAddAnchor"
+            type="button"
+            role="menuitem"
+            @click="applyContourContextMenuAction('add-anchor')"
+          >
+            Add Anchor
+          </button>
+          <button
+            v-if="contourContextMenu.canEditAnchor"
+            type="button"
+            role="menuitem"
+            @click="applyContourContextMenuAction('delete-anchor')"
+          >
+            Delete Anchor
           </button>
         </div>
 
@@ -6122,6 +6273,13 @@ onBeforeUnmount(() => {
           :quadrant="coordinateQuadrant"
           @select-quadrant="onCoordinateQuadrant"
           @change-coordinate="onCoordinateChange"
+        />
+
+        <AnchorPanel
+          v-if="viewMode === 'editor' && editorPanelsVisible && selectedAnchor"
+          class="anchor-overlay"
+          :value="selectedAnchor"
+          @change-anchor="onAnchorChange"
         />
 
         <TransformPanel
@@ -6440,10 +6598,21 @@ onBeforeUnmount(() => {
   z-index: 3;
 }
 
+.anchor-overlay {
+  position: absolute;
+  right: var(--rb-editor-edge-inset, 8px);
+  bottom: calc(var(--rb-editor-edge-inset, 8px) + 92px);
+  z-index: 3;
+}
+
 .stage.editor-bottom-preview-visible .coordinate-overlay,
 .stage.editor-bottom-preview-visible .glyph-preview-overlay,
 .stage.editor-bottom-preview-visible .active-glyph-overlay {
   bottom: calc(var(--rb-editor-bottom-preview-height) + var(--rb-editor-edge-inset, 8px));
+}
+
+.stage.editor-bottom-preview-visible .anchor-overlay {
+  bottom: calc(var(--rb-editor-bottom-preview-height) + var(--rb-editor-edge-inset, 8px) + 92px);
 }
 
 .transform-overlay {

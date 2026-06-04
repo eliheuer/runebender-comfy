@@ -90,6 +90,19 @@ pub struct ComponentPreview {
     pub base: String,
     pub transform: Affine,
     pub path: BezPath,
+    pub anchors: Vec<AnchorPoint>,
+    pub auto_align: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct AnchorPoint {
+    pub id: EntityId,
+    pub index: usize,
+    pub name: Option<String>,
+    pub point: Point,
+    pub color: Option<norad::Color>,
+    pub identifier: Option<norad::Identifier>,
+    pub lib: Option<norad::Plist>,
 }
 
 /// Minimal subset of fontinfo.plist — only the fields we care about
@@ -138,6 +151,16 @@ pub struct EditorState {
     pub component_previews: Vec<ComponentPreview>,
     pub selected_component: Option<EntityId>,
     pub deleted_component_indices: HashSet<usize>,
+
+    /// Editable UFO anchors for the open glyph. Anchors are independent
+    /// editor entities, like Fontra's `anchor/{i}` selection layer: they
+    /// render and serialize with the glyph but do not become outline points.
+    pub anchors: Vec<AnchorPoint>,
+    pub selected_anchor: Option<EntityId>,
+    /// Read-only anchors inherited through UFO components. These are
+    /// shown for component/mark editing context, but only `anchors`
+    /// serialize back to the active glyph.
+    pub propagated_anchors: Vec<AnchorPoint>,
 
     /// Font-wide vertical metrics (baseline, x-height, cap-height,
     /// ascender, descender). Drawn as horizontal guideline lines in
@@ -202,6 +225,9 @@ impl Default for EditorState {
             component_previews: Vec::new(),
             selected_component: None,
             deleted_component_indices: HashSet::new(),
+            anchors: Vec::new(),
+            selected_anchor: None,
+            propagated_anchors: Vec::new(),
             metrics: None,
             marquee: None,
             shape_preview: None,
@@ -377,6 +403,9 @@ impl EditorState {
         self.component_previews.clear();
         self.selected_component = None;
         self.deleted_component_indices.clear();
+        self.anchors.clear();
+        self.selected_anchor = None;
+        self.propagated_anchors.clear();
         self.selection = Selection::new();
         self.marquee = None;
         self.shape_preview = None;
@@ -432,6 +461,9 @@ impl EditorState {
         self.component_preview = BezPath::new();
         self.component_previews.clear();
         self.selected_component = None;
+        self.anchors.clear();
+        self.selected_anchor = None;
+        self.propagated_anchors.clear();
         self.selection = Selection::new();
         self.marquee = None;
         self.shape_preview = None;
@@ -448,6 +480,20 @@ impl EditorState {
             let ws_contour = convert_norad_contour(norad_contour);
             self.paths.push(Path::from_contour(&ws_contour));
         }
+        self.anchors = glyph
+            .anchors
+            .iter()
+            .enumerate()
+            .map(|(index, anchor)| AnchorPoint {
+                id: EntityId::next(),
+                index,
+                name: anchor.name.as_ref().map(ToString::to_string),
+                point: Point::new(anchor.x, anchor.y),
+                color: anchor.color.clone(),
+                identifier: anchor.identifier().cloned(),
+                lib: anchor.lib().cloned(),
+            })
+            .collect();
     }
 
     /// Reload editable glyph data inside an existing editor session.
@@ -473,6 +519,8 @@ impl EditorState {
     pub fn set_component_previews(&mut self, previews: Vec<ComponentPreview>) {
         self.component_previews = previews;
         self.deleted_component_indices.clear();
+        self.realign_components_to_anchors();
+        self.rebuild_propagated_anchors();
         self.rebuild_component_preview();
     }
 
@@ -503,11 +551,128 @@ impl EditorState {
 
     pub fn select_component(&mut self, id: EntityId) {
         self.selection = Selection::new();
+        self.selected_anchor = None;
         self.selected_component = Some(id);
     }
 
     pub fn clear_component_selection(&mut self) {
         self.selected_component = None;
+    }
+
+    pub fn select_anchor(&mut self, id: EntityId) {
+        self.selection = Selection::new();
+        self.selected_component = None;
+        self.selected_anchor = Some(id);
+    }
+
+    pub fn add_anchor(&mut self, point: Point, name: Option<String>) -> EntityId {
+        let id = EntityId::next();
+        self.selection = Selection::new();
+        self.selected_component = None;
+        self.selected_anchor = Some(id);
+        self.anchors.push(AnchorPoint {
+            id,
+            index: self.anchors.len(),
+            name,
+            point: snap_point_to_grid(point),
+            color: None,
+            identifier: None,
+            lib: None,
+        });
+        self.realign_components_to_anchors();
+        self.bump_edit_revision();
+        id
+    }
+
+    pub fn update_selected_anchor(&mut self, name: Option<String>, point: Point) -> bool {
+        let Some(anchor) = self.selected_anchor_mut() else {
+            return false;
+        };
+        let point = snap_point_to_grid(point);
+        if anchor.name == name && anchor.point == point {
+            return false;
+        }
+        anchor.name = name;
+        anchor.point = point;
+        self.realign_components_to_anchors();
+        self.bump_edit_revision();
+        true
+    }
+
+    pub fn clear_anchor_selection(&mut self) {
+        self.selected_anchor = None;
+    }
+
+    pub fn selected_anchor(&self) -> Option<&AnchorPoint> {
+        let selected = self.selected_anchor?;
+        self.anchors.iter().find(|anchor| anchor.id == selected)
+    }
+
+    pub fn selected_anchor_mut(&mut self) -> Option<&mut AnchorPoint> {
+        let selected = self.selected_anchor?;
+        self.anchors.iter_mut().find(|anchor| anchor.id == selected)
+    }
+
+    pub fn translate_selected_anchor(&mut self, delta: Vec2) -> bool {
+        if delta == Vec2::ZERO {
+            return false;
+        }
+        let Some(anchor) = self.selected_anchor_mut() else {
+            return false;
+        };
+        anchor.point += delta;
+        self.realign_components_to_anchors();
+        self.bump_edit_revision();
+        true
+    }
+
+    pub fn transform_selected_anchor(&mut self, transform: Affine) -> bool {
+        let Some(anchor) = self.selected_anchor_mut() else {
+            return false;
+        };
+        let next = transform * anchor.point;
+        if next == anchor.point {
+            return false;
+        }
+        anchor.point = next;
+        self.realign_components_to_anchors();
+        self.bump_edit_revision();
+        true
+    }
+
+    pub fn delete_selected_anchor(&mut self) -> bool {
+        let Some(selected) = self.selected_anchor else {
+            return false;
+        };
+        let before = self.anchors.len();
+        self.anchors.retain(|anchor| anchor.id != selected);
+        if self.anchors.len() == before {
+            return false;
+        }
+        self.selected_anchor = None;
+        self.realign_components_to_anchors();
+        self.bump_edit_revision();
+        true
+    }
+
+    pub fn duplicate_selected_anchor(&mut self) -> bool {
+        let Some(mut anchor) = self.selected_anchor().cloned() else {
+            return false;
+        };
+        anchor.id = EntityId::next();
+        anchor.index = self.anchors.len();
+        anchor.point += Vec2::new(20.0, 20.0);
+        let id = anchor.id;
+        self.anchors.push(anchor);
+        self.selected_anchor = Some(id);
+        self.realign_components_to_anchors();
+        self.bump_edit_revision();
+        true
+    }
+
+    pub fn selected_anchor_bounds(&self) -> Option<Rect> {
+        let anchor = self.selected_anchor()?;
+        Some(Rect::from_origin_size(anchor.point, (0.0, 0.0)))
     }
 
     pub fn translate_selected_component(&mut self, delta: Vec2) -> bool {
@@ -524,8 +689,10 @@ impl EditorState {
         else {
             return false;
         };
+        component.auto_align = false;
         component.transform = Affine::translate(delta) * component.transform;
         self.rebuild_component_preview();
+        self.rebuild_propagated_anchors();
         self.bump_edit_revision();
         true
     }
@@ -541,8 +708,10 @@ impl EditorState {
         else {
             return false;
         };
+        component.auto_align = false;
         component.transform = transform * component.transform;
         self.rebuild_component_preview();
+        self.rebuild_propagated_anchors();
         self.bump_edit_revision();
         true
     }
@@ -562,6 +731,7 @@ impl EditorState {
         self.deleted_component_indices.insert(component.index);
         self.selected_component = None;
         self.rebuild_component_preview();
+        self.rebuild_propagated_anchors();
         self.bump_edit_revision();
         true
     }
@@ -588,10 +758,12 @@ impl EditorState {
             .max()
             .unwrap_or(0)
             + 1;
+        duplicate.auto_align = false;
         duplicate.transform = Affine::translate(offset) * duplicate.transform;
         self.selected_component = Some(duplicate.id);
         self.component_previews.push(duplicate);
         self.rebuild_component_preview();
+        self.rebuild_propagated_anchors();
         self.bump_edit_revision();
         true
     }
@@ -621,6 +793,50 @@ impl EditorState {
             preview.extend(transformed.elements().iter().cloned());
         }
         self.component_preview = preview;
+    }
+
+    pub fn realign_components_to_anchors(&mut self) -> bool {
+        let mut changed = false;
+        let mut available = self
+            .anchors
+            .iter()
+            .filter_map(placed_anchor_from_anchor)
+            .collect::<Vec<_>>();
+
+        for component in &mut self.component_previews {
+            if component.auto_align
+                && let Some(delta) = component_anchor_alignment_delta(component, &available)
+                && delta.hypot() > 1e-9
+            {
+                component.transform = Affine::translate(delta) * component.transform;
+                changed = true;
+            }
+            available.extend(component.anchors.iter().filter_map(|anchor| {
+                let mut placed = placed_anchor_from_anchor(anchor)?;
+                placed.point = component.transform * placed.point;
+                Some(placed)
+            }));
+        }
+
+        if changed {
+            self.rebuild_component_preview();
+            self.rebuild_propagated_anchors();
+        }
+        changed
+    }
+
+    fn rebuild_propagated_anchors(&mut self) {
+        let mut propagated = Vec::new();
+        for component in &self.component_previews {
+            for anchor in &component.anchors {
+                let mut anchor = anchor.clone();
+                anchor.id = EntityId::next();
+                anchor.index = propagated.len();
+                anchor.point = component.transform * anchor.point;
+                propagated.push(anchor);
+            }
+        }
+        self.propagated_anchors = propagated;
     }
 
     /// Bounding box of all paths in design space, or `None` if empty.
@@ -731,6 +947,9 @@ impl EditorState {
         }
         if self.selected_component.is_some() {
             return self.translate_selected_component(delta);
+        }
+        if self.selected_anchor.is_some() {
+            return self.translate_selected_anchor(delta);
         }
         if self.selection.is_empty() {
             return false;
@@ -922,6 +1141,9 @@ impl EditorState {
         if self.selected_component.is_some() {
             return self.translate_selected_component(delta);
         }
+        if self.selected_anchor.is_some() {
+            return self.translate_selected_anchor(delta);
+        }
         self.translate_selection(delta);
         true
     }
@@ -963,6 +1185,9 @@ impl EditorState {
         self.last_transform = Some(transform);
         if self.selected_component.is_some() {
             return self.transform_selected_component(transform);
+        }
+        if self.selected_anchor.is_some() {
+            return self.transform_selected_anchor(transform);
         }
         self.transform_selection(transform)
     }
@@ -1312,6 +1537,9 @@ impl EditorState {
         if self.selected_component.is_some() {
             return self.transform_selected_component(transform);
         }
+        if self.selected_anchor.is_some() {
+            return self.transform_selected_anchor(transform);
+        }
         let mut changed = false;
         for path in &mut self.paths {
             changed |= map_selected_points(path, &self.selection, |pt| transform * pt);
@@ -1328,6 +1556,9 @@ impl EditorState {
     pub fn duplicate_selection(&mut self) -> bool {
         if self.selected_component.is_some() {
             return self.duplicate_selected_component();
+        }
+        if self.selected_anchor.is_some() {
+            return self.duplicate_selected_anchor();
         }
         if self.selection.is_empty() {
             return false;
@@ -1515,6 +1746,9 @@ impl EditorState {
         if self.selected_component.is_some() {
             return self.delete_selected_component();
         }
+        if self.selected_anchor.is_some() {
+            return self.delete_selected_anchor();
+        }
         if self.selection.is_empty() {
             return false;
         }
@@ -1559,6 +1793,7 @@ impl EditorState {
             return false;
         };
         self.clear_component_selection();
+        self.clear_anchor_selection();
         let mut selection = Selection::new();
         selection.insert(id);
         self.selection = selection;
@@ -1586,6 +1821,7 @@ impl EditorState {
         }
 
         self.clear_component_selection();
+        self.clear_anchor_selection();
         if extend {
             let all_selected = ids.iter().all(|id| self.selection.contains(id));
             if all_selected {
@@ -1645,6 +1881,7 @@ impl EditorState {
         }
 
         self.clear_component_selection();
+        self.clear_anchor_selection();
         self.selection = selection;
         true
     }
@@ -1728,6 +1965,7 @@ impl EditorState {
         }
 
         self.clear_component_selection();
+        self.clear_anchor_selection();
         self.selection = next_selection;
         self.bump_edit_revision();
         true
@@ -1852,6 +2090,23 @@ impl EditorState {
     pub fn hit_test_point(&self, design_pt: Point, radius: f64) -> Option<EntityId> {
         self.hit_test_point_with_path_index(design_pt, radius)
             .map(|(_, id)| id)
+    }
+
+    /// Hit-test editable anchors near `design_pt` within `radius`
+    /// design-space units. Later anchors win when markers overlap.
+    pub fn hit_test_anchor(&self, design_pt: Point, radius: f64) -> Option<EntityId> {
+        let max_dist_sq = radius * radius;
+        let mut best: Option<(EntityId, f64)> = None;
+        for anchor in self.anchors.iter().rev() {
+            let dist_sq = anchor.point.distance_squared(design_pt);
+            if dist_sq > max_dist_sq {
+                continue;
+            }
+            if best.is_none_or(|(_, best_dist)| dist_sq < best_dist) {
+                best = Some((anchor.id, dist_sq));
+            }
+        }
+        best.map(|(id, _)| id)
     }
 
     pub fn hit_test_on_curve_point(&self, design_pt: Point, radius: f64) -> Option<EntityId> {
@@ -2053,6 +2308,9 @@ impl EditorState {
         if let Some(bounds) = self.selected_component_bounds() {
             return Some((1, bounds));
         }
+        if let Some(bounds) = self.selected_anchor_bounds() {
+            return Some((1, bounds));
+        }
         if self.selection.is_empty() {
             return None;
         }
@@ -2097,6 +2355,12 @@ impl EditorState {
 
     pub fn selected_contour_count(&self) -> usize {
         self.selected_contour_indices().len()
+    }
+
+    pub fn selection_entity_count(&self) -> usize {
+        self.selection.len()
+            + usize::from(self.selected_component.is_some())
+            + usize::from(self.selected_anchor.is_some())
     }
 
     pub(crate) fn bump_edit_revision(&mut self) {
@@ -2144,6 +2408,40 @@ pub struct ContourContextTarget {
     pub point_index: usize,
     pub point: Point,
     pub can_set_start: bool,
+}
+
+#[derive(Clone, Debug)]
+struct PlacedAnchor {
+    name: String,
+    point: Point,
+}
+
+fn placed_anchor_from_anchor(anchor: &AnchorPoint) -> Option<PlacedAnchor> {
+    let name = anchor.name.as_deref()?;
+    if name.starts_with('_') {
+        return None;
+    }
+    Some(PlacedAnchor {
+        name: name.to_string(),
+        point: anchor.point,
+    })
+}
+
+fn component_anchor_alignment_delta(
+    component: &ComponentPreview,
+    available: &[PlacedAnchor],
+) -> Option<Vec2> {
+    for anchor in &component.anchors {
+        let mark_name = anchor.name.as_deref()?;
+        let target_name = mark_name.strip_prefix('_')?;
+        let target = available
+            .iter()
+            .rev()
+            .find(|available| available.name == target_name)?;
+        let source = component.transform * anchor.point;
+        return Some(target.point - source);
+    }
+    None
 }
 
 fn on_curve(p: Point, smooth: bool) -> PathPoint {
@@ -3297,6 +3595,99 @@ mod tests {
     }
 
     #[test]
+    fn set_glyph_from_norad_loads_ufo_anchors() {
+        let glyph = norad::Glyph::parse_raw(
+            br#"<glyph name="acute" format="2"><advance width="500"/><anchor x="250" y="700" name="_top"/></glyph>"#,
+        )
+        .expect("valid glyph");
+        let mut state = EditorState::default();
+
+        state.set_glyph_from_norad(&glyph);
+
+        assert_eq!(state.anchors.len(), 1);
+        assert_eq!(state.anchors[0].name.as_deref(), Some("_top"));
+        assert_eq!(state.anchors[0].point, Point::new(250.0, 700.0));
+    }
+
+    #[test]
+    fn selected_anchor_can_move_transform_duplicate_and_delete() {
+        let mut state = EditorState::default();
+        let anchor = AnchorPoint {
+            id: EntityId::next(),
+            index: 0,
+            name: Some("top".to_string()),
+            point: Point::new(100.0, 200.0),
+            color: None,
+            identifier: None,
+            lib: None,
+        };
+        let anchor_id = anchor.id;
+        state.anchors.push(anchor);
+
+        assert_eq!(
+            state.hit_test_anchor(Point::new(102.0, 198.0), 5.0),
+            Some(anchor_id)
+        );
+        state.select_anchor(anchor_id);
+        assert_eq!(state.selection_entity_count(), 1);
+        assert!(state.nudge_selection(1.0, 0.0, false, false, false));
+        assert_eq!(state.anchors[0].point, Point::new(102.0, 200.0));
+        assert!(state.transform_selection(Affine::translate((0.0, 10.0))));
+        assert_eq!(state.anchors[0].point, Point::new(102.0, 210.0));
+        assert!(state.duplicate_selection());
+        assert_eq!(state.anchors.len(), 2);
+        assert_eq!(state.selected_anchor, Some(state.anchors[1].id));
+        assert!(state.delete_selection());
+        assert_eq!(state.anchors.len(), 1);
+    }
+
+    #[test]
+    fn moving_base_anchor_realigns_auto_aligned_component() {
+        let mut state = EditorState::default();
+        let base_anchor = AnchorPoint {
+            id: EntityId::next(),
+            index: 0,
+            name: Some("top".to_string()),
+            point: Point::new(250.0, 700.0),
+            color: None,
+            identifier: None,
+            lib: None,
+        };
+        let base_anchor_id = base_anchor.id;
+        state.anchors.push(base_anchor);
+        state.set_component_previews(vec![ComponentPreview {
+            id: EntityId::next(),
+            index: 0,
+            base: "acute".to_string(),
+            transform: Affine::IDENTITY,
+            path: BezPath::new(),
+            anchors: vec![AnchorPoint {
+                id: EntityId::next(),
+                index: 0,
+                name: Some("_top".to_string()),
+                point: Point::new(100.0, 20.0),
+                color: None,
+                identifier: None,
+                lib: None,
+            }],
+            auto_align: true,
+        }]);
+
+        assert_eq!(
+            state.component_transform(0).expect("component transform") * Point::new(100.0, 20.0),
+            Point::new(250.0, 700.0)
+        );
+
+        state.select_anchor(base_anchor_id);
+        assert!(state.translate_selected_anchor(Vec2::new(20.0, 10.0)));
+
+        assert_eq!(
+            state.component_transform(0).expect("component transform") * Point::new(100.0, 20.0),
+            Point::new(270.0, 710.0)
+        );
+    }
+
+    #[test]
     fn select_segment_at_point_selects_curve_endpoints_and_handles() {
         let mut state = EditorState::default();
         let start = on_curve(Point::new(0.0, 0.0), false);
@@ -3700,6 +4091,8 @@ mod tests {
             base: "acute".to_string(),
             transform: Affine::IDENTITY,
             path,
+            anchors: Vec::new(),
+            auto_align: true,
         }]);
         state.select_component(component_id);
         let revision = state.edit_revision;
@@ -3833,6 +4226,8 @@ mod tests {
             base: "acute".to_string(),
             transform: Affine::IDENTITY,
             path,
+            anchors: Vec::new(),
+            auto_align: true,
         }]);
         state.select_component(component_id);
         let revision = state.edit_revision;
@@ -3865,6 +4260,8 @@ mod tests {
             base: "acute".to_string(),
             transform: Affine::IDENTITY,
             path,
+            anchors: Vec::new(),
+            auto_align: true,
         }]);
         state.select_component(component_id);
 
@@ -3890,6 +4287,8 @@ mod tests {
             base: "acute".to_string(),
             transform: Affine::IDENTITY,
             path,
+            anchors: Vec::new(),
+            auto_align: true,
         }]);
         state.select_component(component_id);
 

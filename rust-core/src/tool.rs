@@ -221,6 +221,7 @@ enum SelectDragKind {
     None,
     Translate,
     ComponentTranslate,
+    AnchorTranslate,
     BoxSelect { initial: Selection },
     Pan,
 }
@@ -238,6 +239,7 @@ impl MouseDelegate for SelectTool {
         let hit_radius = MIN_CLICK_DISTANCE / state.viewport.zoom.max(1e-6);
         let point_hit_radius = SELECT_POINT_HIT_DISTANCE / state.viewport.zoom.max(1e-6);
         let hit = state.hit_test_point(design_pt, point_hit_radius);
+        let anchor_hit = state.hit_test_anchor(design_pt, point_hit_radius);
         let component_hit = state.hit_test_component(design_pt);
 
         if event.mods.alt {
@@ -253,6 +255,7 @@ impl MouseDelegate for SelectTool {
         let drag_kind = match (hit, event.mods.shift) {
             (Some(id), false) => {
                 state.clear_component_selection();
+                state.clear_anchor_selection();
                 if !state.selection.contains(&id) {
                     let mut sel = Selection::new();
                     sel.insert(id);
@@ -261,6 +264,7 @@ impl MouseDelegate for SelectTool {
                 SelectDragKind::Translate
             }
             (Some(id), true) => {
+                state.clear_anchor_selection();
                 if state.selection.contains(&id) {
                     state.selection.remove(&id);
                     SelectDragKind::None
@@ -270,7 +274,15 @@ impl MouseDelegate for SelectTool {
                 }
             }
             (None, _) => {
-                if let Some(should_drag) =
+                if let Some(anchor_id) = anchor_hit {
+                    if event.mods.shift && state.selected_anchor == Some(anchor_id) {
+                        state.clear_anchor_selection();
+                        SelectDragKind::None
+                    } else {
+                        state.select_anchor(anchor_id);
+                        SelectDragKind::AnchorTranslate
+                    }
+                } else if let Some(should_drag) =
                     state.select_segment_at_point(design_pt, hit_radius, event.mods.shift)
                 {
                     if should_drag {
@@ -282,12 +294,14 @@ impl MouseDelegate for SelectTool {
                     state.select_component(component_id);
                     SelectDragKind::ComponentTranslate
                 } else if event.mods.shift {
+                    state.clear_anchor_selection();
                     SelectDragKind::BoxSelect {
                         initial: state.selection.clone(),
                     }
                 } else {
                     state.selection = Selection::new();
                     state.clear_component_selection();
+                    state.clear_anchor_selection();
                     SelectDragKind::BoxSelect {
                         initial: Selection::new(),
                     }
@@ -311,6 +325,11 @@ impl MouseDelegate for SelectTool {
                 let screen_delta = drag.current - drag.prev;
                 let design_delta = screen_to_design_delta(state, screen_delta);
                 state.translate_selected_component(design_delta);
+            }
+            SelectDragKind::AnchorTranslate => {
+                let screen_delta = drag.current - drag.prev;
+                let design_delta = screen_to_design_delta(state, screen_delta);
+                state.translate_selected_anchor(design_delta);
             }
             SelectDragKind::BoxSelect { initial } => {
                 let rect = Rect::from_points(drag.start, drag.current);
@@ -2817,6 +2836,8 @@ mod tests {
             base: "acute".to_string(),
             transform: kurbo::Affine::IDENTITY,
             path,
+            anchors: Vec::new(),
+            auto_align: true,
         }]);
         state.selection.insert(EntityId::next());
 

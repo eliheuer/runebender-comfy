@@ -570,6 +570,8 @@ impl Renderer {
         for path in &state.paths {
             self.draw_points(path, glyph_view, &state.selection, state.viewport.zoom);
         }
+        self.draw_propagated_anchors(state, glyph_view);
+        self.draw_anchors(state, glyph_view);
 
         if let Some(preview) = state.segment_hover {
             self.draw_segment_hover(preview);
@@ -588,6 +590,49 @@ impl Renderer {
         }
         if let Some(preview) = state.knife_preview.as_ref() {
             self.draw_knife_preview(preview, state.viewport.zoom);
+        }
+    }
+
+    fn draw_anchors(&mut self, state: &EditorState, view: Affine) {
+        let scale = self.point_scale(state.viewport.zoom);
+        let outline_stroke = Stroke::new(POINT_OUTLINE_PX * scale);
+        for anchor in &state.anchors {
+            let center = view * anchor.point;
+            let selected = state.selected_anchor == Some(anchor.id);
+            let radius = (if selected {
+                SMOOTH_POINT_SELECTED_RADIUS_PX
+            } else {
+                SMOOTH_POINT_RADIUS_PX
+            }) * scale;
+            let circle = Circle::new(center, radius);
+            let (inner, outer) = if selected {
+                (
+                    self.theme.point_selected_inner,
+                    self.theme.point_selected_outer,
+                )
+            } else {
+                (POINT_INNER, POINT_MARK_GREEN)
+            };
+            self.scene
+                .fill(Fill::NonZero, Affine::IDENTITY, inner, None, &circle);
+            self.scene
+                .stroke(&outline_stroke, Affine::IDENTITY, outer, None, &circle);
+        }
+    }
+
+    fn draw_propagated_anchors(&mut self, state: &EditorState, view: Affine) {
+        let scale = self.point_scale(state.viewport.zoom);
+        let radius = SMOOTH_POINT_RADIUS_PX * scale;
+        let outline_stroke = Stroke::new(POINT_OUTLINE_PX * scale);
+        for anchor in &state.propagated_anchors {
+            let circle = Circle::new(view * anchor.point, radius);
+            self.scene.stroke(
+                &outline_stroke,
+                Affine::IDENTITY,
+                POINT_MARK_GREEN,
+                None,
+                &circle,
+            );
         }
     }
 

@@ -1,6 +1,6 @@
 from helpers import *
 
-GRID = False
+GRID = True
 GRID_MARGIN = WIDTH * 0.125
 GRID_UNIT_SIZE = WIDTH * 0.0625
 GRID_COLOR = (0.4, 0.4, 0.4)
