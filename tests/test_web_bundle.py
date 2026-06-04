@@ -110,6 +110,11 @@ class WebBundleTests(unittest.TestCase):
         # Vite copies from web/public/ into dist/vendor/.
         self.assertIn("vendor/codemirror/", bundle)
         self.assertTrue((dist / "vendor" / "codemirror" / "codemirror.js").is_file())
+        self.assertIn("__runebenderSyncScriptValue", bundle)
+        self.assertIn("setDirtyCanvas", bundle)
+
+        source = (ROOT / "web" / "src" / "extension.ts").read_text(encoding="utf-8")
+        self.assertIn("drawbotPresetLoadSerial", source)
 
         # Only the entry module and its stylesheet are emitted at the top level.
         top_level = sorted(p.name for p in dist.iterdir() if p.is_file())

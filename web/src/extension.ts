@@ -11,7 +11,7 @@ import { runebenderHostKey, type WorkspaceChoice } from "./host/runebenderHost";
 import { comfyHost } from "./hosts/comfy/comfyHost";
 import Runebender from "./Runebender.vue";
 
-const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-04-icons-095714";
+const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-04-drawbot-script-sync-111519";
 
 // Mirror our own console output to the ComfyUI terminal through the
 // injected Comfy host. Filters to messages prefixed with
@@ -263,14 +263,31 @@ async function fetchDrawBotPresetSource(name: string): Promise<string | null> {
   }
 }
 
-function setWidgetStringValue(widget: any, value: string) {
+function markNodeCanvasDirty(node: any) {
+  node?.graph?.setDirtyCanvas?.(true, true);
+  node?.setDirtyCanvas?.(true, true);
+}
+
+function syncTextControlValue(control: unknown, value: string) {
+  if (!(control instanceof HTMLTextAreaElement || control instanceof HTMLInputElement)) return;
+  if (control.value !== value) control.value = value;
+  control.dispatchEvent(new Event("input", { bubbles: true }));
+  control.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function setWidgetStringValue(widget: any, value: string, node?: any) {
   widget.value = value;
-  if (widget.inputEl) widget.inputEl.value = value;
+  syncTextControlValue(widget.inputEl, value);
   // Keep the CodeMirror view (if mounted) in sync with programmatic changes
   // such as preset loads — but only when it differs, so we don't reset the
   // cursor on every keystroke-driven round trip.
-  const cm = widget.__runebenderCM;
-  if (cm && cm.getValue() !== value) cm.setValue(value);
+  if (typeof widget.__runebenderSyncScriptValue === "function") {
+    widget.__runebenderSyncScriptValue(value);
+  } else {
+    const cm = widget.__runebenderCM;
+    if (cm && cm.getValue() !== value) cm.setValue(value);
+  }
+  markNodeCanvasDirty(node);
 }
 
 // CodeMirror 5 (vendored under web/public/vendor/codemirror, copied into
@@ -349,6 +366,7 @@ async function mountScriptEditor(node: any, widget: any) {
     },
   });
   widget.__runebenderCM = editor;
+  let syncingFromWidget = false;
 
   // Resolve the *visible* textarea to anchor to. Classic exposes it as
   // widget.inputEl (connected); Nodes 2.0 orphans inputEl and renders its own
@@ -363,11 +381,28 @@ async function mountScriptEditor(node: any, widget: any) {
     return live instanceof HTMLTextAreaElement ? live : undefined;
   };
 
+  widget.__runebenderSyncScriptValue = (value: string) => {
+    widget.value = value;
+    syncTextControlValue(widget.inputEl, value);
+    syncTextControlValue(findTextarea(), value);
+    if (editor.getValue() !== value) {
+      syncingFromWidget = true;
+      try {
+        editor.setValue(value);
+      } finally {
+        syncingFromWidget = false;
+      }
+    }
+    markNodeCanvasDirty(node);
+  };
+
   editor.on("change", () => {
+    if (syncingFromWidget) return;
     const src = editor.getValue();
     widget.value = src;
-    const ta = findTextarea();
-    if (ta) ta.value = src;
+    syncTextControlValue(widget.inputEl, src);
+    syncTextControlValue(findTextarea(), src);
+    markNodeCanvasDirty(node);
   });
 
   let lastW = 0;
@@ -405,6 +440,11 @@ async function mountScriptEditor(node: any, widget: any) {
     // Hide whichever textarea is current — CodeMirror is the real surface.
     textarea.style.opacity = "0";
     textarea.style.pointerEvents = "none";
+
+    const widgetValue = String(widget.value ?? "");
+    if (!syncingFromWidget && widgetValue !== editor.getValue()) {
+      widget.__runebenderSyncScriptValue(widgetValue);
+    }
 
     const rect = textarea.getBoundingClientRect();
 
@@ -469,28 +509,56 @@ function attachFontSpecimenPresetSync(node: any) {
     if (match) presetWidget.value = match;
   };
 
-  const loadPresetIntoScript = async (value: string, force = false) => {
+  let drawbotPresetLoadSerial = 0;
+  const currentPresetValue = () => {
     normalizePreset();
+    return String(presetWidget.value ?? "");
+  };
+  const loadPresetIntoScript = async (value: string, force = false) => {
+    const requestedPreset = value || currentPresetValue();
     if (!force && String(scriptWidget.value ?? "").trim()) return;
-    const source = await fetchDrawBotPresetSource(value);
-    if (source != null) setWidgetStringValue(scriptWidget, source);
+    const loadSerial = ++drawbotPresetLoadSerial;
+    const source = await fetchDrawBotPresetSource(requestedPreset);
+    if (loadSerial !== drawbotPresetLoadSerial) return;
+    if (currentPresetValue().toLowerCase() !== requestedPreset.toLowerCase()) return;
+    if (source != null) setWidgetStringValue(scriptWidget, source, node);
   };
 
   normalizePreset();
-  void loadPresetIntoScript(String(presetWidget.value ?? ""));
+  let lastPresetValue = currentPresetValue();
+  void loadPresetIntoScript(lastPresetValue);
 
   const originalCallback = presetWidget.callback;
   presetWidget.callback = function (value: string, ...args: any[]) {
     originalCallback?.call(this, value, ...args);
-    void loadPresetIntoScript(String(value ?? ""), true);
+    lastPresetValue = currentPresetValue() || String(value ?? "");
+    void loadPresetIntoScript(lastPresetValue, true);
   };
 
   const originalConfigure = node.onConfigure;
   node.onConfigure = function (info: any) {
     originalConfigure?.call(this, info);
     normalizePreset();
-    void loadPresetIntoScript(String(presetWidget.value ?? ""));
+    lastPresetValue = currentPresetValue();
+    void loadPresetIntoScript(lastPresetValue);
   };
+
+  let seenInGraph = false;
+  const watchPresetValue = () => {
+    if (node.graph) {
+      seenInGraph = true;
+    } else if (seenInGraph) {
+      return;
+    }
+
+    const nextPresetValue = currentPresetValue();
+    if (nextPresetValue && nextPresetValue !== lastPresetValue) {
+      lastPresetValue = nextPresetValue;
+      void loadPresetIntoScript(nextPresetValue, true);
+    }
+    requestAnimationFrame(watchPresetValue);
+  };
+  requestAnimationFrame(watchPresetValue);
 }
 
 type OverlaySession = {
