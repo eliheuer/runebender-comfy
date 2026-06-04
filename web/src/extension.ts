@@ -11,7 +11,7 @@ import { runebenderHostKey, type WorkspaceChoice } from "./host/runebenderHost";
 import { comfyHost } from "./hosts/comfy/comfyHost";
 import Runebender from "./Runebender.vue";
 
-const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-04-drawbot-script-sync-111519";
+const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-04-drawbot-initial-preset-sync-114257";
 
 // Mirror our own console output to the ComfyUI terminal through the
 // injected Comfy host. Filters to messages prefixed with
@@ -514,11 +514,32 @@ function attachFontSpecimenPresetSync(node: any) {
     normalizePreset();
     return String(presetWidget.value ?? "");
   };
+  const presetSourceCache = new Map<string, Promise<string | null>>();
+  const canonicalPresetName = (name: string) =>
+    presetValues.find((value: string) => value.toLowerCase() === name.toLowerCase()) ?? name;
+  const getPresetSource = (name: string) => {
+    const presetName = canonicalPresetName(name);
+    if (!presetSourceCache.has(presetName)) {
+      presetSourceCache.set(presetName, fetchDrawBotPresetSource(presetName));
+    }
+    return presetSourceCache.get(presetName)!;
+  };
+  const scriptMatchesBundledPreset = async (script: string) => {
+    const source = script.trim();
+    if (!source || !presetValues.length) return false;
+    const presetSources = await Promise.all(presetValues.map((value: string) => getPresetSource(value)));
+    return presetSources.some((presetSource) => presetSource?.trim() === source);
+  };
   const loadPresetIntoScript = async (value: string, force = false) => {
     const requestedPreset = value || currentPresetValue();
-    if (!force && String(scriptWidget.value ?? "").trim()) return;
     const loadSerial = ++drawbotPresetLoadSerial;
-    const source = await fetchDrawBotPresetSource(requestedPreset);
+    const existingScript = String(scriptWidget.value ?? "");
+    if (!force && existingScript.trim()) {
+      const existingScriptIsPreset = await scriptMatchesBundledPreset(existingScript);
+      if (loadSerial !== drawbotPresetLoadSerial) return;
+      if (!existingScriptIsPreset) return;
+    }
+    const source = await getPresetSource(requestedPreset);
     if (loadSerial !== drawbotPresetLoadSerial) return;
     if (currentPresetValue().toLowerCase() !== requestedPreset.toLowerCase()) return;
     if (source != null) setWidgetStringValue(scriptWidget, source, node);

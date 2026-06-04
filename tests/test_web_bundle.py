@@ -115,6 +115,8 @@ class WebBundleTests(unittest.TestCase):
 
         source = (ROOT / "web" / "src" / "extension.ts").read_text(encoding="utf-8")
         self.assertIn("drawbotPresetLoadSerial", source)
+        self.assertIn("scriptMatchesBundledPreset", source)
+        self.assertIn("presetSourceCache", source)
 
         # Only the entry module and its stylesheet are emitted at the top level.
         top_level = sorted(p.name for p in dist.iterdir() if p.is_file())
