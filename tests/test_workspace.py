@@ -1739,6 +1739,15 @@ class FontSpecimenNodeTests(unittest.TestCase):
         self.assertIn("Specimen", presets)
         self.assertIn("Waterfall", presets)
         self.assertIn("font_path", presets["Custom"])
+        self.assertIn("fontVariations(wght=400)", presets["Glyph"])
+        expected_glyph_text_call = "\n".join([
+            "text(",
+            '    input_text or "A",',
+            "    (WIDTH / 2, HEIGHT * 0.15),",
+            '    align="center",',
+            ")",
+        ])
+        self.assertIn(expected_glyph_text_call, presets["Glyph"])
         self.assertNotIn("helpers", presets)
 
     def test_font_specimen_uses_runebender_drawbot_skia_fork(self) -> None:
