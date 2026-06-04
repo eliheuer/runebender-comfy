@@ -10,6 +10,13 @@ newPage(WIDTH, HEIGHT)
 fill(0.06)
 rect(0, 0, WIDTH, HEIGHT)
 
+if GRID:
+    grid(
+        margin=GRID_MARGIN,
+        unit_size=GRID_UNIT_SIZE,
+        color=GRID_COLOR,
+    )
+
 font(font_path, HEIGHT * 0.75)
 fontVariations(wght=400)
 fill(0.92)
@@ -18,6 +25,3 @@ text(
     (WIDTH / 2, HEIGHT * 0.15),
     align="center",
 )
-
-if GRID:
-    grid(margin=GRID_MARGIN, unit_size=GRID_UNIT_SIZE, color=GRID_COLOR)
