@@ -1,6 +1,9 @@
 from helpers import *
 
 GRID = False
+GRID_MARGIN = WIDTH * 0.125
+GRID_UNIT_SIZE = WIDTH * 0.0625
+GRID_COLOR = (0.4, 0.4, 0.4)
 
 newPage(WIDTH, HEIGHT)
 
@@ -17,4 +20,4 @@ text(
 )
 
 if GRID:
-    grid(WIDTH * 0.05)
+    grid(margin=GRID_MARGIN, unit_size=GRID_UNIT_SIZE, color=GRID_COLOR)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import importlib.util
 import json
 import os
 import shutil
@@ -1773,6 +1775,68 @@ class FontSpecimenNodeTests(unittest.TestCase):
 
         self.assertEqual(image, "tensor")
         self.assertEqual(mask, "tensor")
+
+
+class DrawBotPresetHelperTests(unittest.TestCase):
+    def _load_helpers(self):
+        path = ROOT / "nodes" / "drawbot_presets" / "helpers.py"
+        spec = importlib.util.spec_from_file_location("drawbot_preset_helpers_for_test", path)
+        assert spec is not None
+        assert spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def _fake_drawbot(self, width: int = 1024, height: int = 1024):
+        calls = []
+
+        fake_db = types.SimpleNamespace(
+            width=lambda: width,
+            height=lambda: height,
+            savedState=lambda: contextlib.nullcontext(),
+            stroke=lambda *args: calls.append(("stroke", args)),
+            strokeWidth=lambda value: calls.append(("strokeWidth", value)),
+            fill=lambda value: calls.append(("fill", value)),
+            rect=lambda *args: calls.append(("rect", args)),
+            line=lambda start, end: calls.append(("line", start, end)),
+        )
+        fake_package = types.SimpleNamespace(drawbot=fake_db)
+        modules = {
+            "drawbot_skia": fake_package,
+            "drawbot_skia.drawbot": fake_db,
+        }
+        return calls, modules
+
+    def test_grid_uses_margin_unit_size_and_color(self) -> None:
+        helpers = self._load_helpers()
+        calls, modules = self._fake_drawbot()
+
+        with mock.patch.dict(sys.modules, modules):
+            helpers.grid(margin=128, unit_size=64, color=(0.2, 0.7, 0.5), weight=2)
+
+        self.assertIn(("stroke", (0.2, 0.7, 0.5)), calls)
+        self.assertIn(("strokeWidth", 2), calls)
+        self.assertIn(("rect", (128, 128, 768, 768)), calls)
+
+        lines = [call for call in calls if call[0] == "line"]
+        self.assertEqual(len(lines), 26)
+        self.assertEqual(lines[0], ("line", (128, 128), (128, 896)))
+        self.assertEqual(lines[12], ("line", (896, 128), (896, 896)))
+        self.assertEqual(lines[13], ("line", (128, 128), (896, 128)))
+        self.assertEqual(lines[-1], ("line", (128, 896), (896, 896)))
+
+    def test_grid_can_fit_a_fixed_number_of_divisions(self) -> None:
+        helpers = self._load_helpers()
+        calls, modules = self._fake_drawbot()
+
+        with mock.patch.dict(sys.modules, modules):
+            helpers.grid(margin=128, divisions=4)
+
+        lines = [call for call in calls if call[0] == "line"]
+        self.assertEqual(len(lines), 10)
+        self.assertEqual(lines[0], ("line", (128.0, 128), (128.0, 896)))
+        self.assertEqual(lines[1], ("line", (320.0, 128), (320.0, 896)))
+        self.assertEqual(lines[4], ("line", (896.0, 128), (896.0, 896)))
 
 
 class LocalWorkflowSmokeTests(unittest.TestCase):

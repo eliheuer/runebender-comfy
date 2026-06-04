@@ -599,6 +599,7 @@ impl Renderer {
         text_mode_active: bool,
     ) {
         let (ascender, descender) = state.text_metric_bounds();
+        let (sort_top, sort_bottom) = state.text_sort_metric_bounds();
         let line_height = state.text_line_height();
         let layout = state.text_buffer.layout(line_height);
         let kern_sort_index = state.text_buffer.manual_kerning_sort();
@@ -631,6 +632,8 @@ impl Renderer {
                     item.advance_width,
                     ascender,
                     descender,
+                    sort_top,
+                    sort_bottom,
                     view,
                     state.viewport.zoom,
                     metric_color,
@@ -719,8 +722,8 @@ impl Renderer {
             self.draw_text_cursor(
                 layout.cursor_x,
                 layout.cursor_y,
-                ascender,
-                descender,
+                sort_top,
+                sort_bottom,
                 view,
                 state.viewport.zoom,
             );
@@ -785,14 +788,18 @@ impl Renderer {
         advance_width: f64,
         ascender: f64,
         descender: f64,
+        box_top: f64,
+        box_bottom: f64,
         view: Affine,
         zoom: f64,
         color: Srgb,
     ) {
         let size = self.px(self.text_metric_cross_size(zoom));
         let stroke = Stroke::new(self.px(METRIC_LINE_PX));
+        let metric_ys =
+            text_sort_minimal_metric_ys(baseline_y, ascender, descender, box_top, box_bottom);
         for edge_x in [x, x + advance_width] {
-            for y in [baseline_y + descender, baseline_y, baseline_y + ascender] {
+            for y in metric_ys.iter().copied() {
                 let center = view * Point::new(edge_x, y);
                 let h = Line::new(
                     Point::new(center.x - size, center.y),
@@ -1473,6 +1480,47 @@ impl Renderer {
 
         surface_texture.present();
         Ok(())
+    }
+}
+
+fn text_sort_minimal_metric_ys(
+    baseline_y: f64,
+    ascender: f64,
+    descender: f64,
+    box_top: f64,
+    box_bottom: f64,
+) -> Vec<f64> {
+    let mut ys = vec![
+        baseline_y + box_bottom,
+        baseline_y + descender,
+        baseline_y,
+        baseline_y + ascender,
+        baseline_y + box_top,
+    ];
+    ys.retain(|y| y.is_finite());
+    ys.sort_by(|a, b| a.total_cmp(b));
+    ys.dedup_by(|a, b| (*a - *b).abs() < 0.001);
+    ys
+}
+
+#[cfg(test)]
+mod tests {
+    use super::text_sort_minimal_metric_ys;
+
+    #[test]
+    fn minimal_text_metrics_include_upm_top_cross_when_above_ascender() {
+        assert_eq!(
+            text_sort_minimal_metric_ys(0.0, 700.0, -300.0, 1000.0, -300.0),
+            vec![-300.0, 0.0, 700.0, 1000.0]
+        );
+    }
+
+    #[test]
+    fn minimal_text_metrics_deduplicate_upm_top_when_equal_to_ascender() {
+        assert_eq!(
+            text_sort_minimal_metric_ys(0.0, 800.0, -200.0, 800.0, -200.0),
+            vec![-200.0, 0.0, 800.0]
+        );
     }
 }
 

@@ -1592,7 +1592,7 @@ impl MouseDelegate for TextTool {
 
         let design_pos = state.viewport.screen_to_design(event.pos);
         let line_height = state.text_line_height();
-        let (ascender, descender) = state.text_metric_bounds();
+        let (ascender, descender) = state.text_sort_metric_bounds();
         let hit = state.text_buffer.hit_test(
             design_pos.x,
             design_pos.y,
@@ -2334,7 +2334,7 @@ mod tests {
 
         tool.left_click(event, &mut state);
 
-        assert_eq!(line_height, 1000.0);
+        assert_eq!(line_height, 2348.0);
         assert_eq!(state.text_buffer.active_sort(), Some(1));
         assert_eq!(state.text_buffer.cursor(), 2);
     }

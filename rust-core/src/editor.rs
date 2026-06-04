@@ -224,10 +224,11 @@ impl EditorState {
     }
 
     pub fn text_line_height(&self) -> f64 {
-        let (ascender, descender) = self.text_metric_bounds();
-        // Match runebender-xilem's rendered Text buffer path: line
-        // breaks advance by the visible metric box height.
-        (ascender - descender).max(1.0)
+        let (top, bottom) = self.text_sort_metric_bounds();
+        // Line breaks advance by the rendered sort metrics box. This keeps
+        // the top of the lower line's UPM box exactly on the previous line's
+        // descender instead of using only ascender - descender.
+        (top - bottom).max(1.0)
     }
 
     pub fn text_metric_bounds(&self) -> (f64, f64) {
@@ -3624,7 +3625,7 @@ mod tests {
     }
 
     #[test]
-    fn text_sort_metric_bounds_extend_to_upm_without_changing_line_height() {
+    fn text_line_height_extends_to_upm_sort_bounds() {
         let mut state = EditorState::default();
         state.metrics = Some(FontMetrics {
             units_per_em: Some(1000.0),
@@ -3635,7 +3636,7 @@ mod tests {
 
         assert_eq!(state.text_metric_bounds(), (700.0, -300.0));
         assert_eq!(state.text_sort_metric_bounds(), (1000.0, -300.0));
-        assert_eq!(state.text_line_height(), 1000.0);
+        assert_eq!(state.text_line_height(), 1300.0);
     }
 
     #[test]

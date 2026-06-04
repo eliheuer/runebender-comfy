@@ -2321,7 +2321,8 @@ function textPreviewLineHeight(): number {
   const metrics = editor.metricBounds();
   const ascender = metrics.length >= 2 ? metrics[0] : 800;
   const descender = metrics.length >= 2 ? metrics[1] : -200;
-  return Math.max(1, ascender - descender);
+  const upmTop = activeMasterData.value?.unitsPerEm ?? ascender;
+  return Math.max(1, Math.max(upmTop, ascender) - descender);
 }
 
 function refreshTextStateFromEditor(syncSorts = true) {

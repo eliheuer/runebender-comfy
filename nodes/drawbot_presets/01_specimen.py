@@ -1,6 +1,9 @@
 from helpers import *
 
 GRID = False
+GRID_MARGIN = WIDTH * 0.05
+GRID_UNIT_SIZE = GRID_MARGIN / 2
+GRID_COLOR = (0.4, 0.4, 0.4)
 
 newPage(WIDTH, HEIGHT)
 
@@ -22,4 +25,4 @@ for i, line in enumerate(lines):
     text(line, (WIDTH / 2, HEIGHT - padding - size * (i + 1)), align="center")
 
 if GRID:
-    grid(WIDTH * 0.05)
+    grid(margin=GRID_MARGIN, unit_size=GRID_UNIT_SIZE, color=GRID_COLOR)

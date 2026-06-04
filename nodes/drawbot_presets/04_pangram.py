@@ -1,6 +1,7 @@
 from helpers import *
 
 GRID = False
+GRID_COLOR = (0.4, 0.4, 0.4)
 
 newPage(WIDTH, HEIGHT)
 
@@ -16,4 +17,4 @@ textBox(
 )
 
 if GRID:
-    grid(margin)
+    grid(margin=margin, unit_size=margin / 2, color=GRID_COLOR)
