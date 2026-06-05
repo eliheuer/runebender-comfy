@@ -50,27 +50,26 @@ impl QuadraticPath {
     /// Convert this quadratic path to a kurbo `BezPath` for rendering.
     pub fn to_bezpath(&self) -> BezPath {
         let mut path = BezPath::new();
+        self.append_to_bezpath(&mut path);
+        path
+    }
 
-        if self.points.is_empty() {
-            return path;
+    /// Append this quadratic path directly into an existing `BezPath`.
+    pub fn append_to_bezpath(&self, path: &mut BezPath) {
+        let points = self.points.as_slice();
+
+        if points.is_empty() {
+            return;
         }
 
-        let points: Vec<&PathPoint> = self.points.iter().collect();
-        let rotated = Self::rotate_to_on_curve_start(&points);
-
-        if rotated.is_empty() {
-            return path;
-        }
-
-        path.move_to(rotated[0].point);
-        Self::process_points(&rotated, &mut path);
+        let start_idx = points.iter().position(|p| p.is_on_curve()).unwrap_or(0);
+        path.move_to(points[start_idx].point);
+        Self::process_points(points, start_idx, path);
 
         if self.closed {
-            Self::handle_closed_path_trailing_points(&rotated, &mut path);
+            Self::handle_closed_path_trailing_points(points, start_idx, path);
             path.close_path();
         }
-
-        path
     }
 
     /// Convert from a workspace contour (assumes QCurve points).
@@ -143,25 +142,19 @@ impl QuadraticPath {
         SegmentIterator::new(&self.points, self.closed)
     }
 
-    fn rotate_to_on_curve_start<'a>(points: &'a [&PathPoint]) -> Vec<&'a PathPoint> {
-        let start_idx = points.iter().position(|p| p.is_on_curve()).unwrap_or(0);
-
-        points[start_idx..]
-            .iter()
-            .chain(points[..start_idx].iter())
-            .copied()
-            .collect()
+    fn rotated_point(points: &[PathPoint], start_idx: usize, offset: usize) -> &PathPoint {
+        &points[(start_idx + offset) % points.len()]
     }
 
-    fn process_points(rotated: &[&PathPoint], path: &mut BezPath) {
+    fn process_points(points: &[PathPoint], start_idx: usize, path: &mut BezPath) {
         let mut i = 1;
-        while i < rotated.len() {
-            let pt = rotated[i];
+        while i < points.len() {
+            let pt = Self::rotated_point(points, start_idx, i);
 
             match pt.typ {
                 PointType::OnCurve { .. } => {
-                    let off_curve_before = Self::collect_preceding_off_curve_points(rotated, i);
-                    Self::add_segment_to_path(path, &off_curve_before, pt.point);
+                    let control = Self::preceding_off_curve_control(points, start_idx, i);
+                    Self::add_segment_to_path(path, control, pt.point);
                     i += 1;
                 }
                 PointType::OffCurve { .. } => {
@@ -173,57 +166,50 @@ impl QuadraticPath {
 
     /// For quadratic paths, expect at most one off-curve point before
     /// each on-curve.
-    fn collect_preceding_off_curve_points<'a>(
-        rotated: &'a [&PathPoint],
-        current_idx: usize,
-    ) -> Vec<&'a PathPoint> {
-        let mut off_curve_before = Vec::new();
-        let j = current_idx.saturating_sub(1);
-
-        if j > 0 && rotated[j].is_off_curve() {
-            off_curve_before.push(rotated[j]);
+    fn preceding_off_curve_control(
+        points: &[PathPoint],
+        start_idx: usize,
+        current_offset: usize,
+    ) -> Option<kurbo::Point> {
+        if current_offset <= 1 {
+            return None;
         }
-
-        off_curve_before
+        let point = Self::rotated_point(points, start_idx, current_offset - 1);
+        point.is_off_curve().then_some(point.point)
     }
 
     /// 0 control points = line, 1 = quadratic curve.
     fn add_segment_to_path(
         path: &mut BezPath,
-        off_curve_before: &[&PathPoint],
+        control: Option<kurbo::Point>,
         end_point: kurbo::Point,
     ) {
-        match off_curve_before.len() {
-            0 => path.line_to(end_point),
-            1 => path.quad_to(off_curve_before[0].point, end_point),
-            _ => {
-                // Shouldn't happen in a pure quadratic path.
-                path.quad_to(
-                    off_curve_before[off_curve_before.len() - 1].point,
-                    end_point,
-                );
-            }
+        if let Some(control) = control {
+            path.quad_to(control, end_point);
+        } else {
+            path.line_to(end_point);
         }
     }
 
-    fn handle_closed_path_trailing_points(rotated: &[&PathPoint], path: &mut BezPath) {
-        let trailing_off_curve = Self::collect_trailing_off_curve_points(rotated);
-
-        if !trailing_off_curve.is_empty() {
-            let first_pt = rotated[0];
-            Self::add_segment_to_path(path, &trailing_off_curve, first_pt.point);
+    fn handle_closed_path_trailing_points(
+        points: &[PathPoint],
+        start_idx: usize,
+        path: &mut BezPath,
+    ) {
+        if let Some(control) = Self::trailing_off_curve_control(points, start_idx) {
+            let first_pt = Self::rotated_point(points, start_idx, 0);
+            Self::add_segment_to_path(path, Some(control), first_pt.point);
         }
     }
 
     /// For quadratic paths, expect at most one trailing off-curve point.
-    fn collect_trailing_off_curve_points<'a>(rotated: &'a [&PathPoint]) -> Vec<&'a PathPoint> {
-        let len = rotated.len();
-
-        if len > 1 && rotated[len - 1].is_off_curve() {
-            vec![rotated[len - 1]]
-        } else {
-            Vec::new()
+    fn trailing_off_curve_control(points: &[PathPoint], start_idx: usize) -> Option<kurbo::Point> {
+        let len = points.len();
+        if len <= 1 {
+            return None;
         }
+        let point = Self::rotated_point(points, start_idx, len - 1);
+        point.is_off_curve().then_some(point.point)
     }
 }
 

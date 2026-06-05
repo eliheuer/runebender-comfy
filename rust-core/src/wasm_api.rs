@@ -2,17 +2,22 @@
 // state, the mouse state machine, the active tool, the renderer, and
 // the undo stack. (wasm32 gating lives in lib.rs.)
 
-use kurbo::{Affine, BezPath, Point, Rect, Shape, Vec2};
+use kurbo::{Affine, BezPath, Line, Point, Rect, Shape, Vec2};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt::Write as _;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
 
 use runebender_core::{GlyphCategory, GlyphMetadata, mark_color};
 
 use crate::editing::{Modifiers, Mouse, MouseButton, MouseEvent, UndoState};
-use crate::editor::{AnchorPoint, ComponentPreview, EditorState, norad_glyph_to_bezpath};
+use crate::editor::{
+    AnchorPoint, ComponentPreview, EditorState, KnifePreview, MeasurePreview, NudgeSelectionResult,
+    PenPreview, SegmentHoverPreview, ShapePreview, norad_glyph_to_bezpath,
+};
 use crate::model::workspace::{
     Contour as WsContour, ContourPoint as WsContourPoint, PointType as WsPointType,
 };
@@ -29,6 +34,18 @@ fn text_codepoint_from_wasm(codepoint: u32) -> Option<char> {
         None
     } else {
         char::from_u32(codepoint)
+    }
+}
+
+fn glyph_bytes_fingerprint(bytes: &[u8]) -> GlyphBytesFingerprint {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    GlyphBytesFingerprint {
+        len: bytes.len(),
+        hash,
     }
 }
 
@@ -61,6 +78,13 @@ struct TextLayoutItemSnapshot {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct TextBufferStateSnapshot {
+    buffer: TextBufferSnapshot,
+    layout: TextLayoutSnapshot,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct TextSortSnapshot {
     kind: &'static str,
     glyph_name: Option<String>,
@@ -68,6 +92,18 @@ struct TextSortSnapshot {
     codepoint: Option<u32>,
     advance_width: Option<f64>,
     active: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct GlyphBytesFingerprint {
+    len: usize,
+    hash: u64,
+}
+
+#[derive(Clone)]
+struct SourceGlyphCache {
+    fingerprint: Option<GlyphBytesFingerprint>,
+    glyph: norad::Glyph,
 }
 
 #[derive(Serialize)]
@@ -340,6 +376,37 @@ pub fn glif_to_svg_with_components(
     }
 }
 
+/// Parse one .glif file and return a grid-thumbnail SVG with a constant
+/// em-based vertical viewBox, resolving components against
+/// `{ glyphName: glifXml }`.
+///
+/// This is the one-glyph version of `glifMapToSvgs`: edited glyph refreshes
+/// should not render every glyph in a master just to update one thumbnail.
+#[wasm_bindgen(js_name = glifToGridSvgWithComponents)]
+pub fn glif_to_grid_svg_with_components(
+    bytes: &[u8],
+    glyph_xml_by_name: &str,
+    units_per_em: f64,
+) -> Result<String, JsValue> {
+    let stroke_icon = is_runebender_stroke_icon_xml(bytes);
+    let glyph = norad::Glyph::parse_raw(bytes)
+        .map_err(|e| JsValue::from_str(&format!("parse .glif: {e}")))?;
+    let glyphs = parse_glif_xml_map(glyph_xml_by_name)?;
+
+    let mut bez = norad_glyph_to_bezpath(&glyph);
+    append_norad_components_to_bezpath(&mut bez, &glyph, &glyphs, Affine::IDENTITY, 0);
+    if stroke_icon {
+        svg_from_stroke_icon_bezpath(&bez)
+    } else {
+        let upm = if units_per_em > 0.0 {
+            units_per_em
+        } else {
+            1000.0
+        };
+        svg_from_bezpath_em(&bez, upm)
+    }
+}
+
 /// Batch-convert every glyph in a master to SVG thumbnails for the
 /// grid view. Takes a JSON object `{ glyphName: glifXml }` and returns
 /// a JSON object `{ glyphName: svgString }`.
@@ -521,16 +588,19 @@ fn build_component_previews(
             let mut path = norad_glyph_to_bezpath(base_glyph);
             append_norad_components_to_bezpath(&mut path, base_glyph, glyphs, Affine::IDENTITY, 0);
             let t = &component.transform;
+            let transform = Affine::new([
+                t.x_scale, t.xy_scale, t.yx_scale, t.y_scale, t.x_offset, t.y_offset,
+            ]);
+            let transformed_path = Arc::new(transform * &path);
             let mut anchors = Vec::new();
             collect_component_anchors(base_glyph, glyphs, Affine::IDENTITY, 0, &mut anchors);
             Some(ComponentPreview {
                 id: crate::model::EntityId::next(),
                 index,
                 base: base_name,
-                transform: Affine::new([
-                    t.x_scale, t.xy_scale, t.yx_scale, t.y_scale, t.x_offset, t.y_offset,
-                ]),
-                path,
+                transform,
+                transformed_path,
+                path: Arc::new(path),
                 anchors,
                 auto_align: !component_alignment_disabled(component),
             })
@@ -911,6 +981,8 @@ pub struct GlyphEditor {
     renderer: Renderer,
     undo: UndoState<EditorState>,
     point_clipboard: Option<Vec<crate::path::Path>>,
+    component_glyphs: HashMap<String, norad::Glyph>,
+    source_glyph: Option<SourceGlyphCache>,
     /// Snapshot of `state` taken on a left-button pointerdown, pushed
     /// onto the undo stack on the matching pointerup. `None` between
     /// strokes.
@@ -935,6 +1007,235 @@ impl GlyphEditor {
         self.commit_pending_nudge_snapshot();
         self.state.clone()
     }
+
+    fn set_glyph_from_norad_with_component_cache(&mut self, glyph: &norad::Glyph) {
+        self.state.set_glyph_from_norad(glyph);
+        self.state
+            .set_component_previews(build_component_previews(glyph, &self.component_glyphs));
+    }
+
+    fn set_glyph_from_norad_preserving_history_with_component_cache(
+        &mut self,
+        glyph: &norad::Glyph,
+    ) {
+        self.state.set_glyph_from_norad_preserving_history(glyph);
+        self.state
+            .set_component_previews(build_component_previews(glyph, &self.component_glyphs));
+    }
+
+    fn cache_source_glyph(
+        &mut self,
+        glyph: norad::Glyph,
+        fingerprint: Option<GlyphBytesFingerprint>,
+    ) {
+        self.source_glyph = Some(SourceGlyphCache { fingerprint, glyph });
+    }
+
+    fn source_glyph_for_bytes(&mut self, original_bytes: &[u8]) -> Result<norad::Glyph, JsValue> {
+        let fingerprint = glyph_bytes_fingerprint(original_bytes);
+        if let Some(cache) = &self.source_glyph {
+            if cache.fingerprint.is_none() || cache.fingerprint == Some(fingerprint) {
+                return Ok(cache.glyph.clone());
+            }
+        }
+
+        let glyph = norad::Glyph::parse_raw(original_bytes)
+            .map_err(|e| JsValue::from_str(&format!("parse .glif: {e}")))?;
+        self.cache_source_glyph(glyph.clone(), Some(fingerprint));
+        Ok(glyph)
+    }
+
+    fn text_buffer_snapshot_value(&self) -> TextBufferSnapshot {
+        let sorts = self
+            .state
+            .text_buffer
+            .iter()
+            .map(|sort| match &sort.kind {
+                TextSortKind::Glyph {
+                    name,
+                    codepoint,
+                    advance_width,
+                } => TextSortSnapshot {
+                    kind: "glyph",
+                    glyph_name: Some(name.clone()),
+                    char: codepoint.map(|c| c.to_string()),
+                    codepoint: codepoint.map(|c| c as u32),
+                    advance_width: Some(*advance_width),
+                    active: sort.active,
+                },
+                TextSortKind::LineBreak => TextSortSnapshot {
+                    kind: "lineBreak",
+                    glyph_name: None,
+                    char: None,
+                    codepoint: None,
+                    advance_width: None,
+                    active: sort.active,
+                },
+            })
+            .collect();
+        TextBufferSnapshot {
+            has_text_session: self.state.has_text_session,
+            cursor: self.state.text_buffer.cursor(),
+            active_sort: self.state.text_buffer.active_sort(),
+            direction: match self.state.text_buffer.direction() {
+                TextDirection::LeftToRight => "ltr",
+                TextDirection::RightToLeft => "rtl",
+            },
+            sorts,
+        }
+    }
+
+    fn text_layout_snapshot_value(&self, line_height: f64) -> TextLayoutSnapshot {
+        let layout = self.state.text_buffer.layout(line_height.max(1.0));
+        TextLayoutSnapshot {
+            cursor_x: layout.cursor_x,
+            cursor_y: layout.cursor_y,
+            items: layout
+                .items
+                .into_iter()
+                .map(|item| TextLayoutItemSnapshot {
+                    index: item.index,
+                    x: item.x,
+                    y: item.y,
+                    advance_width: item.advance_width,
+                })
+                .collect(),
+        }
+    }
+
+    fn text_layout_state_values(&self) -> Vec<f64> {
+        let layout = self
+            .state
+            .text_buffer
+            .layout(self.state.text_line_height().max(1.0));
+        let mut out = Vec::with_capacity(3 + layout.items.len() * 4);
+        out.push(layout.cursor_x);
+        out.push(layout.cursor_y);
+        out.push(layout.items.len() as f64);
+        for item in layout.items {
+            out.push(item.index as f64);
+            out.push(item.x);
+            out.push(item.y);
+            out.push(item.advance_width);
+        }
+        out
+    }
+
+    fn selection_state_values(&self) -> Vec<f64> {
+        let selection_count = self.state.selection.len()
+            + usize::from(self.state.selected_component.is_some())
+            + usize::from(self.state.selected_anchor.is_some());
+        let (selected_contour_count, bounds_state) = self.selection_contours_and_bounds_values();
+        let mut out = vec![
+            selection_count as f64,
+            selected_contour_count as f64,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ];
+        if let Some((count, bounds)) = bounds_state {
+            let reference = self.state.selection_reference_point(bounds);
+            out[2] = 1.0;
+            out[3] = count as f64;
+            out[4] = reference.x;
+            out[5] = reference.y;
+            out[6] = bounds.width();
+            out[7] = bounds.height();
+        }
+        if let Some(anchor) = self.state.selected_anchor() {
+            out[8] = 1.0;
+            out[9] = anchor.point.x;
+            out[10] = anchor.point.y;
+        }
+        out
+    }
+
+    fn selection_contours_and_bounds_values(&self) -> (usize, Option<(usize, Rect)>) {
+        if let Some(bounds) = self.state.selected_component_bounds() {
+            return (0, Some((1, bounds)));
+        }
+        if let Some(bounds) = self.state.selected_anchor_bounds() {
+            return (0, Some((1, bounds)));
+        }
+        if self.state.selection.is_empty() {
+            return (0, None);
+        }
+
+        let mut selected_contour_count = 0usize;
+        let mut selected_point_count = 0usize;
+        let mut min_x = f64::INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+
+        for path in &self.state.paths {
+            let mut contour_has_selection = false;
+            for pt in path.points().iter() {
+                if !self.state.selection.contains(&pt.id) {
+                    continue;
+                }
+                contour_has_selection = true;
+                selected_point_count += 1;
+                min_x = min_x.min(pt.point.x);
+                min_y = min_y.min(pt.point.y);
+                max_x = max_x.max(pt.point.x);
+                max_y = max_y.max(pt.point.y);
+            }
+            if contour_has_selection {
+                selected_contour_count += 1;
+            }
+        }
+
+        let bounds = (selected_point_count > 0)
+            .then(|| (selected_point_count, Rect::new(min_x, min_y, max_x, max_y)));
+        (selected_contour_count, bounds)
+    }
+
+    fn editor_panel_state_values(&self) -> Vec<f64> {
+        let mut out = Vec::with_capacity(15);
+        out.extend(self.editor_metrics_state_values());
+        out.extend(self.selection_state_values());
+        out
+    }
+
+    fn editor_metrics_state_values(&self) -> [f64; 4] {
+        let bbox = self.state.glyph_bbox();
+        let left_sidebearing = bbox.map(|bbox| bbox.min_x()).unwrap_or(0.0);
+        let right_sidebearing = bbox
+            .map(|bbox| self.state.advance_width - bbox.max_x())
+            .unwrap_or(self.state.advance_width);
+        [
+            self.state.advance_width,
+            self.state.paths.len() as f64,
+            left_sidebearing,
+            right_sidebearing,
+        ]
+    }
+
+    fn push_nudge_selection_result_values(&self, out: &mut Vec<f64>, result: NudgeSelectionResult) {
+        out.push(result.selection_count as f64);
+        out.extend_from_slice(&[0.0; 9]);
+        if let Some((count, bounds)) = result.bounds {
+            let reference = self.state.selection_reference_point(bounds);
+            out[1] = 1.0;
+            out[2] = count as f64;
+            out[3] = reference.x;
+            out[4] = reference.y;
+            out[5] = bounds.width();
+            out[6] = bounds.height();
+        }
+        if let Some(anchor) = result.anchor {
+            out[7] = 1.0;
+            out[8] = anchor.x;
+            out[9] = anchor.y;
+        }
+    }
 }
 
 #[wasm_bindgen]
@@ -954,6 +1255,8 @@ impl GlyphEditor {
             renderer,
             undo: UndoState::new(),
             point_clipboard: None,
+            component_glyphs: HashMap::new(),
+            source_glyph: None,
             pending_snapshot: None,
             pending_nudge_snapshot: None,
         })
@@ -969,6 +1272,8 @@ impl GlyphEditor {
         self.state.set_glyph_from_bezpath(&bez);
         self.undo.clear();
         self.point_clipboard = None;
+        self.component_glyphs.clear();
+        self.source_glyph = None;
         self.pending_snapshot = None;
         self.pending_nudge_snapshot = None;
         Ok(())
@@ -982,8 +1287,10 @@ impl GlyphEditor {
         let glyph = norad::Glyph::parse_raw(bytes)
             .map_err(|e| JsValue::from_str(&format!("parse .glif: {e}")))?;
         self.state.set_glyph_from_norad(&glyph);
+        self.cache_source_glyph(glyph, Some(glyph_bytes_fingerprint(bytes)));
         self.undo.clear();
         self.point_clipboard = None;
+        self.component_glyphs.clear();
         self.pending_snapshot = None;
         self.pending_nudge_snapshot = None;
         Ok(())
@@ -1000,10 +1307,11 @@ impl GlyphEditor {
     ) -> Result<(), JsValue> {
         let glyph = norad::Glyph::parse_raw(bytes)
             .map_err(|e| JsValue::from_str(&format!("parse .glif: {e}")))?;
-        let glyphs = parse_glif_xml_map(glyph_xml_by_name)?;
+        self.component_glyphs = parse_glif_xml_map(glyph_xml_by_name)?;
         self.state.set_glyph_from_norad(&glyph);
         self.state
-            .set_component_previews(build_component_previews(&glyph, &glyphs));
+            .set_component_previews(build_component_previews(&glyph, &self.component_glyphs));
+        self.cache_source_glyph(glyph, Some(glyph_bytes_fingerprint(bytes)));
         self.undo.clear();
         self.point_clipboard = None;
         self.pending_snapshot = None;
@@ -1019,11 +1327,83 @@ impl GlyphEditor {
     ) -> Result<(), JsValue> {
         let glyph = norad::Glyph::parse_raw(bytes)
             .map_err(|e| JsValue::from_str(&format!("parse .glif: {e}")))?;
-        let glyphs = parse_glif_xml_map(glyph_xml_by_name)?;
+        self.component_glyphs = parse_glif_xml_map(glyph_xml_by_name)?;
         self.state.set_glyph_from_norad_preserving_history(&glyph);
         self.state
-            .set_component_previews(build_component_previews(&glyph, &glyphs));
+            .set_component_previews(build_component_previews(&glyph, &self.component_glyphs));
+        self.cache_source_glyph(glyph, Some(glyph_bytes_fingerprint(bytes)));
         Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setComponentGlyphs)]
+    pub fn set_component_glyphs(&mut self, glyph_xml_by_name: &str) -> Result<(), JsValue> {
+        self.component_glyphs = parse_glif_xml_map(glyph_xml_by_name)?;
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setComponentGlyph)]
+    pub fn set_component_glyph(&mut self, name: &str, bytes: &[u8]) -> Result<(), JsValue> {
+        let glyph = norad::Glyph::parse_raw(bytes)
+            .map_err(|e| JsValue::from_str(&format!("parse .glif: {e}")))?;
+        self.component_glyphs.insert(name.to_string(), glyph);
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = deleteComponentGlyph)]
+    pub fn delete_component_glyph(&mut self, name: &str) {
+        self.component_glyphs.remove(name);
+    }
+
+    #[wasm_bindgen(js_name = setGlyphGlifWithCachedComponents)]
+    pub fn set_glyph_glif_with_cached_components(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
+        let glyph = norad::Glyph::parse_raw(bytes)
+            .map_err(|e| JsValue::from_str(&format!("parse .glif: {e}")))?;
+        self.set_glyph_from_norad_with_component_cache(&glyph);
+        self.cache_source_glyph(glyph, Some(glyph_bytes_fingerprint(bytes)));
+        self.undo.clear();
+        self.point_clipboard = None;
+        self.pending_snapshot = None;
+        self.pending_nudge_snapshot = None;
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setGlyphGlifWithCachedComponentsPreserveHistory)]
+    pub fn set_glyph_glif_with_cached_components_preserve_history(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<(), JsValue> {
+        let glyph = norad::Glyph::parse_raw(bytes)
+            .map_err(|e| JsValue::from_str(&format!("parse .glif: {e}")))?;
+        self.set_glyph_from_norad_preserving_history_with_component_cache(&glyph);
+        self.cache_source_glyph(glyph, Some(glyph_bytes_fingerprint(bytes)));
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setGlyphNameWithCachedComponents)]
+    pub fn set_glyph_name_with_cached_components(&mut self, name: &str) -> Result<bool, JsValue> {
+        let Some(glyph) = self.component_glyphs.get(name).cloned() else {
+            return Ok(false);
+        };
+        self.set_glyph_from_norad_with_component_cache(&glyph);
+        self.cache_source_glyph(glyph, None);
+        self.undo.clear();
+        self.point_clipboard = None;
+        self.pending_snapshot = None;
+        self.pending_nudge_snapshot = None;
+        Ok(true)
+    }
+
+    #[wasm_bindgen(js_name = setGlyphNameWithCachedComponentsPreserveHistory)]
+    pub fn set_glyph_name_with_cached_components_preserve_history(
+        &mut self,
+        name: &str,
+    ) -> Result<bool, JsValue> {
+        let Some(glyph) = self.component_glyphs.get(name).cloned() else {
+            return Ok(false);
+        };
+        self.set_glyph_from_norad_preserving_history_with_component_cache(&glyph);
+        self.cache_source_glyph(glyph, None);
+        Ok(true)
     }
 
     /// Parse a UFO `fontinfo.plist` and store the vertical metrics
@@ -1160,66 +1540,31 @@ impl GlyphEditor {
 
     #[wasm_bindgen(js_name = textBufferSnapshot)]
     pub fn text_buffer_snapshot(&self) -> Result<String, JsValue> {
-        let sorts = self
-            .state
-            .text_buffer
-            .iter()
-            .map(|sort| match &sort.kind {
-                TextSortKind::Glyph {
-                    name,
-                    codepoint,
-                    advance_width,
-                } => TextSortSnapshot {
-                    kind: "glyph",
-                    glyph_name: Some(name.clone()),
-                    char: codepoint.map(|c| c.to_string()),
-                    codepoint: codepoint.map(|c| c as u32),
-                    advance_width: Some(*advance_width),
-                    active: sort.active,
-                },
-                TextSortKind::LineBreak => TextSortSnapshot {
-                    kind: "lineBreak",
-                    glyph_name: None,
-                    char: None,
-                    codepoint: None,
-                    advance_width: None,
-                    active: sort.active,
-                },
-            })
-            .collect();
-        let snapshot = TextBufferSnapshot {
-            has_text_session: self.state.has_text_session,
-            cursor: self.state.text_buffer.cursor(),
-            active_sort: self.state.text_buffer.active_sort(),
-            direction: match self.state.text_buffer.direction() {
-                TextDirection::LeftToRight => "ltr",
-                TextDirection::RightToLeft => "rtl",
-            },
-            sorts,
-        };
+        let snapshot = self.text_buffer_snapshot_value();
         serde_json::to_string(&snapshot)
             .map_err(|e| JsValue::from_str(&format!("serialize text buffer: {e}")))
     }
 
     #[wasm_bindgen(js_name = textBufferLayout)]
     pub fn text_buffer_layout(&self, line_height: f64) -> Result<String, JsValue> {
-        let layout = self.state.text_buffer.layout(line_height.max(1.0));
-        let snapshot = TextLayoutSnapshot {
-            cursor_x: layout.cursor_x,
-            cursor_y: layout.cursor_y,
-            items: layout
-                .items
-                .into_iter()
-                .map(|item| TextLayoutItemSnapshot {
-                    index: item.index,
-                    x: item.x,
-                    y: item.y,
-                    advance_width: item.advance_width,
-                })
-                .collect(),
-        };
+        let snapshot = self.text_layout_snapshot_value(line_height);
         serde_json::to_string(&snapshot)
             .map_err(|e| JsValue::from_str(&format!("serialize text layout: {e}")))
+    }
+
+    #[wasm_bindgen(js_name = textBufferState)]
+    pub fn text_buffer_state(&self) -> Result<String, JsValue> {
+        let snapshot = TextBufferStateSnapshot {
+            buffer: self.text_buffer_snapshot_value(),
+            layout: self.text_layout_snapshot_value(self.state.text_line_height()),
+        };
+        serde_json::to_string(&snapshot)
+            .map_err(|e| JsValue::from_str(&format!("serialize text buffer state: {e}")))
+    }
+
+    #[wasm_bindgen(js_name = textLayoutState)]
+    pub fn text_layout_state(&self) -> Vec<f64> {
+        self.text_layout_state_values()
     }
 
     #[wasm_bindgen(js_name = textBufferPreviewSvg)]
@@ -1236,7 +1581,7 @@ impl GlyphEditor {
             let mut path = if Some(item.index) == active_sort {
                 let mut active_path = BezPath::new();
                 for path in &self.state.paths {
-                    active_path.extend(path.to_bezpath().elements().iter().copied());
+                    path.append_to_bezpath(&mut active_path);
                 }
                 active_path.extend(self.state.component_preview.elements().iter().copied());
                 active_path
@@ -1409,6 +1754,48 @@ impl GlyphEditor {
             .is_some()
     }
 
+    #[wasm_bindgen(js_name = activateTextSortAtIndex)]
+    pub fn activate_text_sort_at_index(&mut self, x: f64, y: f64) -> i32 {
+        if !self.state.has_text_session {
+            return -1;
+        }
+        let design_pos = self.state.viewport.screen_to_design(Point::new(x, y));
+        let line_height = self.state.text_line_height();
+        let (ascender, descender) = self.state.text_metric_bounds();
+        self.state
+            .text_buffer
+            .activate_sort_at(design_pos.x, design_pos.y, line_height, ascender, descender)
+            .map(|activation| activation.index as i32)
+            .unwrap_or(-1)
+    }
+
+    /// Activate an inactive text sort hit at screen point and return compact
+    /// state: `[index, cursor, layout_x, layout_y]`. Empty when no inactive
+    /// sort was hit, including when the hit sort is already active.
+    #[wasm_bindgen(js_name = activateTextSortAtState)]
+    pub fn activate_text_sort_at_state(&mut self, x: f64, y: f64) -> Vec<f64> {
+        if !self.state.has_text_session {
+            return Vec::new();
+        }
+        let previous_active = self.state.text_buffer.active_sort();
+        let design_pos = self.state.viewport.screen_to_design(Point::new(x, y));
+        let line_height = self.state.text_line_height();
+        let (ascender, descender) = self.state.text_metric_bounds();
+        self.state
+            .text_buffer
+            .activate_sort_at(design_pos.x, design_pos.y, line_height, ascender, descender)
+            .filter(|activation| Some(activation.index) != previous_active)
+            .map(|activation| {
+                let mut out = Vec::with_capacity(4);
+                out.push(activation.index as f64);
+                out.push(self.state.text_buffer.cursor() as f64);
+                out.push(activation.x);
+                out.push(activation.y);
+                out
+            })
+            .unwrap_or_default()
+    }
+
     // ------------------------------------------------------------------
     // Pointer events. JS hands us screen-space coordinates (in
     // backing-store pixels — see Vue side for DPR multiplication).
@@ -1420,9 +1807,11 @@ impl GlyphEditor {
     #[wasm_bindgen(js_name = pointerDown)]
     pub fn pointer_down(&mut self, x: f64, y: f64, button: u32, mods: u32) {
         self.commit_pending_nudge_snapshot();
-        // Snapshot before mutating, but only for left-button strokes —
-        // middle-button drags only pan and shouldn't pollute undo.
-        if button == 0 {
+        // Snapshot before mutating for tools that can edit immediately.
+        // Select normally only changes selection on down, so defer its
+        // snapshot until the drag threshold is crossed. Alt-select can
+        // convert a line segment on down, so keep the eager snapshot there.
+        if button == 0 && (!self.tool.is_select() || (mods & 4) != 0) {
             self.pending_snapshot = Some(self.state.clone());
         }
         let event = build_event(x, y, button, mods);
@@ -1435,6 +1824,61 @@ impl GlyphEditor {
         let event = build_event(x, y, u32::MAX, mods);
         self.mouse
             .mouse_moved(event, &mut self.tool, &mut self.state);
+    }
+
+    /// Move the pointer and report whether anything visible changed.
+    ///
+    /// Used by idle hover paths where Vue should not schedule a frame unless
+    /// the hover/preview state actually changed.
+    #[wasm_bindgen(js_name = pointerMoveVisualChanged)]
+    pub fn pointer_move_visual_changed(&mut self, x: f64, y: f64, mods: u32) -> bool {
+        let visual_signature = editor_visual_signature(&self.state);
+        let event = build_event(x, y, u32::MAX, mods);
+        self.mouse
+            .mouse_moved(event, &mut self.tool, &mut self.state);
+        editor_visual_signature(&self.state) != visual_signature
+    }
+
+    /// Move the pointer and return compact selection state for hot drag paths
+    /// that need live coordinate updates without recomputing glyph metrics.
+    ///
+    /// Shape:
+    /// `[0, 0]` when nothing changed; otherwise
+    /// `[visual_changed, edit_changed, ...selectionState]`.
+    #[wasm_bindgen(js_name = pointerMoveSelectionState)]
+    pub fn pointer_move_selection_state(&mut self, x: f64, y: f64, mods: u32) -> Vec<f64> {
+        let pos = Point::new(x, y);
+        if self.mouse.track_pending_drag_move(pos, MouseButton::Left) {
+            return vec![0.0, 0.0];
+        }
+        let revision = self.state.edit_revision();
+        let visual_signature = editor_visual_signature(&self.state);
+        if self.pending_snapshot.is_none() && self.mouse.will_start_drag(pos, MouseButton::Left) {
+            self.pending_snapshot = Some(self.state.clone());
+        }
+        let event = build_event(x, y, u32::MAX, mods);
+        self.mouse
+            .mouse_moved(event, &mut self.tool, &mut self.state);
+        let visual_changed = editor_visual_signature(&self.state) != visual_signature;
+        let edit_changed = self.state.edit_revision() != revision;
+        if !visual_changed && !edit_changed {
+            return vec![0.0, 0.0];
+        }
+        let mut out = Vec::with_capacity(13);
+        out.push(visual_changed as u8 as f64);
+        out.push(edit_changed as u8 as f64);
+        out.extend(self.selection_state_values());
+        out
+    }
+
+    #[wasm_bindgen(js_name = clearSegmentHover)]
+    pub fn clear_segment_hover(&mut self) -> bool {
+        if self.state.segment_hover.is_some() {
+            self.state.segment_hover = None;
+            true
+        } else {
+            false
+        }
     }
 
     #[wasm_bindgen(js_name = pointerUp)]
@@ -1772,6 +2216,25 @@ impl GlyphEditor {
         self.state.right_sidebearing()
     }
 
+    /// Compact glyph sidebar + coordinate panel state for hot glyph-load paths.
+    ///
+    /// Shape:
+    /// `[advance_width, contour_count, left_sidebearing, right_sidebearing,
+    ///   ...selectionState]`.
+    #[wasm_bindgen(js_name = editorPanelState)]
+    pub fn editor_panel_state(&self) -> Vec<f64> {
+        self.editor_panel_state_values()
+    }
+
+    /// Compact glyph metrics state for hot glyph-load paths that already know
+    /// there is no active selection to preserve.
+    ///
+    /// Shape: `[advance_width, contour_count, left_sidebearing, right_sidebearing]`.
+    #[wasm_bindgen(js_name = editorMetricsState)]
+    pub fn editor_metrics_state(&self) -> Vec<f64> {
+        self.editor_metrics_state_values().to_vec()
+    }
+
     #[wasm_bindgen(js_name = setLeftSidebearing)]
     pub fn set_left_sidebearing(&mut self, value: f64) -> bool {
         let snapshot = self.discrete_edit_snapshot();
@@ -1951,6 +2414,26 @@ impl GlyphEditor {
         }
     }
 
+    /// Move the coordinate-panel reference point and return the updated
+    /// compact editor panel state in one JS↔WASM crossing.
+    ///
+    /// Shape:
+    /// `[changed, advance_width, contour_count, left_sidebearing,
+    ///   right_sidebearing, ...selectionState]`.
+    #[wasm_bindgen(js_name = moveSelectionReferenceState)]
+    pub fn move_selection_reference_state(&mut self, axis: &str, value: f64) -> Vec<f64> {
+        let snapshot = self.discrete_edit_snapshot();
+        if !self.state.move_selection_reference(axis, value) {
+            return vec![0.0];
+        }
+        self.undo.add_undo_group(snapshot);
+        self.pending_snapshot = None;
+        let mut out = Vec::with_capacity(16);
+        out.push(1.0);
+        out.extend(self.editor_panel_state_values());
+        out
+    }
+
     #[wasm_bindgen(js_name = resizeSelectionReference)]
     pub fn resize_selection_reference(&mut self, axis: &str, value: f64) -> bool {
         let snapshot = self.discrete_edit_snapshot();
@@ -1963,6 +2446,26 @@ impl GlyphEditor {
         }
     }
 
+    /// Resize the selection from the coordinate panel and return the updated
+    /// compact editor panel state in one JS↔WASM crossing.
+    ///
+    /// Shape:
+    /// `[changed, advance_width, contour_count, left_sidebearing,
+    ///   right_sidebearing, ...selectionState]`.
+    #[wasm_bindgen(js_name = resizeSelectionReferenceState)]
+    pub fn resize_selection_reference_state(&mut self, axis: &str, value: f64) -> Vec<f64> {
+        let snapshot = self.discrete_edit_snapshot();
+        if !self.state.resize_selection_reference(axis, value) {
+            return vec![0.0];
+        }
+        self.undo.add_undo_group(snapshot);
+        self.pending_snapshot = None;
+        let mut out = Vec::with_capacity(16);
+        out.push(1.0);
+        out.extend(self.editor_panel_state_values());
+        out
+    }
+
     #[wasm_bindgen(js_name = nudgeSelection)]
     pub fn nudge_selection(
         &mut self,
@@ -1972,18 +2475,57 @@ impl GlyphEditor {
         ctrl: bool,
         independent: bool,
     ) -> bool {
+        self.nudge_selection_result(dx, dy, shift, ctrl, independent)
+            .is_some()
+    }
+
+    fn nudge_selection_result(
+        &mut self,
+        dx: f64,
+        dy: f64,
+        shift: bool,
+        ctrl: bool,
+        independent: bool,
+    ) -> Option<NudgeSelectionResult> {
         if self.state.selection_entity_count() == 0 {
-            return false;
+            return None;
         }
         if self.pending_nudge_snapshot.is_none() {
             self.pending_nudge_snapshot = Some(self.state.clone());
         }
-        if self.state.nudge_selection(dx, dy, shift, ctrl, independent) {
-            self.pending_snapshot = None;
-            true
-        } else {
-            false
-        }
+        let result = self
+            .state
+            .nudge_selection_result(dx, dy, shift, ctrl, independent)?;
+        self.pending_snapshot = None;
+        Some(result)
+    }
+
+    /// Move the current selection and return the updated compact nudge state
+    /// in the same JS↔WASM crossing.
+    ///
+    /// Shape:
+    /// `[changed, selection_count,
+    ///   has_bounds, bounds_count, ref_x, ref_y, width, height,
+    ///   has_anchor, anchor_x, anchor_y]`.
+    ///
+    /// Nudging cannot change the selected contour count, so this intentionally
+    /// skips the contour-membership scan used by the full selection snapshot.
+    #[wasm_bindgen(js_name = nudgeSelectionState)]
+    pub fn nudge_selection_state(
+        &mut self,
+        dx: f64,
+        dy: f64,
+        shift: bool,
+        ctrl: bool,
+        independent: bool,
+    ) -> Vec<f64> {
+        let Some(result) = self.nudge_selection_result(dx, dy, shift, ctrl, independent) else {
+            return vec![0.0];
+        };
+        let mut out = Vec::with_capacity(11);
+        out.push(1.0);
+        self.push_nudge_selection_result_values(&mut out, result);
+        out
     }
 
     #[wasm_bindgen(js_name = finishNudgeSelection)]
@@ -2052,12 +2594,11 @@ impl GlyphEditor {
     /// string clears that lib entry.
     #[wasm_bindgen(js_name = currentGlyphGlif)]
     pub fn current_glyph_glif(
-        &self,
+        &mut self,
         original_bytes: &[u8],
         mark_color: &str,
     ) -> Result<Vec<u8>, JsValue> {
-        let mut glyph = norad::Glyph::parse_raw(original_bytes)
-            .map_err(|e| JsValue::from_str(&format!("parse .glif: {e}")))?;
+        let mut glyph = self.source_glyph_for_bytes(original_bytes)?;
         glyph.width = self.state.advance_width;
         glyph.contours = self
             .state
@@ -2120,9 +2661,11 @@ impl GlyphEditor {
                 .insert("public.markColor".to_string(), mark_color.into());
         }
 
-        glyph
+        let bytes = glyph
             .encode_xml()
-            .map_err(|e| JsValue::from_str(&format!("serialize .glif: {e}")))
+            .map_err(|e| JsValue::from_str(&format!("serialize .glif: {e}")))?;
+        self.cache_source_glyph(glyph, Some(glyph_bytes_fingerprint(&bytes)));
+        Ok(bytes)
     }
 
     /// Selected point bounds in design space as
@@ -2142,6 +2685,20 @@ impl GlyphEditor {
             bounds.width(),
             bounds.height(),
         ]
+    }
+
+    /// Compact selection snapshot for hot UI refresh paths.
+    ///
+    /// Shape:
+    /// `[selection_count, selected_contour_count,
+    ///   has_bounds, bounds_count, ref_x, ref_y, width, height,
+    ///   has_anchor, anchor_x, anchor_y]`.
+    ///
+    /// This intentionally avoids JSON and bundles the common selection
+    /// panel inputs into one JS↔WASM crossing.
+    #[wasm_bindgen(js_name = selectionState)]
+    pub fn selection_state(&self) -> Vec<f64> {
+        self.selection_state_values()
     }
 
     #[wasm_bindgen(js_name = setCoordinateQuadrant)]
@@ -2184,6 +2741,192 @@ fn quadrant_from_id(id: &str) -> Option<Quadrant> {
         "br" => Some(Quadrant::BottomRight),
         _ => None,
     }
+}
+
+fn editor_visual_signature(state: &EditorState) -> u64 {
+    let mut hasher = VisualHasher::new();
+    state.edit_revision().hash(&mut hasher);
+    state.selection.len().hash(&mut hasher);
+    for id in state.selection.iter() {
+        id.hash(&mut hasher);
+    }
+    state.selected_component.hash(&mut hasher);
+    state.selected_anchor.hash(&mut hasher);
+    hash_f64(&mut hasher, state.viewport.offset.x);
+    hash_f64(&mut hasher, state.viewport.offset.y);
+    hash_f64(&mut hasher, state.viewport.zoom);
+    hash_optional_rect(&mut hasher, state.marquee);
+    hash_segment_hover(&mut hasher, state.segment_hover);
+    hash_shape_preview(&mut hasher, state.shape_preview);
+    hash_pen_preview(&mut hasher, state.pen_preview);
+    hash_measure_preview(&mut hasher, state.measure_preview.as_ref());
+    hash_knife_preview(&mut hasher, state.knife_preview.as_ref());
+    hasher.value()
+}
+
+struct VisualHasher(u64);
+
+impl VisualHasher {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    fn new() -> Self {
+        Self(Self::OFFSET)
+    }
+
+    fn value(&self) -> u64 {
+        self.0
+    }
+
+    fn write_tag(&mut self, tag: u8) {
+        self.write_u8(tag);
+    }
+}
+
+impl Hasher for VisualHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 ^= u64::from(*byte);
+            self.0 = self.0.wrapping_mul(Self::PRIME);
+        }
+    }
+
+    fn write_u8(&mut self, value: u8) {
+        self.write(&[value]);
+    }
+
+    fn write_u64(&mut self, value: u64) {
+        self.write(&value.to_le_bytes());
+    }
+
+    fn write_usize(&mut self, value: usize) {
+        self.write_u64(value as u64);
+    }
+}
+
+fn hash_segment_hover(hasher: &mut VisualHasher, preview: Option<SegmentHoverPreview>) {
+    match preview {
+        Some(SegmentHoverPreview::Line(line)) => {
+            hasher.write_tag(1);
+            hash_line(hasher, line);
+        }
+        Some(SegmentHoverPreview::Cubic(cubic)) => {
+            hasher.write_tag(2);
+            hash_point(hasher, cubic.p0);
+            hash_point(hasher, cubic.p1);
+            hash_point(hasher, cubic.p2);
+            hash_point(hasher, cubic.p3);
+        }
+        Some(SegmentHoverPreview::Quadratic(quad)) => {
+            hasher.write_tag(3);
+            hash_point(hasher, quad.p0);
+            hash_point(hasher, quad.p1);
+            hash_point(hasher, quad.p2);
+        }
+        None => hasher.write_tag(0),
+    }
+}
+
+fn hash_shape_preview(hasher: &mut VisualHasher, preview: Option<ShapePreview>) {
+    match preview {
+        Some(ShapePreview::Rectangle(rect)) => {
+            hasher.write_tag(1);
+            hash_rect(hasher, rect);
+        }
+        Some(ShapePreview::Ellipse(rect)) => {
+            hasher.write_tag(2);
+            hash_rect(hasher, rect);
+        }
+        None => hasher.write_tag(0),
+    }
+}
+
+fn hash_pen_preview(hasher: &mut VisualHasher, preview: Option<PenPreview>) {
+    let Some(preview) = preview else {
+        hasher.write_tag(0);
+        return;
+    };
+    hasher.write_tag(1);
+    hash_optional_point(hasher, preview.line_start);
+    hash_point(hasher, preview.cursor);
+    hash_optional_point(hasher, preview.close_target);
+    hash_optional_point(hasher, preview.snap_target);
+}
+
+fn hash_measure_preview(hasher: &mut VisualHasher, preview: Option<&MeasurePreview>) {
+    let Some(preview) = preview else {
+        hasher.write_tag(0);
+        return;
+    };
+    hasher.write_tag(1);
+    hash_line(hasher, preview.line);
+    hash_f64(hasher, preview.distance);
+    hash_f64(hasher, preview.angle_degrees);
+    hasher.write_usize(preview.intersections.len());
+    for point in &preview.intersections {
+        hash_point(hasher, *point);
+    }
+    hasher.write_usize(preview.segment_labels.len());
+    for label in &preview.segment_labels {
+        hash_point(hasher, label.position);
+        hash_f64(hasher, label.length);
+    }
+}
+
+fn hash_knife_preview(hasher: &mut VisualHasher, preview: Option<&KnifePreview>) {
+    let Some(preview) = preview else {
+        hasher.write_tag(0);
+        return;
+    };
+    hasher.write_tag(1);
+    hash_line(hasher, preview.line);
+    hasher.write_usize(preview.intersections.len());
+    for point in &preview.intersections {
+        hash_point(hasher, *point);
+    }
+}
+
+fn hash_optional_rect(hasher: &mut VisualHasher, rect: Option<Rect>) {
+    if let Some(rect) = rect {
+        hasher.write_tag(1);
+        hash_rect(hasher, rect);
+    } else {
+        hasher.write_tag(0);
+    }
+}
+
+fn hash_rect(hasher: &mut VisualHasher, rect: Rect) {
+    hash_f64(hasher, rect.x0);
+    hash_f64(hasher, rect.y0);
+    hash_f64(hasher, rect.x1);
+    hash_f64(hasher, rect.y1);
+}
+
+fn hash_optional_point(hasher: &mut VisualHasher, point: Option<Point>) {
+    if let Some(point) = point {
+        hasher.write_tag(1);
+        hash_point(hasher, point);
+    } else {
+        hasher.write_tag(0);
+    }
+}
+
+fn hash_point(hasher: &mut VisualHasher, point: Point) {
+    hash_f64(hasher, point.x);
+    hash_f64(hasher, point.y);
+}
+
+fn hash_line(hasher: &mut VisualHasher, line: Line) {
+    hash_point(hasher, line.p0);
+    hash_point(hasher, line.p1);
+}
+
+fn hash_f64(hasher: &mut VisualHasher, value: f64) {
+    hasher.write_u64(value.to_bits());
 }
 
 fn normalize_anchor_name(name: &str) -> Option<String> {

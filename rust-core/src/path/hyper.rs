@@ -90,6 +90,12 @@ impl HyperPath {
         (*self.bezier).clone()
     }
 
+    pub fn append_to_bezpath(&self, path: &mut BezPath) {
+        for el in self.bezier.elements() {
+            path.push(*el);
+        }
+    }
+
     /// Expand the solved spline into a `CubicPath` with explicit
     /// on-curve and off-curve control points.
     pub fn to_cubic(&self) -> super::cubic::CubicPath {

@@ -12,6 +12,7 @@ import init, {
   glifAnatomySvgWithComponents,
   glifMapToSvgs,
   glifMetadata,
+  glifToGridSvgWithComponents,
   glifToSvg,
   glifToSvgWithComponents,
   glifWithKerningGroup,
@@ -186,6 +187,7 @@ const textBuffer = ref<TextSort[]>([]);
 const textCursor = ref<number>(0);
 const activeTextSortIndex = ref<number | null>(null);
 const temporaryPreviewReturnTool = ref<ToolId | null>(null);
+let selectIdleHoverActive = false;
 const coordinateQuadrant = ref<CoordinateQuadrant>("cc");
 const editorPanelsVisible = ref<boolean>(true);
 const editorBottomPreviewHeight = ref<number>(124);
@@ -213,6 +215,8 @@ let clipboardNoticeTimer: number | null = null;
 
 type MasterData = {
   glyphBytes: Map<string, Uint8Array>;
+  glyphXmlByName: string | null;
+  glyphXmlVersion: number;
   glyphPaths: Map<string, string>;
   glyphFileHandles: Map<string, FileSystemFileHandle>;
   groupsPath: string | null;
@@ -379,6 +383,11 @@ type TextLayoutSnapshot = {
   }>;
 };
 
+type TextBufferStateSnapshot = {
+  buffer: TextBufferSnapshot;
+  layout: TextLayoutSnapshot;
+};
+
 const masterDataMap = ref<Map<string, MasterData>>(new Map());
 const activeMasterName = ref<string>("");
 const selectedBounds = ref<SelectionBounds | undefined>(undefined);
@@ -413,7 +422,7 @@ const glyphSvgs = computed(
   () => activeMasterData.value?.glyphSvgs ?? (new Map<string, string>()),
 );
 const glyphXmlByName = computed(() =>
-  activeMasterData.value ? glyphXmlMapJson(activeMasterData.value.glyphBytes) : "{}",
+  activeMasterData.value ? cachedGlyphXmlByName(activeMasterData.value) : "{}",
 );
 const glyphCategories = computed(
   () => activeMasterData.value?.glyphCategories ?? (new Map<string, Category>()),
@@ -464,7 +473,7 @@ const masterPreviewSvgs = computed(() =>
     const bytes = data.glyphBytes.get("n") ?? data.glyphBytes.get("N");
     if (!bytes) return data.glyphSvgs.get("n") ?? data.glyphSvgs.get("N");
     try {
-      return glifToSvgWithComponents(bytes, glyphXmlMapJson(data.glyphBytes)) || glifToSvg(bytes);
+      return glifToSvgWithComponents(bytes, cachedGlyphXmlByName(data)) || glifToSvg(bytes);
     } catch {
       return data.glyphSvgs.get("n") ?? data.glyphSvgs.get("N");
     }
@@ -870,6 +879,9 @@ const textBufferPreviewSvg = computed(() => {
 type Editor = {
   pointerDown(x: number, y: number, button: number, mods: number): void;
   pointerMove(x: number, y: number, mods: number): void;
+  pointerMoveVisualChanged(x: number, y: number, mods: number): boolean;
+  pointerMoveSelectionState(x: number, y: number, mods: number): Float64Array;
+  clearSegmentHover(): boolean;
   pointerUp(x: number, y: number, button: number, mods: number): boolean;
   pointerCancel(): boolean;
   componentBaseAt(x: number, y: number): string;
@@ -890,6 +902,8 @@ type Editor = {
   shapeTextBuffer(): boolean;
   textBufferSnapshot(): string;
   textBufferLayout(lineHeight: number): string;
+  textBufferState(): string;
+  textLayoutState(): Float64Array;
   textBufferPreviewSvg(): string;
   clearTextBuffer(): void;
   insertTextGlyph(name: string, codepoint: number, advanceWidth: number): void;
@@ -903,6 +917,8 @@ type Editor = {
   moveTextCursorVisualLeft(): void;
   moveTextCursorVisualRight(): void;
   activateTextSortAt(x: number, y: number): boolean;
+  activateTextSortAtIndex(x: number, y: number): number;
+  activateTextSortAtState(x: number, y: number): Float64Array;
   wheel(x: number, y: number, deltaY: number): void;
   undo(): boolean;
   redo(): boolean;
@@ -935,8 +951,15 @@ type Editor = {
   setTheme(themeJson: string): void;
   setGlyphSvg(svg: string): void;
   setGlyphGlif(bytes: Uint8Array): void;
+  setComponentGlyphs(glyphXmlByName: string): void;
+  setComponentGlyph(name: string, bytes: Uint8Array): void;
+  deleteComponentGlyph(name: string): void;
   setGlyphGlifWithComponents(bytes: Uint8Array, glyphXmlByName: string): void;
   setGlyphGlifWithComponentsPreserveHistory(bytes: Uint8Array, glyphXmlByName: string): void;
+  setGlyphGlifWithCachedComponents(bytes: Uint8Array): void;
+  setGlyphGlifWithCachedComponentsPreserveHistory(bytes: Uint8Array): void;
+  setGlyphNameWithCachedComponents(name: string): boolean;
+  setGlyphNameWithCachedComponentsPreserveHistory(name: string): boolean;
   setFontInfo(bytes: Uint8Array): void;
   fitToCanvas(w: number, h: number): void;
   setZoom(z: number): void;
@@ -948,10 +971,13 @@ type Editor = {
   selectedContourCount(): number;
   cycleSelectedPoint(backwards: boolean): boolean;
   selectionBounds(): Float64Array;
+  selectionState(): Float64Array;
   measureInfo(): Float64Array;
   setCoordinateQuadrant(quadrant: string): void;
   moveSelectionReference(axis: "x" | "y", value: number): boolean;
+  moveSelectionReferenceState(axis: "x" | "y", value: number): Float64Array;
   resizeSelectionReference(axis: "width" | "height", value: number): boolean;
+  resizeSelectionReferenceState(axis: "width" | "height", value: number): Float64Array;
   nudgeSelection(
     dx: number,
     dy: number,
@@ -959,10 +985,19 @@ type Editor = {
     ctrl: boolean,
     independent: boolean,
   ): boolean;
+  nudgeSelectionState(
+    dx: number,
+    dy: number,
+    shift: boolean,
+    ctrl: boolean,
+    independent: boolean,
+  ): Float64Array;
   finishNudgeSelection(): void;
   setAdvanceWidth(width: number): boolean;
   leftSidebearing(): number;
   rightSidebearing(): number;
+  editorMetricsState(): Float64Array;
+  editorPanelState(): Float64Array;
   setLeftSidebearing(value: number): boolean;
   setRightSidebearing(value: number): boolean;
   currentGlyphGlif(originalBytes: Uint8Array, markColor: string): Uint8Array;
@@ -990,12 +1025,25 @@ type SaveAsDestination = {
 };
 
 let editor: Editor | null = null;
+let editorComponentGlyphsData: MasterData | null = null;
+let editorComponentGlyphsVersion = -1;
+let editorGlyphNeedsSync = false;
 let raf: number | null = null;
-let rafNeedsDerivedState = false;
+let rafNeedsBackgroundImageFrame = false;
+let rafNeedsSelectionState = false;
+let rafNeedsCompatibilityMarkers = false;
+let rafNeedsCompatibilityErrors = false;
+let compatibilityErrorRefreshTimer: number | null = null;
+let pendingNudgeSelectionState: Float64Array | null = null;
 let resizeObserver: ResizeObserver | null = null;
 let themeObserver: MutationObserver | null = null;
 let comfySyncTimer: number | null = null;
 let deferredGlyphSyncTimer: number | null = null;
+let deferredGlyphDerivedSyncTimer: number | null = null;
+let deferredGlyphDerivedSyncGlyph = "";
+let deferredGlyphDerivedSyncMaster = "";
+let textPointerMayMutate = false;
+let textKerningNeedsSync = false;
 let lastPublishedComfyState = "";
 
 onMounted(async () => {
@@ -1075,22 +1123,63 @@ watch(
   },
 );
 
-function requestRender(options: { refreshDerivedState?: boolean } = {}) {
+type RenderRequestOptions = {
+  refreshDerivedState?: boolean;
+  refreshBackgroundImageFrame?: boolean;
+  refreshSelectionState?: boolean;
+  refreshCompatibilityMarkers?: boolean;
+  refreshCompatibilityErrors?: boolean;
+};
+
+function requestRender(options: RenderRequestOptions = {}) {
   if (!editor || (viewMode.value !== "editor" && glyphNames.value.length > 0)) return;
-  rafNeedsDerivedState ||= options.refreshDerivedState !== false;
+  const refreshAll = options.refreshDerivedState !== false;
+  rafNeedsBackgroundImageFrame ||=
+    options.refreshBackgroundImageFrame ?? refreshAll;
+  rafNeedsSelectionState ||= options.refreshSelectionState ?? refreshAll;
+  rafNeedsCompatibilityMarkers ||=
+    options.refreshCompatibilityMarkers ?? refreshAll;
+  rafNeedsCompatibilityErrors ||= options.refreshCompatibilityErrors ?? false;
   if (raf !== null) return;
   raf = requestAnimationFrame(() => {
-    const refreshDerivedState = rafNeedsDerivedState;
+    const refreshBackground = rafNeedsBackgroundImageFrame;
+    const refreshSelection = rafNeedsSelectionState;
+    const refreshCompatibility = rafNeedsCompatibilityMarkers;
+    const refreshCompatibilityErrors = rafNeedsCompatibilityErrors;
     raf = null;
-    rafNeedsDerivedState = false;
+    rafNeedsBackgroundImageFrame = false;
+    rafNeedsSelectionState = false;
+    rafNeedsCompatibilityMarkers = false;
+    rafNeedsCompatibilityErrors = false;
     if (!editor || (viewMode.value !== "editor" && glyphNames.value.length > 0)) return;
     editor?.render();
-    if (refreshDerivedState) {
+    const nudgeSelectionState = pendingNudgeSelectionState;
+    pendingNudgeSelectionState = null;
+    if (nudgeSelectionState) {
+      applyNudgeSelectionState(nudgeSelectionState);
+    }
+    if (refreshBackground) {
       refreshBackgroundImageFrame();
+    }
+    if (refreshSelection) {
       refreshSelectionState();
+    }
+    if (refreshCompatibilityErrors) {
+      scheduleCompatibilityErrorRefresh();
+    } else if (refreshCompatibility) {
       refreshCompatibilityMarkers();
     }
   });
+}
+
+function scheduleCompatibilityErrorRefresh() {
+  if (compatibilityErrorRefreshTimer !== null) {
+    window.clearTimeout(compatibilityErrorRefreshTimer);
+  }
+  compatibilityErrorRefreshTimer = window.setTimeout(() => {
+    compatibilityErrorRefreshTimer = null;
+    updateCompatibilityErrors();
+  }, 0);
 }
 
 async function loadDevTestFont(): Promise<boolean> {
@@ -1258,6 +1347,9 @@ function loadWelcomeDemoGlyph() {
   try {
     editor.setFontInfo(encoder.encode(WELCOME_DEMO_FONTINFO));
     editor.setGlyphGlif(encoder.encode(WELCOME_DEMO_GLIF));
+    editorComponentGlyphsData = null;
+    editorComponentGlyphsVersion = -1;
+    editorGlyphNeedsSync = false;
     editor.setTool("Select");
     editor.setOffset(500, 700);
     editor.setZoom(0.7);
@@ -1299,46 +1391,114 @@ async function publishComfyState(force = false) {
   }
 }
 
-function refreshSelectionState() {
+function applySelectionState(
+  state: ArrayLike<number>,
+  options: { reuseAnchorName?: boolean } = {},
+  offset = 0,
+) {
   if (!editor) {
     setSelectionState(0, 0, undefined);
     selectedAnchor.value = null;
     return;
   }
-  const bounds = editor.selectionBounds();
-  const nextAnchor = parseAnchorContext(editor.selectedAnchorInfo());
-  const nextBounds =
-    bounds.length >= 5
-      ? {
-          count: bounds[0],
-          x: bounds[1],
-          y: bounds[2],
-          width: bounds[3],
-          height: bounds[4],
-        }
-      : undefined;
-  setSelectionState(
-    nextBounds?.count ?? editor.selectionCount(),
-    editor.selectedContourCount(),
-    nextBounds,
+  const hasBounds = state.length >= offset + 8 && state[offset + 2] > 0;
+  setSelectionStateValues(
+    state[offset] ?? 0,
+    state[offset + 1] ?? 0,
+    hasBounds,
+    state[offset + 3] ?? 0,
+    state[offset + 4] ?? 0,
+    state[offset + 5] ?? 0,
+    state[offset + 6] ?? 0,
+    state[offset + 7] ?? 0,
   );
+  const hasAnchor = state.length >= offset + 11 && state[offset + 8] > 0;
+  const nextAnchor = hasAnchor
+    ? options.reuseAnchorName && selectedAnchor.value
+      ? {
+          name: selectedAnchor.value.name ?? null,
+          x: state[offset + 9],
+          y: state[offset + 10],
+        }
+      : {
+          ...(parseAnchorContext(editor.selectedAnchorInfo()) ?? {
+            name: selectedAnchor.value?.name ?? null,
+            x: state[offset + 9],
+            y: state[offset + 10],
+          }),
+          x: state[offset + 9],
+          y: state[offset + 10],
+        }
+    : null;
   if (!sameAnchorContext(selectedAnchor.value, nextAnchor)) {
     selectedAnchor.value = nextAnchor;
   }
 }
 
-function sameSelectionBounds(
-  a: SelectionBounds | undefined,
-  b: SelectionBounds | undefined,
-): boolean {
-  if (!a || !b) return a === b;
-  return (
-    a.count === b.count &&
-    a.x === b.x &&
-    a.y === b.y &&
-    a.width === b.width &&
-    a.height === b.height
+function refreshSelectionState(options: { reuseAnchorName?: boolean } = {}) {
+  if (!editor) {
+    setSelectionState(0, 0, undefined);
+    selectedAnchor.value = null;
+    return;
+  }
+  applySelectionState(editor.selectionState(), options);
+}
+
+function applyNudgeSelectionState(state: ArrayLike<number>) {
+  const hasBounds = state.length >= 8 && state[2] > 0;
+  setSelectionStateValues(
+    state[1] ?? 0,
+    selectedContourCount.value,
+    hasBounds,
+    state[3] ?? 0,
+    state[4] ?? 0,
+    state[5] ?? 0,
+    state[6] ?? 0,
+    state[7] ?? 0,
   );
+  const hasAnchor = state.length >= 11 && state[8] > 0;
+  const nextAnchor = hasAnchor
+    ? {
+        name: selectedAnchor.value?.name ?? null,
+        x: state[9],
+        y: state[10],
+      }
+    : null;
+  if (!sameAnchorContext(selectedAnchor.value, nextAnchor)) {
+    selectedAnchor.value = nextAnchor;
+  }
+}
+
+function applyEditorPanelState(state: ArrayLike<number>, offset = 0) {
+  setRefNumber(currentWidth, state[offset] ?? 0);
+  setRefNumber(currentContours, state[offset + 1] ?? 0);
+  setRefNumber(currentLeftSidebearing, state[offset + 2] ?? 0);
+  setRefNumber(currentRightSidebearing, state[offset + 3] ?? 0);
+  applySelectionState(state, {}, offset + 4);
+}
+
+function applyEditorMetricsState(state: ArrayLike<number>) {
+  setRefNumber(currentWidth, state[0] ?? 0);
+  setRefNumber(currentContours, state[1] ?? 0);
+  setRefNumber(currentLeftSidebearing, state[2] ?? 0);
+  setRefNumber(currentRightSidebearing, state[3] ?? 0);
+  setSelectionState(0, 0, undefined);
+  if (selectedAnchor.value !== null) {
+    selectedAnchor.value = null;
+  }
+}
+
+function refreshEditorPanelState() {
+  if (!editor) {
+    setRefNumber(currentWidth, 0);
+    setRefNumber(currentContours, 0);
+    setRefNumber(currentLeftSidebearing, 0);
+    setRefNumber(currentRightSidebearing, 0);
+    setSelectionState(0, 0, undefined);
+    selectedAnchor.value = null;
+    return;
+  }
+  applyEditorPanelState(editor.editorPanelState());
 }
 
 function sameAnchorContext(
@@ -1349,10 +1509,38 @@ function sameAnchorContext(
   return a.name === b.name && a.x === b.x && a.y === b.y;
 }
 
+function setRefNumber(target: { value: number }, value: number) {
+  if (target.value !== value) {
+    target.value = value;
+  }
+}
+
 function setSelectionState(
   nextSelectionCount: number,
   nextSelectedContourCount: number,
   nextBounds: SelectionBounds | undefined,
+) {
+  setSelectionStateValues(
+    nextSelectionCount,
+    nextSelectedContourCount,
+    Boolean(nextBounds),
+    nextBounds?.count ?? 0,
+    nextBounds?.x ?? 0,
+    nextBounds?.y ?? 0,
+    nextBounds?.width ?? 0,
+    nextBounds?.height ?? 0,
+  );
+}
+
+function setSelectionStateValues(
+  nextSelectionCount: number,
+  nextSelectedContourCount: number,
+  hasBounds: boolean,
+  boundsCount: number,
+  boundsX: number,
+  boundsY: number,
+  boundsWidth: number,
+  boundsHeight: number,
 ) {
   if (selectionCount.value !== nextSelectionCount) {
     selectionCount.value = nextSelectionCount;
@@ -1360,8 +1548,34 @@ function setSelectionState(
   if (selectedContourCount.value !== nextSelectedContourCount) {
     selectedContourCount.value = nextSelectedContourCount;
   }
-  if (!sameSelectionBounds(selectedBounds.value, nextBounds)) {
-    selectedBounds.value = nextBounds;
+  if (!hasBounds) {
+    if (selectedBounds.value) {
+      selectedBounds.value = undefined;
+    }
+    return;
+  }
+  if (!selectedBounds.value) {
+    selectedBounds.value = {
+      count: boundsCount,
+      x: boundsX,
+      y: boundsY,
+      width: boundsWidth,
+      height: boundsHeight,
+    };
+    return;
+  }
+  if (
+    selectedBounds.value.count !== boundsCount ||
+    selectedBounds.value.x !== boundsX ||
+    selectedBounds.value.y !== boundsY ||
+    selectedBounds.value.width !== boundsWidth ||
+    selectedBounds.value.height !== boundsHeight
+  ) {
+    selectedBounds.value.count = boundsCount;
+    selectedBounds.value.x = boundsX;
+    selectedBounds.value.y = boundsY;
+    selectedBounds.value.width = boundsWidth;
+    selectedBounds.value.height = boundsHeight;
   }
 }
 
@@ -1753,7 +1967,7 @@ function applyBackgroundImageContextMenuAction() {
     ? "background image locked"
     : "background image unlocked";
   refreshBackgroundImageFrame();
-  requestRender();
+  requestRender({ refreshDerivedState: false, refreshBackgroundImageFrame: true });
 }
 
 function onBackgroundPointerDown(e: PointerEvent) {
@@ -1984,21 +2198,21 @@ function onCoordinateQuadrant(quadrant: CoordinateQuadrant) {
 }
 
 function onCoordinateChange(axis: "x" | "y" | "width" | "height", value: number) {
-  if (!editor || !currentGlyph.value) return;
-  const changed =
+  if (!editor || !currentGlyph.value || !activeMasterName.value) return;
+  const glyphName = currentGlyph.value;
+  const masterName = activeMasterName.value;
+  const state =
     axis === "x" || axis === "y"
-      ? editor.moveSelectionReference(axis, value)
-      : editor.resizeSelectionReference(axis, value);
-  if (!changed) {
+      ? editor.moveSelectionReferenceState(axis, value)
+      : editor.resizeSelectionReferenceState(axis, value);
+  if (state.length === 0 || state[0] <= 0) {
     refreshSelectionState();
     return;
   }
-  syncCurrentGlyphBytesFromEditor();
-  markGlyphDirty(currentGlyph.value);
-  refreshSelectionState();
-  currentContours.value = editor.contourCount();
-  requestRender();
-  queueComfyStateSync();
+  editorGlyphNeedsSync = true;
+  applyEditorPanelState(state, 1);
+  requestRender({ refreshDerivedState: false });
+  scheduleDeferredGlyphSync(glyphName, masterName);
 }
 
 function onAnchorChange(field: "name" | "x" | "y", value: string | number) {
@@ -2038,21 +2252,21 @@ function onActiveGlyphWidthChange(event: Event) {
     if (input) input.value = Math.round(currentWidth.value).toString();
     return;
   }
-  syncCurrentGlyphBytesFromEditor();
+  syncCurrentGlyphBytesFromEditor({ refreshCompatibility: false });
   markGlyphDirty(currentGlyph.value);
   syncTextKerningModelToEditor();
-  requestRender();
+  requestRender({ refreshCompatibilityErrors: true });
   queueComfyStateSync();
 }
 
 function refreshSidebearingsFromEditor() {
   if (!editor) {
-    currentLeftSidebearing.value = 0;
-    currentRightSidebearing.value = 0;
+    setRefNumber(currentLeftSidebearing, 0);
+    setRefNumber(currentRightSidebearing, 0);
     return;
   }
-  currentLeftSidebearing.value = editor.leftSidebearing();
-  currentRightSidebearing.value = editor.rightSidebearing();
+  setRefNumber(currentLeftSidebearing, editor.leftSidebearing());
+  setRefNumber(currentRightSidebearing, editor.rightSidebearing());
 }
 
 function onActiveGlyphSidebearingChange(side: "left" | "right", event: Event) {
@@ -2080,11 +2294,11 @@ function onActiveGlyphSidebearingChange(side: "left" | "right", event: Event) {
     }
     return;
   }
-  syncCurrentGlyphBytesFromEditor();
+  syncCurrentGlyphBytesFromEditor({ refreshCompatibility: false });
   markGlyphDirty(currentGlyph.value);
   refreshSidebearingsFromEditor();
   syncTextKerningModelToEditor();
-  requestRender();
+  requestRender({ refreshCompatibilityErrors: true });
   queueComfyStateSync();
 }
 
@@ -2122,7 +2336,7 @@ function onActiveGlyphUnicodeChange(event: Event) {
       unicode: info.unicode,
       unicodes: info.unicodes,
     };
-    data.glyphBytes.set(currentGlyph.value, bytes);
+    setGlyphBytes(data, currentGlyph.value, bytes);
     data.glyphMetadata.set(currentGlyph.value, metadata);
     if (info.unicode) {
       data.glyphUnicodes.set(currentGlyph.value, info.unicode);
@@ -2289,8 +2503,8 @@ function onActiveGlyphNameChange(event: Event) {
     const fileHandle = data.glyphFileHandles.get(oldName);
     const markColor = data.glyphMarkColors.get(oldName);
 
-    data.glyphBytes.delete(oldName);
-    data.glyphBytes.set(newName, bytes);
+    deleteGlyphBytes(data, oldName);
+    setGlyphBytes(data, newName, bytes);
     data.glyphPaths.delete(oldName);
     if (path) data.glyphPaths.set(newName, path);
     data.glyphFileHandles.delete(oldName);
@@ -2317,8 +2531,8 @@ function onActiveGlyphNameChange(event: Event) {
   currentGlyph.value = newName;
   selectedGlyph.value = newName;
   selectedGlyphs.value = new Set([newName]);
-  currentWidth.value = info.width;
-  currentContours.value = info.contours;
+  setRefNumber(currentWidth, info.width);
+  setRefNumber(currentContours, info.contours);
   refreshSidebearingsFromEditor();
   masterDataMap.value = new Map(masterDataMap.value);
     markGlyphDirty(newName);
@@ -2337,6 +2551,7 @@ function onActiveGlyphNameChange(event: Event) {
 
 function onToolSelect(tool: ToolId) {
   const wasTextSession = activeTool.value === "Text" && activeTextSortIndex.value !== null;
+  selectIdleHoverActive = false;
   activeTool.value = tool;
   const toolChanged = editor?.setTool(tool) ?? false;
   let shapeChanged = false;
@@ -2393,19 +2608,14 @@ function ensureTextSessionForCurrentGlyph() {
   }
 }
 
-function textPreviewLineHeight(): number {
-  if (!editor) return 1000;
-  const metrics = editor.metricBounds();
-  const ascender = metrics.length >= 2 ? metrics[0] : 800;
-  const descender = metrics.length >= 2 ? metrics[1] : -200;
-  const upmTop = activeMasterData.value?.unitsPerEm ?? ascender;
-  return Math.max(1, Math.max(upmTop, ascender) - descender);
-}
-
-function refreshTextStateFromEditor(syncSorts = true) {
+function refreshTextStateFromEditor(
+  syncSorts = true,
+  renderOptions: RenderRequestOptions = { refreshDerivedState: false },
+) {
   if (!editor) return;
   try {
-    const snapshot = JSON.parse(editor.textBufferSnapshot()) as TextBufferSnapshot;
+    const state = JSON.parse(editor.textBufferState()) as TextBufferStateSnapshot;
+    const snapshot = state.buffer;
     hasTextBufferSession.value = snapshot.hasTextSession;
     if (syncSorts) {
       textBuffer.value = snapshot.sorts.map((sort): TextSort => {
@@ -2432,14 +2642,70 @@ function refreshTextStateFromEditor(syncSorts = true) {
       }
     }
     textDirection.value = snapshot.direction;
-    textLayout.value = JSON.parse(
-      editor.textBufferLayout(textPreviewLineHeight()),
-    ) as TextLayoutSnapshot;
+    setTextLayoutSnapshot(state.layout);
     bumpTextPreviewRevision();
-    requestRender();
+    requestRender(renderOptions);
   } catch (e) {
     console.warn("failed to read text buffer snapshot:", e);
   }
+}
+
+function setTextLayoutSnapshot(snapshot: TextLayoutSnapshot) {
+  const layout = textLayout.value;
+  layout.cursorX = snapshot.cursorX;
+  layout.cursorY = snapshot.cursorY;
+  const items = layout.items;
+  const nextItems = snapshot.items;
+  for (let i = 0; i < nextItems.length; i++) {
+    const next = nextItems[i];
+    const item = items[i];
+    if (item) {
+      item.index = next.index;
+      item.x = next.x;
+      item.y = next.y;
+      item.advanceWidth = next.advanceWidth;
+    } else {
+      items[i] = { ...next };
+    }
+  }
+  items.length = nextItems.length;
+}
+
+function applyTextLayoutState(state: ArrayLike<number>) {
+  const itemCount = Math.max(0, Math.floor(state[2] ?? 0));
+  const layout = textLayout.value;
+  layout.cursorX = state[0] ?? 0;
+  layout.cursorY = state[1] ?? 0;
+  const items = layout.items;
+  let writeCount = 0;
+  for (let i = 0; i < itemCount; i++) {
+    const offset = 3 + i * 4;
+    if (state.length < offset + 4) break;
+    const item = items[writeCount];
+    const index = Math.max(0, Math.floor(state[offset] ?? 0));
+    const x = state[offset + 1] ?? 0;
+    const y = state[offset + 2] ?? 0;
+    const advanceWidth = state[offset + 3] ?? 0;
+    if (item) {
+      item.index = index;
+      item.x = x;
+      item.y = y;
+      item.advanceWidth = advanceWidth;
+    } else {
+      items[writeCount] = { index, x, y, advanceWidth };
+    }
+    writeCount += 1;
+  }
+  items.length = writeCount;
+  bumpTextPreviewRevision();
+}
+
+function refreshTextLayoutFromEditor(
+  renderOptions: RenderRequestOptions = { refreshDerivedState: false },
+) {
+  if (!editor) return;
+  applyTextLayoutState(editor.textLayoutState());
+  requestRender(renderOptions);
 }
 
 function insertTextCharacter(char: string): boolean {
@@ -2662,13 +2928,13 @@ function handleResize() {
   const height = Math.max(1, Math.floor(rect.height * dpr));
   editor.setDeviceScale(dpr);
   if (canvas.value.width === width && canvas.value.height === height) {
-    requestRender();
+    requestRender({ refreshDerivedState: false, refreshBackgroundImageFrame: true });
     return;
   }
   canvas.value.width = width;
   canvas.value.height = height;
   editor.resize(width, height);
-  requestRender();
+  requestRender({ refreshDerivedState: false, refreshBackgroundImageFrame: true });
 }
 
 function updateGridViewportSize() {
@@ -2784,12 +3050,22 @@ function modBits(e: PointerEvent): number {
   );
 }
 
+function isPlainTextLeftPointer(e: PointerEvent): boolean {
+  return activeTool.value === "Text" && e.button === 0 && !e.shiftKey;
+}
+
+function isPlainTextLeftDrag(e: PointerEvent): boolean {
+  return activeTool.value === "Text" && (e.buttons & 1) !== 0 && !e.shiftKey;
+}
+
 function onPointerDown(e: PointerEvent) {
   if (!editor) return;
   const c = canvasCoords(e);
   if (!c) return;
-  const previousTextSort =
-    activeTool.value === "Text" ? activeTextSortIndex.value : null;
+  selectIdleHoverActive = false;
+  textPointerMayMutate = activeTool.value === "Text" && e.shiftKey;
+  textKerningNeedsSync = false;
+  const previousTextSort = textPointerMayMutate ? activeTextSortIndex.value : null;
   dismissBackgroundImageContextMenu();
   dismissContourContextMenu();
   if (backgroundImage.value?.selected) {
@@ -2797,17 +3073,26 @@ function onPointerDown(e: PointerEvent) {
       ...backgroundImage.value,
       selected: false,
     };
+    if (isPlainTextLeftPointer(e)) {
+      requestRender({ refreshDerivedState: false });
+      return;
+    }
+  } else if (isPlainTextLeftPointer(e)) {
+    return;
   }
   (e.target as Element).setPointerCapture?.(e.pointerId);
   editor.pointerDown(c[0], c[1], e.button, modBits(e));
   refreshMeasureState();
-  if (activeTool.value === "Text") {
+  if (textPointerMayMutate) {
     refreshTextStateFromEditor();
     if (activeTextSortIndex.value !== previousTextSort) {
       loadActiveTextSortGlyphIntoEditor();
     }
   }
-  requestRender();
+  requestRender({
+    refreshDerivedState: false,
+    refreshSelectionState: activeTool.value === "Select",
+  });
 }
 
 function onCanvasContextMenu(e: MouseEvent) {
@@ -2821,7 +3106,7 @@ function onCanvasContextMenu(e: MouseEvent) {
   if (anchor) {
     editor.selectAnchorAt(c[0], c[1]);
     refreshSelectionState();
-    requestRender();
+    requestRender({ refreshDerivedState: false });
   }
   const info = editor.contourContextAt(c[0], c[1]);
   if (info.length >= 4) {
@@ -2927,6 +3212,9 @@ function onPointerMove(e: PointerEvent) {
   const c = canvasCoords(e);
   if (!c) return;
   const pointerActive = e.buttons !== 0;
+  if (!textPointerMayMutate && isPlainTextLeftDrag(e)) {
+    return;
+  }
   if (
     !pointerActive &&
     (activeTool.value === "Knife" ||
@@ -2937,58 +3225,113 @@ function onPointerMove(e: PointerEvent) {
   ) {
     return;
   }
+  if (!pointerActive && activeTool.value === "Select") {
+    if (!e.altKey && !selectIdleHoverActive) {
+      return;
+    }
+    const visualChanged = editor.pointerMoveVisualChanged(c[0], c[1], modBits(e));
+    selectIdleHoverActive = e.altKey;
+    if (visualChanged) {
+      requestRender({ refreshDerivedState: false });
+    }
+    return;
+  }
+  if (pointerActive && activeTool.value === "Select") {
+    const selectionState = editor.pointerMoveSelectionState(c[0], c[1], modBits(e));
+    if (selectionState.length >= 2 && selectionState[0] <= 0 && selectionState[1] <= 0) {
+      return;
+    }
+    if (selectionState.length >= 13) {
+      if (selectionState[1] > 0) {
+        editorGlyphNeedsSync = true;
+      }
+      applySelectionState(selectionState, { reuseAnchorName: true }, 2);
+    }
+    requestRender({ refreshDerivedState: false });
+    return;
+  }
   editor.pointerMove(c[0], c[1], modBits(e));
   if (pointerActive) {
     refreshMeasureState();
   }
-  if (activeTool.value === "Text" && pointerActive) {
-    refreshTextStateFromEditor();
-    syncTextKerningModelFromEditor(true);
+  if (textPointerMayMutate && pointerActive) {
+    refreshTextLayoutFromEditor();
+    textKerningNeedsSync = true;
   }
-  requestRender();
+  requestRender({ refreshDerivedState: false });
 }
 
 function onPointerUp(e: PointerEvent) {
   if (!editor) return;
   const c = canvasCoords(e);
   if (!c) return;
-  const previousTextSort =
-    activeTool.value === "Text" ? activeTextSortIndex.value : null;
+  if (!textPointerMayMutate && isPlainTextLeftPointer(e)) {
+    textPointerMayMutate = false;
+    return;
+  }
+  const shouldRefreshTextPointer = textPointerMayMutate;
+  const previousTextSort = shouldRefreshTextPointer ? activeTextSortIndex.value : null;
   const changed = editor.pointerUp(c[0], c[1], e.button, modBits(e));
+  textPointerMayMutate = false;
   (e.target as Element).releasePointerCapture?.(e.pointerId);
   if (changed && currentGlyph.value) {
-    const glyphChanged = syncCurrentGlyphBytesFromEditor({ skipUnchanged: true });
-    if (glyphChanged) {
-      markGlyphDirty(currentGlyph.value);
-      currentContours.value = editor.contourCount();
-      queueComfyStateSync();
+    const glyphName = currentGlyph.value;
+    const masterName = activeMasterName.value;
+    if (activeTool.value === "Select" && masterName) {
+      editorGlyphNeedsSync = true;
+      markGlyphDirty(glyphName, masterName);
+      scheduleDeferredGlyphSync(glyphName, masterName);
+    } else {
+      const glyphChanged = syncCurrentGlyphBytesFromEditor({ skipUnchanged: true });
+      if (glyphChanged) {
+        markGlyphDirty(glyphName);
+        queueComfyStateSync();
+      }
     }
+  }
+  if (activeTool.value === "Select" && !shouldRefreshTextPointer) {
+    applyEditorPanelState(editor.editorPanelState());
+    requestRender({ refreshDerivedState: false });
+    return;
   }
   refreshSelectionState();
   refreshMeasureState();
-  if (activeTool.value === "Text") {
+  if (shouldRefreshTextPointer) {
     refreshTextStateFromEditor();
     if (activeTextSortIndex.value !== previousTextSort) {
       loadActiveTextSortGlyphIntoEditor();
     }
-    syncTextKerningModelFromEditor(true);
+    if (textKerningNeedsSync) {
+      syncTextKerningModelFromEditor(true);
+      textKerningNeedsSync = false;
+    }
   }
-  requestRender();
+  requestRender({ refreshDerivedState: false });
 }
 
 function onPointerCancel() {
   if (!editor) return;
-  if (editor.pointerCancel()) {
+  if (textKerningNeedsSync) {
+    syncTextKerningModelFromEditor(true);
+    textKerningNeedsSync = false;
+  }
+  textPointerMayMutate = false;
+  const changed = editor.pointerCancel();
+  if (changed) {
     syncEditorMutationAfterWasmChange();
+    return;
   }
   refreshMeasureState();
-  requestRender();
+  requestRender({ refreshDerivedState: false });
 }
 
 function onCanvasDoubleClick(e: MouseEvent) {
   if (!editor) return;
   const c = canvasMouseCoords(e);
   if (!c) return;
+  if (hasTextBufferSession.value && activateInactiveTextSortAt(c[0], c[1])) {
+    return;
+  }
   if (editor.togglePointTypeAt(c[0], c[1])) {
     syncEditorMutationAfterWasmChange();
     return;
@@ -3007,13 +3350,36 @@ function onCanvasDoubleClick(e: MouseEvent) {
     queueComfyStateSync();
     return;
   }
-  if (editor.activateTextSortAt(c[0], c[1])) {
-    refreshTextStateFromEditor();
-    loadActiveTextSortGlyphIntoEditor();
-    requestRender();
-    queueComfyStateSync();
-    return;
+  activateInactiveTextSortAt(c[0], c[1]);
+}
+
+function activateInactiveTextSortAt(x: number, y: number): boolean {
+  if (!editor) return false;
+  const activatedTextSortState = editor.activateTextSortAtState(x, y);
+  if (activatedTextSortState.length >= 2) {
+    const activatedTextSort = activatedTextSortState[0];
+    activeTextSortIndex.value = activatedTextSort;
+    textCursor.value = activatedTextSortState[1];
+    const glyphName = textGlyphNameAt(activatedTextSort);
+    if (glyphName) {
+      if (selectedGlyph.value !== glyphName) {
+        selectedGlyph.value = glyphName;
+      }
+      if (!selectedGlyphs.value.has(glyphName) || selectedGlyphs.value.size !== 1) {
+        selectedGlyphs.value = new Set([glyphName]);
+      }
+      if (glyphName === currentGlyph.value) {
+        requestRender({ refreshDerivedState: false });
+        return;
+      }
+      loadActiveTextSortGlyphIntoEditor();
+    } else {
+      refreshTextStateFromEditor();
+      requestRender();
+    }
+    return true;
   }
+  return false;
 }
 
 // ---------------------------------------------------------------------
@@ -3359,7 +3725,7 @@ function updateGlyphKerningGroup(side: "left" | "right", value: string) {
   if ((currentGroup ?? "") === nextGroup) return;
 
   const nextBytes = glifWithKerningGroup(bytes, side, nextGroup);
-  data.glyphBytes.set(glyphName, nextBytes);
+  setGlyphBytes(data, glyphName, nextBytes);
   const nextGroups = { ...(currentGroups ?? {}) };
   if (!nextGroup || nextGroup === "-") {
     delete nextGroups[side];
@@ -3511,22 +3877,20 @@ function glyphOutlineMapToRecord(map: Map<string, string>): Record<string, strin
 }
 
 function gridGlyphSvgWithComponents(
-  name: string,
   bytes: Uint8Array,
-  glyphBytes: Map<string, Uint8Array>,
+  glyphXmlByName: string,
   unitsPerEm: number,
 ): string {
   // Grid thumbnails must use the same em-based viewBox on load and after
   // edits. The single-glyph SVG helper fits to ink bounds, which makes edited
   // glyphs visibly resize relative to untouched glyphs.
   try {
-    const out = glifMapToSvgs(glyphXmlMapJson(glyphBytes), unitsPerEm);
-    const parsed = JSON.parse(out) as Record<string, string>;
-    if (parsed[name]) return parsed[name];
+    const svg = glifToGridSvgWithComponents(bytes, glyphXmlByName, unitsPerEm);
+    if (svg) return svg;
   } catch (err) {
     console.warn("[runebender] edited glyph grid SVG refresh failed", err);
   }
-  return glifToSvgWithComponents(bytes, glyphXmlMapJson(glyphBytes)) || glifToSvg(bytes);
+  return glifToSvgWithComponents(bytes, glyphXmlByName) || glifToSvg(bytes);
 }
 
 function refreshGridGlyphSvg(
@@ -3534,7 +3898,11 @@ function refreshGridGlyphSvg(
   glyphName: string,
   bytes: Uint8Array,
 ): string {
-  const svg = gridGlyphSvgWithComponents(glyphName, bytes, data.glyphBytes, data.unitsPerEm);
+  const svg = gridGlyphSvgWithComponents(
+    bytes,
+    cachedGlyphXmlByName(data),
+    data.unitsPerEm,
+  );
   if (svg) {
     data.glyphSvgs.set(glyphName, svg);
   } else {
@@ -3836,6 +4204,8 @@ async function buildMasterData(
 
   return {
     glyphBytes,
+    glyphXmlByName: glyphXmlMapJson(glyphBytes),
+    glyphXmlVersion: 0,
     glyphPaths,
     glyphFileHandles,
     groupsPath,
@@ -3914,6 +4284,70 @@ function glyphXmlMapJson(
   );
 }
 
+function cachedGlyphXmlByName(data: MasterData): string {
+  if (data.glyphXmlByName === null) {
+    data.glyphXmlByName = glyphXmlMapJson(data.glyphBytes);
+  }
+  return data.glyphXmlByName;
+}
+
+function setGlyphBytes(
+  data: MasterData,
+  name: string,
+  bytes: Uint8Array,
+  options: { syncComponentCache?: boolean } = {},
+) {
+  data.glyphBytes.set(name, bytes);
+  data.glyphXmlByName = null;
+  data.glyphXmlVersion += 1;
+  if (options.syncComponentCache !== false) {
+    syncEditorComponentGlyphCacheEntry(data, name, bytes);
+  }
+}
+
+function deleteGlyphBytes(data: MasterData, name: string): boolean {
+  const deleted = data.glyphBytes.delete(name);
+  if (deleted) {
+    data.glyphXmlByName = null;
+    data.glyphXmlVersion += 1;
+    syncEditorComponentGlyphCacheEntry(data, name, null);
+  }
+  return deleted;
+}
+
+function syncEditorComponentGlyphCacheEntry(
+  data: MasterData,
+  name: string,
+  bytes: Uint8Array | null,
+) {
+  if (!editor || editorComponentGlyphsData !== data) return;
+  try {
+    if (bytes) {
+      editor.setComponentGlyph(name, bytes);
+    } else {
+      editor.deleteComponentGlyph(name);
+    }
+    editorComponentGlyphsVersion = data.glyphXmlVersion;
+  } catch (e) {
+    console.warn("[runebender] incremental component cache update failed:", e);
+    editorComponentGlyphsData = null;
+    editorComponentGlyphsVersion = -1;
+  }
+}
+
+function ensureEditorComponentGlyphs(data: MasterData) {
+  if (!editor) return;
+  if (
+    editorComponentGlyphsData === data &&
+    editorComponentGlyphsVersion === data.glyphXmlVersion
+  ) {
+    return;
+  }
+  editor.setComponentGlyphs(cachedGlyphXmlByName(data));
+  editorComponentGlyphsData = data;
+  editorComponentGlyphsVersion = data.glyphXmlVersion;
+}
+
 function parseDesignspace(
   xml: string,
 ): Array<{ name: string; styleName: string; filename: string }> {
@@ -3973,14 +4407,15 @@ function activateMaster(name: string) {
     const bytes = data.glyphBytes.get(glyphToReload);
     if (bytes) {
       try {
-        editor.setGlyphGlifWithComponentsPreserveHistory(bytes, glyphXmlMapJson(data.glyphBytes));
+        ensureEditorComponentGlyphs(data);
+        if (!editor.setGlyphNameWithCachedComponentsPreserveHistory(glyphToReload)) {
+          editor.setGlyphGlifWithCachedComponentsPreserveHistory(bytes);
+        }
+        editorGlyphNeedsSync = false;
         currentGlyph.value = glyphToReload;
         selectedGlyph.value = glyphToReload;
         selectedGlyphs.value = new Set([glyphToReload]);
-        currentWidth.value = editor.advanceWidth();
-        currentContours.value = editor.contourCount();
-        refreshSidebearingsFromEditor();
-        refreshSelectionState();
+        applyEditorPanelState(editor.editorPanelState());
         updateCompatibilityErrors();
         requestRender();
         queueComfyStateSync(true);
@@ -4183,7 +4618,7 @@ function pasteGridGlyph(): boolean {
         unicode: info.unicode,
         unicodes: info.unicodes,
       };
-      data.glyphBytes.set(name, bytes);
+      setGlyphBytes(data, name, bytes);
       data.glyphMetadata.set(name, metadata);
       if (info.unicode) {
         data.glyphUnicodes.set(name, info.unicode);
@@ -4196,11 +4631,12 @@ function pasteGridGlyph(): boolean {
       }
       markGlyphDirty(name);
       if (name === currentGlyph.value && editor) {
-        editor.setGlyphGlifWithComponents(bytes, glyphXmlMapJson(data.glyphBytes));
-        currentWidth.value = editor.advanceWidth();
-        currentContours.value = editor.contourCount();
-        refreshSidebearingsFromEditor();
-        refreshSelectionState();
+        ensureEditorComponentGlyphs(data);
+        if (!editor.setGlyphNameWithCachedComponents(name)) {
+          editor.setGlyphGlifWithCachedComponents(bytes);
+        }
+        editorGlyphNeedsSync = false;
+        applyEditorPanelState(editor.editorPanelState());
         updateCompatibilityErrors();
         requestRender();
       }
@@ -4271,51 +4707,77 @@ function handleGridKeyDown(e: KeyboardEvent): boolean {
 
 function loadGlyphIntoEditor(
   name: string,
-  options: { fitCanvas?: boolean; seedTextBuffer?: boolean; preserveHistory?: boolean } = {},
+  options: {
+    fitCanvas?: boolean;
+    seedTextBuffer?: boolean;
+    preserveHistory?: boolean;
+    refreshCompatibility?: boolean;
+    importImage?: boolean;
+    syncComfy?: boolean;
+    metricsOnly?: boolean;
+  } = {},
 ) {
   if (!editor || !canvas.value) return;
-  if (currentGlyph.value && currentGlyph.value !== name) {
-    flushDeferredGlyphSync();
+  const previousGlyphName = currentGlyph.value;
+  if (previousGlyphName && previousGlyphName !== name) {
+    if (flushDeferredGlyphSync()) {
+      markGlyphDirty(previousGlyphName);
+    }
   }
   const data = activeMasterData.value;
   if (!data) return;
   const bytes = data.glyphBytes.get(name);
   if (!bytes) return;
   try {
-    const glyphXmlByName = glyphXmlMapJson(data.glyphBytes);
+    ensureEditorComponentGlyphs(data);
     if (options.preserveHistory) {
-      editor.setGlyphGlifWithComponentsPreserveHistory(bytes, glyphXmlByName);
+      if (!editor.setGlyphNameWithCachedComponentsPreserveHistory(name)) {
+        editor.setGlyphGlifWithCachedComponentsPreserveHistory(bytes);
+      }
     } else {
-      editor.setGlyphGlifWithComponents(bytes, glyphXmlByName);
+      if (!editor.setGlyphNameWithCachedComponents(name)) {
+        editor.setGlyphGlifWithCachedComponents(bytes);
+      }
       coordinateQuadrant.value = "cc";
     }
+    editorGlyphNeedsSync = false;
     const previousSelection = new Set(selectedGlyphs.value);
-    refreshSelectionState();
     viewMode.value = "editor";
     currentGlyph.value = name;
     selectedGlyph.value = name;
     selectedGlyphs.value = previousSelection.has(name) ? previousSelection : new Set([name]);
-    currentWidth.value = editor.advanceWidth();
-    currentContours.value = editor.contourCount();
-    refreshSidebearingsFromEditor();
+    if (options.metricsOnly) {
+      applyEditorMetricsState(editor.editorMetricsState());
+    } else {
+      applyEditorPanelState(editor.editorPanelState());
+    }
     if (options.seedTextBuffer !== false) {
       syncTextKerningModelToEditor();
       seedTextBufferWithGlyph(name);
     }
-    updateCompatibilityErrors();
-    void importMatchingGlyphImage(name);
+    if (options.refreshCompatibility !== false) {
+      updateCompatibilityErrors();
+    }
+    if (options.importImage !== false) {
+      void importMatchingGlyphImage(name);
+    }
+    const renderOptions = {
+      refreshDerivedState: options.refreshCompatibility !== false || options.importImage !== false,
+    };
     if (options.fitCanvas) {
       // Canvas was visually hidden; let layout settle before sizing.
       requestAnimationFrame(() => {
         if (!editor || !canvas.value) return;
         handleResize();
         editor.fitToCanvas(canvas.value.width, canvas.value.height);
-        requestRender();
+        requestRender(renderOptions);
       });
     } else {
-      requestRender();
+      requestRender(renderOptions);
     }
-    queueComfyStateSync(true);
+    if (options.syncComfy !== false) {
+      queueComfyStateSync(true);
+    }
   } catch (e) {
     console.error(e);
     status.value = `failed to load ${name}: ${e}`;
@@ -4329,6 +4791,10 @@ function loadActiveTextSortGlyphIntoEditor() {
       fitCanvas: false,
       seedTextBuffer: false,
       preserveHistory: true,
+      refreshCompatibility: false,
+      importImage: false,
+      syncComfy: false,
+      metricsOnly: true,
     });
   }
 }
@@ -4398,7 +4864,7 @@ function setMarkOnSelected(rgba: string) {
       if (originalBytes) {
         try {
           const bytes = glifWithMarkColor(originalBytes, rgba);
-          data.glyphBytes.set(name, bytes);
+          setGlyphBytes(data, name, bytes);
           refreshGridGlyphSvg(data, name, bytes);
         } catch (e) {
           console.warn("serializing mark color failed:", e);
@@ -4450,12 +4916,10 @@ function onTransform(action: TransformActionId) {
                       ? editor.excludeSelection()
                       : false;
   if (!changed) return;
-  syncCurrentGlyphBytesFromEditor();
+  syncCurrentGlyphBytesFromEditor({ refreshCompatibility: false });
   markGlyphDirty(currentGlyph.value);
-  updateCompatibilityErrors();
   refreshSelectionState();
-  currentContours.value = editor.contourCount();
-  requestRender();
+  requestRender({ refreshCompatibilityErrors: true });
   queueComfyStateSync();
 }
 
@@ -4464,12 +4928,10 @@ function applySelectionEdit(action: "delete" | "toggle-point") {
   const changed =
     action === "delete" ? editor.deleteSelection() : editor.togglePointType();
   if (!changed) return false;
-  syncCurrentGlyphBytesFromEditor();
+  syncCurrentGlyphBytesFromEditor({ refreshCompatibility: false });
   markGlyphDirty(currentGlyph.value);
-  updateCompatibilityErrors();
   refreshSelectionState();
-  currentContours.value = editor.contourCount();
-  requestRender();
+  requestRender({ refreshCompatibilityErrors: true });
   queueComfyStateSync();
   return true;
 }
@@ -4484,12 +4946,10 @@ function applyEditorMutation(mutate: () => boolean): boolean {
 
 function syncEditorMutationAfterWasmChange(): boolean {
   if (!editor || !currentGlyph.value) return false;
-  syncCurrentGlyphBytesFromEditor();
+  syncCurrentGlyphBytesFromEditor({ refreshCompatibility: false });
   markGlyphDirty(currentGlyph.value);
-  updateCompatibilityErrors();
   refreshSelectionState();
-  currentContours.value = editor.contourCount();
-  requestRender();
+  requestRender({ refreshCompatibilityErrors: true });
   queueComfyStateSync();
   return true;
 }
@@ -4499,8 +4959,66 @@ function flushDeferredGlyphSync(): boolean {
     window.clearTimeout(deferredGlyphSyncTimer);
     deferredGlyphSyncTimer = null;
   }
+  if (!editorGlyphNeedsSync) {
+    return flushDeferredGlyphDerivedRefresh();
+  }
+  if (deferredGlyphDerivedSyncTimer !== null) {
+    window.clearTimeout(deferredGlyphDerivedSyncTimer);
+    deferredGlyphDerivedSyncTimer = null;
+    deferredGlyphDerivedSyncGlyph = "";
+    deferredGlyphDerivedSyncMaster = "";
+  }
   editor?.finishNudgeSelection();
-  return syncCurrentGlyphBytesFromEditor();
+  return syncCurrentGlyphBytesFromEditor({ skipUnchanged: true, preserveMetadata: true });
+}
+
+function refreshDeferredGlyphDerivedState(glyphName: string, masterName: string): boolean {
+  const data = masterDataMap.value.get(masterName);
+  const bytes = data?.glyphBytes.get(glyphName);
+  if (!data || !bytes) return false;
+  syncEditorComponentGlyphCacheEntry(data, glyphName, bytes);
+  refreshGridGlyphSvg(data, glyphName, bytes);
+  if (hasTextBufferSession.value) {
+    const metadata = data.glyphMetadata.get(glyphName);
+    if (metadata) {
+      syncCurrentTextSorts(metadata);
+      bumpTextPreviewRevision();
+    }
+  }
+  if (currentGlyph.value === glyphName && activeMasterName.value === masterName) {
+    updateCompatibilityErrors();
+    queueComfyStateSync();
+  }
+  masterDataMap.value = new Map(masterDataMap.value);
+  return true;
+}
+
+function flushDeferredGlyphDerivedRefresh(): boolean {
+  if (deferredGlyphDerivedSyncTimer === null) return false;
+  window.clearTimeout(deferredGlyphDerivedSyncTimer);
+  deferredGlyphDerivedSyncTimer = null;
+  const glyphName = deferredGlyphDerivedSyncGlyph;
+  const masterName = deferredGlyphDerivedSyncMaster;
+  deferredGlyphDerivedSyncGlyph = "";
+  deferredGlyphDerivedSyncMaster = "";
+  return refreshDeferredGlyphDerivedState(glyphName, masterName);
+}
+
+function scheduleDeferredGlyphDerivedRefresh(glyphName: string, masterName: string) {
+  if (deferredGlyphDerivedSyncTimer !== null) {
+    window.clearTimeout(deferredGlyphDerivedSyncTimer);
+  }
+  deferredGlyphDerivedSyncGlyph = glyphName;
+  deferredGlyphDerivedSyncMaster = masterName;
+  deferredGlyphDerivedSyncTimer = window.setTimeout(() => {
+    deferredGlyphDerivedSyncTimer = null;
+    const pendingGlyph = deferredGlyphDerivedSyncGlyph;
+    const pendingMaster = deferredGlyphDerivedSyncMaster;
+    deferredGlyphDerivedSyncGlyph = "";
+    deferredGlyphDerivedSyncMaster = "";
+    if (currentGlyph.value !== pendingGlyph || activeMasterName.value !== pendingMaster) return;
+    refreshDeferredGlyphDerivedState(pendingGlyph, pendingMaster);
+  }, 360);
 }
 
 function scheduleDeferredGlyphSync(glyphName: string, masterName: string) {
@@ -4514,8 +5032,21 @@ function scheduleDeferredGlyphSync(glyphName: string, masterName: string) {
     deferredGlyphSyncTimer = null;
     if (currentGlyph.value !== glyphName || activeMasterName.value !== masterName) return;
     editor?.finishNudgeSelection();
-    syncCurrentGlyphBytesFromEditor();
-    refreshSelectionState();
+    if (
+      syncCurrentGlyphBytesFromEditor({
+        skipUnchanged: true,
+        preserveMetadata: true,
+        refreshGridSvg: false,
+        refreshCompatibility: false,
+        notifyMasterData: false,
+        syncComfy: false,
+        syncTextPreview: false,
+        syncComponentCache: false,
+      })
+    ) {
+      markGlyphDirty(glyphName, masterName);
+      scheduleDeferredGlyphDerivedRefresh(glyphName, masterName);
+    }
   }, 120);
 }
 
@@ -4529,10 +5060,11 @@ function applyEditorNudge(
   if (!editor || !currentGlyph.value || !activeMasterName.value) return false;
   const glyphName = currentGlyph.value;
   const masterName = activeMasterName.value;
-  const changed = editor.nudgeSelection(dx, dy, shift, ctrl, independent);
-  if (!changed) return false;
+  const nudgeState = editor.nudgeSelectionState(dx, dy, shift, ctrl, independent);
+  if (nudgeState.length === 0 || nudgeState[0] <= 0) return false;
 
-  markGlyphDirty(glyphName);
+  editorGlyphNeedsSync = true;
+  pendingNudgeSelectionState = nudgeState;
   requestRender({ refreshDerivedState: false });
   scheduleDeferredGlyphSync(glyphName, masterName);
   return true;
@@ -4544,14 +5076,15 @@ function applyEditorHistoryChange(change: () => boolean): boolean {
   if (activeTool.value === "Text" || hasTextBufferSession.value) {
     refreshTextStateFromEditor();
   }
-  const glyphChanged = syncCurrentGlyphBytesFromEditor({ skipUnchanged: true });
+  const glyphChanged = syncCurrentGlyphBytesFromEditor({
+    skipUnchanged: true,
+    refreshCompatibility: false,
+  });
   if (glyphChanged) {
     markGlyphDirty(currentGlyph.value);
   }
-  updateCompatibilityErrors();
   refreshSelectionState();
-  currentContours.value = editor.contourCount();
-  requestRender();
+  requestRender({ refreshCompatibilityErrors: true });
   queueComfyStateSync();
   return true;
 }
@@ -4571,11 +5104,10 @@ function pasteSelection(): boolean {
   if (!editor || !currentGlyph.value) return false;
   const changed = editor.pasteSelection();
   if (!changed) return false;
-  syncCurrentGlyphBytesFromEditor();
+  syncCurrentGlyphBytesFromEditor({ refreshCompatibility: false });
   markGlyphDirty(currentGlyph.value);
   refreshSelectionState();
-  currentContours.value = editor.contourCount();
-  requestRender();
+  requestRender({ refreshCompatibilityErrors: true });
   queueComfyStateSync();
   showClipboardNotice("Pasted outline selection");
   return true;
@@ -4585,18 +5117,18 @@ function handleZoomShortcut(key: string): boolean {
   if (!editor) return false;
   if (key === "+" || key === "=") {
     editor.setZoom(Math.min(editor.zoom() * 1.1, 1e4));
-    requestRender();
+    requestRender({ refreshDerivedState: false, refreshBackgroundImageFrame: true });
     return true;
   }
   if (key === "-" || key === "_") {
     editor.setZoom(Math.max(editor.zoom() / 1.1, 1e-3));
-    requestRender();
+    requestRender({ refreshDerivedState: false, refreshBackgroundImageFrame: true });
     return true;
   }
   if (key === "0" && canvas.value) {
     editor.fitToCanvas(canvas.value.width, canvas.value.height);
     refreshSelectionState();
-    requestRender();
+    requestRender({ refreshDerivedState: false, refreshBackgroundImageFrame: true });
     return true;
   }
   return false;
@@ -5152,7 +5684,16 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
 }
 
 function syncCurrentGlyphBytesFromEditor(
-  options: { skipUnchanged?: boolean } = {},
+  options: {
+    skipUnchanged?: boolean;
+    preserveMetadata?: boolean;
+    refreshGridSvg?: boolean;
+    refreshCompatibility?: boolean;
+    notifyMasterData?: boolean;
+    syncComfy?: boolean;
+    syncTextPreview?: boolean;
+    syncComponentCache?: boolean;
+  } = {},
 ): boolean {
   if (!editor || !currentGlyph.value) return false;
   const data = activeMasterData.value;
@@ -5163,9 +5704,23 @@ function syncCurrentGlyphBytesFromEditor(
     const markColor = data.glyphMarkColors.get(currentGlyph.value) ?? "";
     const bytes = editor.currentGlyphGlif(originalBytes, markColor);
     if (options.skipUnchanged && bytesEqual(bytes, originalBytes)) {
+      editorGlyphNeedsSync = false;
       return false;
     }
-    const info = parseGlyphInfo(bytes);
+    const previousMetadata = data.glyphMetadata.get(currentGlyph.value);
+    const previousGroups = data.glyphKerningGroups.get(currentGlyph.value);
+    const info = options.preserveMetadata && previousMetadata
+      ? {
+          name: previousMetadata.name,
+          unicode: previousMetadata.unicode,
+          unicodes: [...previousMetadata.unicodes],
+          markColor: data.glyphMarkColors.get(currentGlyph.value) ?? null,
+          leftKerningGroup: previousGroups?.left ?? previousMetadata.leftKerningGroup ?? null,
+          rightKerningGroup: previousGroups?.right ?? previousMetadata.rightKerningGroup ?? null,
+          width: previousMetadata.width,
+          contours: previousMetadata.contours,
+        }
+      : parseGlyphInfo(bytes);
     const metadata = {
       name: currentGlyph.value,
       width: info.width,
@@ -5173,7 +5728,9 @@ function syncCurrentGlyphBytesFromEditor(
       unicode: info.unicode,
       unicodes: info.unicodes,
     };
-    data.glyphBytes.set(currentGlyph.value, bytes);
+    setGlyphBytes(data, currentGlyph.value, bytes, {
+      syncComponentCache: options.syncComponentCache,
+    });
     data.glyphMetadata.set(currentGlyph.value, metadata);
     setGlyphKerningGroupsFromInfo(data, currentGlyph.value, info);
     if (info.unicode) {
@@ -5181,18 +5738,27 @@ function syncCurrentGlyphBytesFromEditor(
     } else {
       data.glyphUnicodes.delete(currentGlyph.value);
     }
-    refreshGridGlyphSvg(data, currentGlyph.value, bytes);
-    currentWidth.value = info.width;
-    currentContours.value = info.contours;
+    if (options.refreshGridSvg !== false) {
+      refreshGridGlyphSvg(data, currentGlyph.value, bytes);
+    }
+    setRefNumber(currentWidth, info.width);
+    setRefNumber(currentContours, info.contours);
     refreshSidebearingsFromEditor();
-    masterDataMap.value = new Map(masterDataMap.value);
-    updateCompatibilityErrors();
-    if (hasTextBufferSession.value) {
+    if (options.notifyMasterData !== false) {
+      masterDataMap.value = new Map(masterDataMap.value);
+    }
+    if (options.refreshCompatibility !== false) {
+      updateCompatibilityErrors();
+    }
+    if (options.syncTextPreview !== false && hasTextBufferSession.value) {
       syncCurrentTextSorts(metadata);
       syncTextKerningModelToEditor();
       bumpTextPreviewRevision();
     }
-    queueComfyStateSync();
+    if (options.syncComfy !== false) {
+      queueComfyStateSync();
+    }
+    editorGlyphNeedsSync = false;
     return true;
   } catch (e) {
     console.warn("serializing current glyph failed:", e);
@@ -5202,6 +5768,7 @@ function syncCurrentGlyphBytesFromEditor(
 
 function markGlyphDirty(glyphName: string, masterName = activeMasterName.value) {
   if (!glyphName || !masterName) return;
+  if (dirtyGlyphsByMaster.value.get(masterName)?.has(glyphName)) return;
   const next = new Map(dirtyGlyphsByMaster.value);
   const glyphs = new Set(next.get(masterName) ?? []);
   glyphs.add(glyphName);
@@ -5211,6 +5778,7 @@ function markGlyphDirty(glyphName: string, masterName = activeMasterName.value) 
 
 function markKerningDirty() {
   if (!activeMasterName.value) return;
+  if (dirtyKerningMasters.value.has(activeMasterName.value)) return;
   const next = new Set(dirtyKerningMasters.value);
   next.add(activeMasterName.value);
   dirtyKerningMasters.value = next;
@@ -5218,6 +5786,7 @@ function markKerningDirty() {
 
 function markGroupsDirty() {
   if (!activeMasterName.value) return;
+  if (dirtyGroupsMasters.value.has(activeMasterName.value)) return;
   const next = new Set(dirtyGroupsMasters.value);
   next.add(activeMasterName.value);
   dirtyGroupsMasters.value = next;
@@ -5502,7 +6071,32 @@ function onWheel(e: WheelEvent) {
         ? e.deltaY * pageFactor
         : e.deltaY;
   editor.wheel(c[0], c[1], dy);
-  requestRender();
+  requestRender({ refreshDerivedState: false, refreshBackgroundImageFrame: true });
+}
+
+function arrowNudgeDelta(key: string): [number, number] | null {
+  return key === "ArrowLeft"
+    ? [-1, 0]
+    : key === "ArrowRight"
+      ? [1, 0]
+      : key === "ArrowUp"
+        ? [0, 1]
+        : key === "ArrowDown"
+          ? [0, -1]
+          : null;
+}
+
+function handleArrowNudgeKey(e: KeyboardEvent, meta: boolean): boolean {
+  if (textModeActive.value) return false;
+  const nudge = arrowNudgeDelta(e.key);
+  if (!nudge) return false;
+  if (nudgeSelectedBackgroundImage(nudge[0], nudge[1])) {
+    return true;
+  }
+  return (
+    selectionCount.value > 0 &&
+    applyEditorNudge(nudge[0], nudge[1], e.shiftKey, meta, e.altKey)
+  );
 }
 
 function onKeyDown(e: KeyboardEvent) {
@@ -5537,6 +6131,11 @@ function onKeyDown(e: KeyboardEvent) {
   if (viewMode.value !== "editor") return;
 
   const meta = e.metaKey || e.ctrlKey;
+  if (handleArrowNudgeKey(e, meta)) {
+    e.preventDefault();
+    return;
+  }
+
   if ((activeTool.value === "Shapes" || activeTool.value === "Knife") && e.key === "Shift") {
     const changed =
       activeTool.value === "Shapes"
@@ -5718,34 +6317,17 @@ function onKeyDown(e: KeyboardEvent) {
     e.preventDefault();
     return;
   }
-
-  const nudge =
-    e.key === "ArrowLeft"
-      ? [-1, 0]
-      : e.key === "ArrowRight"
-        ? [1, 0]
-        : e.key === "ArrowUp"
-          ? [0, 1]
-          : e.key === "ArrowDown"
-            ? [0, -1]
-            : null;
-  if (nudge) {
-    if (nudgeSelectedBackgroundImage(nudge[0], nudge[1])) {
-      e.preventDefault();
-      return;
-    }
-    if (
-      selectionCount.value > 0 &&
-      applyEditorNudge(nudge[0], nudge[1], e.shiftKey, meta, e.altKey)
-    ) {
-      e.preventDefault();
-      return;
-    }
-  }
 }
 
 function onKeyUp(e: KeyboardEvent) {
   if (!editor || viewMode.value !== "editor" || eventTargetAcceptsText(e)) {
+    return;
+  }
+  if (e.key === "Alt" && selectIdleHoverActive) {
+    selectIdleHoverActive = false;
+    if (editor.clearSegmentHover()) {
+      requestRender({ refreshDerivedState: false });
+    }
     return;
   }
   if ((activeTool.value === "Shapes" || activeTool.value === "Knife") && e.key === "Shift") {

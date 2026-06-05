@@ -13,6 +13,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+EXPECTED_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-04-editor-perf-pass-83-post-render-nudge-state"
 
 
 class WebBundleTests(unittest.TestCase):
@@ -105,6 +106,7 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn("candidate_name", bundle)
         self.assertIn("/runebender/workspaces/clear", bundle)
         self.assertIn("All masters", bundle)
+        self.assertIn(EXPECTED_BUNDLE_FINGERPRINT, bundle)
 
         # The DrawBot script editor loads CodeMirror from vendored assets that
         # Vite copies from web/public/ into dist/vendor/.

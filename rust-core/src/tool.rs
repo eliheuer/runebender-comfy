@@ -94,6 +94,10 @@ impl ActiveTool {
     pub fn is_text(&self) -> bool {
         matches!(self, ActiveTool::Text(_))
     }
+
+    pub fn is_select(&self) -> bool {
+        matches!(self, ActiveTool::Select(_))
+    }
 }
 
 impl MouseDelegate for ActiveTool {
@@ -2835,7 +2839,8 @@ mod tests {
             index: 0,
             base: "acute".to_string(),
             transform: kurbo::Affine::IDENTITY,
-            path,
+            transformed_path: std::sync::Arc::new(kurbo::Affine::IDENTITY * &path),
+            path: std::sync::Arc::new(path),
             anchors: Vec::new(),
             auto_align: true,
         }]);

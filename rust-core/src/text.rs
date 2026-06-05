@@ -243,10 +243,11 @@ impl TextBuffer {
     }
 
     pub fn layout(&self, line_height: f64) -> TextLayout {
-        let mut items = Vec::new();
+        let mut items = Vec::with_capacity(self.sorts.len());
         let mut cursor_x = 0.0;
         let mut cursor_y = 0.0;
         let mut line_start = 0;
+        let mut line_number = 0;
         let rtl_line_start_x = self.rtl_line_start_x();
 
         while line_start <= self.sorts.len() {
@@ -260,7 +261,7 @@ impl TextBuffer {
                 TextDirection::RightToLeft => rtl_line_start_x,
             };
             let mut previous_glyph_name: Option<&str> = None;
-            let y = -line_height * self.line_number_for_index(line_start) as f64;
+            let y = -line_height * line_number as f64;
 
             if self.cursor == line_start {
                 cursor_x = x;
@@ -313,9 +314,10 @@ impl TextBuffer {
                     TextDirection::LeftToRight => 0.0,
                     TextDirection::RightToLeft => rtl_line_start_x,
                 };
-                cursor_y = -line_height * (self.line_number_for_index(line_end) + 1) as f64;
+                cursor_y = -line_height * (line_number + 1) as f64;
             }
             line_start = line_end + 1;
+            line_number += 1;
         }
 
         TextLayout {
@@ -338,7 +340,7 @@ impl TextBuffer {
                 .map(|index| self.sort_advance(index))
                 .sum(),
         };
-        let mut items = Vec::new();
+        let mut items = Vec::with_capacity(self.sorts.len());
         let mut x = total_width;
         let mut previous_glyph_name: Option<&str> = None;
 
@@ -459,6 +461,12 @@ impl TextBuffer {
         advance_width: f64,
     ) {
         self.manual_kerning = None;
+        if let Some(active) = self.active_sort
+            && let Some(sort) = self.sorts.get_mut(active)
+        {
+            sort.active = false;
+        }
+        self.active_sort = None;
         let index = self.cursor;
         self.sorts
             .insert(index, TextSort::glyph(name, codepoint, advance_width));
@@ -555,19 +563,11 @@ impl TextBuffer {
         descender: f64,
     ) -> Option<TextSortActivation> {
         let layout = self.layout(line_height);
-        let hit = self.hit_test_with_layout(x, y, line_height, ascender, descender, &layout);
-        let index = hit.active_sort?;
-        self.activate_sort(index).then(|| {
-            let item = layout
-                .items
-                .iter()
-                .find(|item| item.index == index)
-                .expect("hit active sort has a layout item");
-            TextSortActivation {
-                index,
-                x: item.x,
-                y: item.y,
-            }
+        let item = self.hit_sort_item_at(x, y, line_height, ascender, descender, &layout)?;
+        self.activate_sort(item.index).then(|| TextSortActivation {
+            index: item.index,
+            x: item.x,
+            y: item.y,
         })
     }
 
@@ -652,9 +652,16 @@ impl TextBuffer {
     }
 
     fn set_active_sort(&mut self, active: Option<usize>) {
-        for sort in &mut self.sorts {
+        if self.active_sort == active {
+            return;
+        }
+        if let Some(previous) = self.active_sort
+            && Some(previous) != active
+            && let Some(sort) = self.sorts.get_mut(previous)
+        {
             sort.active = false;
         }
+        self.active_sort = None;
         if let Some(index) = active
             && let Some(sort) = self.sorts.get_mut(index)
         {
@@ -892,6 +899,36 @@ impl TextBuffer {
         nearest_line
     }
 
+    fn hit_sort_item_at(
+        &self,
+        x: f64,
+        y: f64,
+        line_height: f64,
+        ascender: f64,
+        descender: f64,
+        layout: &TextLayout,
+    ) -> Option<TextLayoutItem> {
+        if self.sorts.is_empty() {
+            return None;
+        }
+
+        let line_height = line_height.max(1.0);
+        let target_line = self.line_number_for_y(y, line_height, ascender, descender);
+        let (line_start, line_end) = self.line_range_for_number(target_line);
+        for item in layout
+            .items
+            .iter()
+            .filter(|item| (line_start..line_end).contains(&item.index))
+        {
+            let within_x = x >= item.x && x < item.x + item.advance_width;
+            let within_y = y >= item.y + descender && y < item.y + ascender;
+            if within_x && within_y {
+                return Some(*item);
+            }
+        }
+        None
+    }
+
     fn line_width(&self, start: usize, end: usize) -> f64 {
         let mut width = 0.0;
         let mut previous_glyph_name: Option<&str> = None;
@@ -1008,13 +1045,6 @@ impl TextBuffer {
             .or_default()
             .insert(right.to_string(), value);
     }
-
-    fn line_number_for_index(&self, index: usize) -> usize {
-        self.sorts[..index]
-            .iter()
-            .filter(|sort| matches!(sort.kind, TextSortKind::LineBreak))
-            .count()
-    }
 }
 
 #[cfg(test)]
@@ -1061,6 +1091,45 @@ mod tests {
 
         assert_eq!(buffer.active_sort(), Some(1));
         assert_eq!(buffer.cursor(), 0);
+    }
+
+    #[test]
+    fn active_sort_flags_remain_unique_after_switch_and_insert() {
+        let mut buffer = TextBuffer::new();
+        buffer.insert_glyph("A", Some('A'), 600.0);
+        buffer.insert_glyph("B", Some('B'), 610.0);
+        buffer.insert_glyph("C", Some('C'), 620.0);
+
+        assert!(buffer.activate_sort(0));
+        assert_eq!(
+            buffer
+                .iter()
+                .enumerate()
+                .filter_map(|(index, sort)| sort.active.then_some(index))
+                .collect::<Vec<_>>(),
+            vec![0]
+        );
+
+        assert!(buffer.activate_sort(2));
+        assert_eq!(
+            buffer
+                .iter()
+                .enumerate()
+                .filter_map(|(index, sort)| sort.active.then_some(index))
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
+
+        buffer.set_cursor(0);
+        buffer.insert_glyph("D", Some('D'), 630.0);
+        assert_eq!(
+            buffer
+                .iter()
+                .enumerate()
+                .filter_map(|(index, sort)| sort.active.then_some(index))
+                .collect::<Vec<_>>(),
+            vec![0]
+        );
     }
 
     #[test]
@@ -1781,6 +1850,7 @@ mod tests {
         buffer.insert_glyph("A", Some('A'), 500.0);
         buffer.insert_line_break();
         buffer.insert_glyph("B", Some('B'), 300.0);
+        buffer.set_cursor(0);
 
         let activation = buffer
             .activate_sort_at(750.0, -300.0, 1000.0, 800.0, -200.0)
@@ -1790,6 +1860,7 @@ mod tests {
         assert_eq!(activation.x, 500.0);
         assert_eq!(activation.y, -1000.0);
         assert_eq!(buffer.active_sort(), Some(2));
+        assert_eq!(buffer.cursor(), 0);
     }
 
     #[test]

@@ -4,6 +4,7 @@
 // outside the wasm-bindgen surface so it's testable on native too.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use kurbo::{Affine, BezPath, Line, PathEl, Point, Rect, Shape, Vec2};
 use kurbo_012::{BezPath as BezPath012, PathEl as PathEl012, Point as Point012};
@@ -39,6 +40,13 @@ pub struct FontMetrics {
     pub descender: Option<f64>,
     pub x_height: Option<f64>,
     pub cap_height: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NudgeSelectionResult {
+    pub selection_count: usize,
+    pub bounds: Option<(usize, Rect)>,
+    pub anchor: Option<Point>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -89,7 +97,8 @@ pub struct ComponentPreview {
     pub index: usize,
     pub base: String,
     pub transform: Affine,
-    pub path: BezPath,
+    pub path: Arc<BezPath>,
+    pub transformed_path: Arc<BezPath>,
     pub anchors: Vec<AnchorPoint>,
     pub auto_align: bool,
 }
@@ -147,7 +156,7 @@ pub struct EditorState {
     /// Resolved component preview outlines. These are not directly
     /// editable yet, but they let composite glyphs render like xilem
     /// while source component references stay preserved in `.glif`.
-    pub component_preview: BezPath,
+    pub component_preview: Arc<BezPath>,
     pub component_previews: Vec<ComponentPreview>,
     pub selected_component: Option<EntityId>,
     pub deleted_component_indices: HashSet<usize>,
@@ -221,7 +230,7 @@ impl Default for EditorState {
             selection: Selection::default(),
             viewport: ViewPort::default(),
             advance_width: 0.0,
-            component_preview: BezPath::new(),
+            component_preview: Arc::new(BezPath::new()),
             component_previews: Vec::new(),
             selected_component: None,
             deleted_component_indices: HashSet::new(),
@@ -399,7 +408,7 @@ impl EditorState {
     /// each curve element produces explicit on/off-curve points.
     pub fn set_glyph_from_bezpath(&mut self, bez: &BezPath) {
         self.paths.clear();
-        self.component_preview = BezPath::new();
+        self.component_preview = Arc::new(BezPath::new());
         self.component_previews.clear();
         self.selected_component = None;
         self.deleted_component_indices.clear();
@@ -458,7 +467,7 @@ impl EditorState {
     /// dispatch which detects cubic / quadratic / hyperbezier shapes.
     pub fn set_glyph_from_norad(&mut self, glyph: &norad::Glyph) {
         self.paths.clear();
-        self.component_preview = BezPath::new();
+        self.component_preview = Arc::new(BezPath::new());
         self.component_previews.clear();
         self.selected_component = None;
         self.anchors.clear();
@@ -513,7 +522,7 @@ impl EditorState {
     }
 
     pub fn set_component_preview(&mut self, preview: BezPath) {
-        self.component_preview = preview;
+        self.component_preview = Arc::new(preview);
     }
 
     pub fn set_component_previews(&mut self, previews: Vec<ComponentPreview>) {
@@ -533,8 +542,7 @@ impl EditorState {
 
     pub fn hit_test_component(&self, design_pt: Point) -> Option<EntityId> {
         for component in self.component_previews.iter().rev() {
-            let transformed = component.transform * &component.path;
-            if transformed.winding(design_pt) != 0 {
+            if component.transformed_path.winding(design_pt) != 0 {
                 return Some(component.id);
             }
         }
@@ -691,6 +699,7 @@ impl EditorState {
         };
         component.auto_align = false;
         component.transform = Affine::translate(delta) * component.transform;
+        rebuild_component_transformed_path(component);
         self.rebuild_component_preview();
         self.rebuild_propagated_anchors();
         self.bump_edit_revision();
@@ -710,6 +719,7 @@ impl EditorState {
         };
         component.auto_align = false;
         component.transform = transform * component.transform;
+        rebuild_component_transformed_path(component);
         self.rebuild_component_preview();
         self.rebuild_propagated_anchors();
         self.bump_edit_revision();
@@ -760,6 +770,7 @@ impl EditorState {
             + 1;
         duplicate.auto_align = false;
         duplicate.transform = Affine::translate(offset) * duplicate.transform;
+        rebuild_component_transformed_path(&mut duplicate);
         self.selected_component = Some(duplicate.id);
         self.component_previews.push(duplicate);
         self.rebuild_component_preview();
@@ -774,11 +785,10 @@ impl EditorState {
             .component_previews
             .iter()
             .find(|component| component.id == selected)?;
-        let transformed = component.transform * &component.path;
-        if transformed.elements().is_empty() {
+        if component.transformed_path.elements().is_empty() {
             return None;
         }
-        let bbox = transformed.bounding_box();
+        let bbox = component.transformed_path.bounding_box();
         if bbox.x0.is_finite() && bbox.y0.is_finite() {
             Some(bbox)
         } else {
@@ -789,10 +799,9 @@ impl EditorState {
     fn rebuild_component_preview(&mut self) {
         let mut preview = BezPath::new();
         for component in &self.component_previews {
-            let transformed = component.transform * &component.path;
-            preview.extend(transformed.elements().iter().cloned());
+            preview.extend(component.transformed_path.elements().iter().cloned());
         }
-        self.component_preview = preview;
+        self.component_preview = Arc::new(preview);
     }
 
     pub fn realign_components_to_anchors(&mut self) -> bool {
@@ -809,6 +818,7 @@ impl EditorState {
                 && delta.hypot() > 1e-9
             {
                 component.transform = Affine::translate(delta) * component.transform;
+                rebuild_component_transformed_path(component);
                 changed = true;
             }
             available.extend(component.anchors.iter().filter_map(|anchor| {
@@ -900,14 +910,7 @@ impl EditorState {
 
     /// Translate every selected point by `delta` (in design space).
     pub fn translate_selection(&mut self, delta: Vec2) {
-        if self.selection.is_empty() || delta == Vec2::ZERO {
-            return;
-        }
-        for path in &mut self.paths {
-            translate_in_path_with_handles(path, &self.selection, delta);
-        }
-        self.snap_selection_points_to_grid(true);
-        self.bump_edit_revision();
+        self.translate_selection_bounds(delta, false);
     }
 
     /// Translate only explicitly selected points by `delta`.
@@ -915,14 +918,27 @@ impl EditorState {
     /// This is xilem's Option/Alt-arrow behavior: selected on-curve
     /// points move without dragging their adjacent off-curve handles.
     pub fn translate_selection_independent(&mut self, delta: Vec2) {
+        self.translate_selection_bounds(delta, true);
+    }
+
+    fn translate_selection_bounds(
+        &mut self,
+        delta: Vec2,
+        independent: bool,
+    ) -> Option<(usize, Rect)> {
         if self.selection.is_empty() || delta == Vec2::ZERO {
-            return;
+            return None;
         }
+        let mut bounds = SelectionBoundsAccumulator::default();
         for path in &mut self.paths {
-            translate_in_path(path, &self.selection, delta);
+            if independent {
+                translate_and_snap_in_path(path, &self.selection, delta, &mut bounds);
+            } else {
+                translate_and_snap_in_path_with_handles(path, &self.selection, delta, &mut bounds);
+            }
         }
-        self.snap_selection_points_to_grid(false);
         self.bump_edit_revision();
+        bounds.finish()
     }
 
     /// Nudge selected points or components by xilem's keyboard amounts.
@@ -934,6 +950,18 @@ impl EditorState {
         ctrl: bool,
         independent: bool,
     ) -> bool {
+        self.nudge_selection_result(dx, dy, shift, ctrl, independent)
+            .is_some()
+    }
+
+    pub fn nudge_selection_result(
+        &mut self,
+        dx: f64,
+        dy: f64,
+        shift: bool,
+        ctrl: bool,
+        independent: bool,
+    ) -> Option<NudgeSelectionResult> {
         let amount = if ctrl {
             32.0
         } else if shift {
@@ -943,24 +971,36 @@ impl EditorState {
         };
         let delta = Vec2::new(dx * amount, dy * amount);
         if delta == Vec2::ZERO {
-            return false;
+            return None;
         }
         if self.selected_component.is_some() {
-            return self.translate_selected_component(delta);
+            return self
+                .translate_selected_component(delta)
+                .then(|| NudgeSelectionResult {
+                    selection_count: 1,
+                    bounds: self.selected_component_bounds().map(|bounds| (1, bounds)),
+                    anchor: None,
+                });
         }
         if self.selected_anchor.is_some() {
-            return self.translate_selected_anchor(delta);
+            return self
+                .translate_selected_anchor(delta)
+                .then(|| NudgeSelectionResult {
+                    selection_count: 1,
+                    bounds: self.selected_anchor_bounds().map(|bounds| (1, bounds)),
+                    anchor: self.selected_anchor().map(|anchor| anchor.point),
+                });
         }
         if self.selection.is_empty() {
-            return false;
+            return None;
         }
-        if independent {
-            self.translate_selection_independent(delta);
-        } else {
-            self.translate_selection(delta);
-            self.snap_selection_to_grid();
-        }
-        true
+        let selection_count = self.selection.len();
+        let bounds = self.translate_selection_bounds(delta, independent);
+        Some(NudgeSelectionResult {
+            selection_count,
+            bounds,
+            anchor: None,
+        })
     }
 
     /// Snap selected on-curve points to xilem's 2-unit design grid.
@@ -1094,7 +1134,7 @@ impl EditorState {
             return ids;
         }
         for path in &self.paths {
-            let points = path.points().iter().cloned().collect::<Vec<_>>();
+            let points = path.points().as_slice();
             let closed = path_is_closed(path);
             for (index, point) in points.iter().enumerate() {
                 if !self.selection.contains(&point.id) || !point.is_on_curve() {
@@ -2354,7 +2394,14 @@ impl EditorState {
     }
 
     pub fn selected_contour_count(&self) -> usize {
-        self.selected_contour_indices().len()
+        self.paths
+            .iter()
+            .filter(|path| {
+                path.points()
+                    .iter()
+                    .any(|pt| self.selection.contains(&pt.id))
+            })
+            .count()
     }
 
     pub fn selection_entity_count(&self) -> usize {
@@ -2365,19 +2412,6 @@ impl EditorState {
 
     pub(crate) fn bump_edit_revision(&mut self) {
         self.edit_revision = self.edit_revision.wrapping_add(1);
-    }
-
-    fn selected_contour_indices(&self) -> Vec<usize> {
-        self.paths
-            .iter()
-            .enumerate()
-            .filter(|(_, path)| {
-                path.points()
-                    .iter()
-                    .any(|pt| self.selection.contains(&pt.id))
-            })
-            .map(|(idx, _)| idx)
-            .collect()
     }
 
     fn hit_test_point_with_path_index(
@@ -2414,6 +2448,15 @@ pub struct ContourContextTarget {
 struct PlacedAnchor {
     name: String,
     point: Point,
+}
+
+fn transformed_component_path(transform: Affine, path: &BezPath) -> Arc<BezPath> {
+    Arc::new(transform * path)
+}
+
+fn rebuild_component_transformed_path(component: &mut ComponentPreview) {
+    component.transformed_path =
+        transformed_component_path(component.transform, component.path.as_ref());
 }
 
 fn placed_anchor_from_anchor(anchor: &AnchorPoint) -> Option<PlacedAnchor> {
@@ -2460,24 +2503,94 @@ fn off_curve(p: Point) -> PathPoint {
     }
 }
 
-fn translate_in_path(path: &mut Path, selection: &Selection, delta: Vec2) {
+#[derive(Default)]
+struct SelectionBoundsAccumulator {
+    count: usize,
+    min_x: f64,
+    min_y: f64,
+    max_x: f64,
+    max_y: f64,
+}
+
+impl SelectionBoundsAccumulator {
+    fn add(&mut self, point: Point) {
+        if self.count == 0 {
+            self.min_x = point.x;
+            self.min_y = point.y;
+            self.max_x = point.x;
+            self.max_y = point.y;
+        } else {
+            self.min_x = self.min_x.min(point.x);
+            self.min_y = self.min_y.min(point.y);
+            self.max_x = self.max_x.max(point.x);
+            self.max_y = self.max_y.max(point.y);
+        }
+        self.count += 1;
+    }
+
+    fn finish(self) -> Option<(usize, Rect)> {
+        (self.count > 0).then(|| {
+            (
+                self.count,
+                Rect::new(self.min_x, self.min_y, self.max_x, self.max_y),
+            )
+        })
+    }
+}
+
+fn translate_and_snap_in_path(
+    path: &mut Path,
+    selection: &Selection,
+    delta: Vec2,
+    bounds: &mut SelectionBoundsAccumulator,
+) {
     match path {
         Path::Cubic(cubic) => {
             let closed = cubic.closed;
             let points = cubic.points.make_mut();
+            let mut has_selection = false;
             let mut changed = false;
             for pt in points.iter_mut() {
                 if selection.contains(&pt.id) {
-                    pt.point += delta;
-                    changed = true;
+                    has_selection = true;
+                    let snapped = snap_point_to_grid(pt.point + delta);
+                    if snapped != pt.point {
+                        pt.point = snapped;
+                        changed = true;
+                    }
                 }
+            }
+            if !has_selection {
+                return;
             }
             if changed {
                 maintain_smooth_handle_tangents(points, selection, closed);
             }
+            accumulate_selected_point_bounds(points, selection, bounds);
         }
-        Path::Quadratic(_) | Path::Hyper(_) => {
-            map_selected_points(path, selection, |pt| pt + delta);
+        Path::Quadratic(_) => {
+            for pt in path_points_mut(path) {
+                if selection.contains(&pt.id) {
+                    pt.point = snap_point_to_grid(pt.point + delta);
+                    bounds.add(pt.point);
+                }
+            }
+        }
+        Path::Hyper(hyper) => {
+            let mut changed = false;
+            for pt in hyper.points.make_mut() {
+                if selection.contains(&pt.id) {
+                    let snapped = snap_point_to_grid(pt.point + delta);
+                    if snapped != pt.point {
+                        pt.point = snapped;
+                        changed = true;
+                    }
+                    bounds.add(pt.point);
+                }
+            }
+            if changed {
+                hyper.after_change();
+            }
         }
     }
 }
@@ -2557,6 +2670,18 @@ fn maintain_smooth_handle_tangents(
     changed
 }
 
+fn accumulate_selected_point_bounds(
+    points: &[PathPoint],
+    selection: &Selection,
+    bounds: &mut SelectionBoundsAccumulator,
+) {
+    for point in points {
+        if selection.contains(&point.id) {
+            bounds.add(point.point);
+        }
+    }
+}
+
 fn mirrored_smooth_handle(moved: Point, anchor: Point, opposite: Point) -> Option<Point> {
     let moved_vector = moved - anchor;
     let moved_len = moved_vector.hypot();
@@ -2588,50 +2713,93 @@ fn projected_smooth_handle(moved: Point, anchor: Point, line_point: Point) -> Op
     }
 }
 
-fn translate_in_path_with_handles(path: &mut Path, selection: &Selection, delta: Vec2) {
-    let ids = selected_and_adjacent_offcurve_ids(path, selection);
+fn translate_and_snap_in_path_with_handles(
+    path: &mut Path,
+    selection: &Selection,
+    delta: Vec2,
+    bounds: &mut SelectionBoundsAccumulator,
+) {
     match path {
         Path::Cubic(cubic) => {
             let closed = cubic.closed;
+            let Some((move_indices, selected_indices)) =
+                selected_and_adjacent_handle_indices(cubic.points.as_slice(), selection, closed)
+            else {
+                return;
+            };
             let points = cubic.points.make_mut();
             let mut changed = false;
-            for point in points.iter_mut() {
-                if ids.contains(&point.id) {
-                    point.point += delta;
+            for index in move_indices {
+                let point = &mut points[index];
+                let snapped = snap_point_to_grid(point.point + delta);
+                if snapped != point.point {
+                    point.point = snapped;
                     changed = true;
                 }
             }
             if changed {
                 maintain_smooth_handle_tangents(points, selection, closed);
             }
+            for index in selected_indices {
+                bounds.add(points[index].point);
+            }
         }
-        Path::Quadratic(_) => {
-            for point in path_points_mut(path) {
-                if ids.contains(&point.id) {
-                    point.point += delta;
-                }
+        Path::Quadratic(quadratic) => {
+            let Some((move_indices, selected_indices)) = selected_and_adjacent_handle_indices(
+                quadratic.points.as_slice(),
+                selection,
+                quadratic.closed,
+            ) else {
+                return;
+            };
+            let points = quadratic.points.make_mut();
+            for index in move_indices {
+                let point = &mut points[index];
+                point.point = snap_point_to_grid(point.point + delta);
+            }
+            for index in selected_indices {
+                bounds.add(points[index].point);
             }
         }
         Path::Hyper(hyper) => {
-            for point in hyper.points.make_mut() {
-                if ids.contains(&point.id) {
-                    point.point += delta;
+            let points = hyper.points.make_mut();
+            let mut has_selection = false;
+            let mut changed = false;
+            for point in points {
+                if selection.contains(&point.id) {
+                    has_selection = true;
+                    let snapped = snap_point_to_grid(point.point + delta);
+                    if snapped != point.point {
+                        point.point = snapped;
+                        changed = true;
+                    }
+                    bounds.add(point.point);
                 }
             }
-            hyper.after_change();
+            if !has_selection {
+                return;
+            }
+            if changed {
+                hyper.after_change();
+            }
         }
     }
 }
 
-fn selected_and_adjacent_offcurve_ids(path: &Path, selection: &Selection) -> HashSet<EntityId> {
-    let points = path.points().iter().cloned().collect::<Vec<_>>();
-    let mut ids = selection.iter().copied().collect::<HashSet<_>>();
-    if points.is_empty() {
-        return ids;
-    }
-    let closed = path_is_closed(path);
+fn selected_and_adjacent_handle_indices(
+    points: &[PathPoint],
+    selection: &Selection,
+    closed: bool,
+) -> Option<(Vec<usize>, Vec<usize>)> {
+    let mut move_indices = Vec::new();
+    let mut selected_indices = Vec::new();
     for (index, point) in points.iter().enumerate() {
-        if !selection.contains(&point.id) || !point.is_on_curve() {
+        if !selection.contains(&point.id) {
+            continue;
+        }
+        push_unique_index(&mut move_indices, index);
+        selected_indices.push(index);
+        if !point.is_on_curve() {
             continue;
         }
         for neighbor in [
@@ -2642,11 +2810,17 @@ fn selected_and_adjacent_offcurve_ids(path: &Path, selection: &Selection) -> Has
         .flatten()
         {
             if points[neighbor].is_off_curve() {
-                ids.insert(points[neighbor].id);
+                push_unique_index(&mut move_indices, neighbor);
             }
         }
     }
-    ids
+    (!selected_indices.is_empty()).then_some((move_indices, selected_indices))
+}
+
+fn push_unique_index(indices: &mut Vec<usize>, index: usize) {
+    if !indices.contains(&index) {
+        indices.push(index);
+    }
 }
 
 fn translate_all_paths(paths: &mut [Path], delta: Vec2) {
@@ -3522,9 +3696,7 @@ pub fn norad_glyph_to_bezpath(glyph: &norad::Glyph) -> BezPath {
     let mut combined = BezPath::new();
     for norad_contour in &glyph.contours {
         let ws_contour = convert_norad_contour(norad_contour);
-        for el in Path::from_contour(&ws_contour).to_bezpath().elements() {
-            combined.push(*el);
-        }
+        Path::from_contour(&ws_contour).append_to_bezpath(&mut combined);
     }
     combined
 }
@@ -3660,7 +3832,8 @@ mod tests {
             index: 0,
             base: "acute".to_string(),
             transform: Affine::IDENTITY,
-            path: BezPath::new(),
+            path: Arc::new(BezPath::new()),
+            transformed_path: Arc::new(BezPath::new()),
             anchors: vec![AnchorPoint {
                 id: EntityId::next(),
                 index: 0,
@@ -4090,7 +4263,8 @@ mod tests {
             index: 0,
             base: "acute".to_string(),
             transform: Affine::IDENTITY,
-            path,
+            transformed_path: transformed_component_path(Affine::IDENTITY, &path),
+            path: Arc::new(path),
             anchors: Vec::new(),
             auto_align: true,
         }]);
@@ -4225,7 +4399,8 @@ mod tests {
             index: 0,
             base: "acute".to_string(),
             transform: Affine::IDENTITY,
-            path,
+            transformed_path: transformed_component_path(Affine::IDENTITY, &path),
+            path: Arc::new(path),
             anchors: Vec::new(),
             auto_align: true,
         }]);
@@ -4259,7 +4434,8 @@ mod tests {
             index: 3,
             base: "acute".to_string(),
             transform: Affine::IDENTITY,
-            path,
+            transformed_path: transformed_component_path(Affine::IDENTITY, &path),
+            path: Arc::new(path),
             anchors: Vec::new(),
             auto_align: true,
         }]);
@@ -4286,7 +4462,8 @@ mod tests {
             index: 0,
             base: "acute".to_string(),
             transform: Affine::IDENTITY,
-            path,
+            transformed_path: transformed_component_path(Affine::IDENTITY, &path),
+            path: Arc::new(path),
             anchors: Vec::new(),
             auto_align: true,
         }]);
@@ -4303,6 +4480,44 @@ mod tests {
             duplicate.transform,
             Affine::translate(Vec2::new(20.0, 20.0))
         );
+    }
+
+    #[test]
+    fn component_preview_paths_are_shared_across_clones_and_duplicates() {
+        let mut state = EditorState::default();
+        let mut path = BezPath::new();
+        path.move_to(Point::new(0.0, 0.0));
+        path.line_to(Point::new(120.0, 0.0));
+        path.line_to(Point::new(120.0, 80.0));
+        path.close_path();
+        let component_id = EntityId::next();
+        state.set_component_previews(vec![ComponentPreview {
+            id: component_id,
+            index: 0,
+            base: "acute".to_string(),
+            transform: Affine::IDENTITY,
+            transformed_path: transformed_component_path(Affine::IDENTITY, &path),
+            path: Arc::new(path),
+            anchors: Vec::new(),
+            auto_align: true,
+        }]);
+
+        let snapshot = state.clone();
+        assert!(Arc::ptr_eq(
+            &state.component_previews[0].path,
+            &snapshot.component_previews[0].path
+        ));
+        assert!(Arc::ptr_eq(
+            &state.component_previews[0].transformed_path,
+            &snapshot.component_previews[0].transformed_path
+        ));
+
+        state.select_component(component_id);
+        assert!(state.duplicate_selection());
+        assert!(Arc::ptr_eq(
+            &state.component_previews[0].path,
+            &state.component_previews[1].path
+        ));
     }
 
     #[test]

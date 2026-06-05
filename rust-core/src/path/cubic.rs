@@ -57,27 +57,26 @@ impl CubicPath {
     /// Convert this cubic path to a kurbo `BezPath` for rendering.
     pub fn to_bezpath(&self) -> BezPath {
         let mut path = BezPath::new();
+        self.append_to_bezpath(&mut path);
+        path
+    }
 
-        if self.points.is_empty() {
-            return path;
+    /// Append this cubic path directly into an existing `BezPath`.
+    pub fn append_to_bezpath(&self, path: &mut BezPath) {
+        let points = self.points.as_slice();
+
+        if points.is_empty() {
+            return;
         }
 
-        let points: Vec<&PathPoint> = self.points.iter().collect();
-        let rotated = Self::rotate_to_on_curve_start(&points);
-
-        if rotated.is_empty() {
-            return path;
-        }
-
-        path.move_to(rotated[0].point);
-        Self::process_points(&rotated, &mut path);
+        let start_idx = points.iter().position(|p| p.is_on_curve()).unwrap_or(0);
+        path.move_to(points[start_idx].point);
+        Self::process_points(points, start_idx, path);
 
         if self.closed {
-            Self::handle_closed_path_trailing_points(&rotated, &mut path);
+            Self::handle_closed_path_trailing_points(points, start_idx, path);
             path.close_path();
         }
-
-        path
     }
 
     /// Convert from a workspace contour (norad-shaped).
@@ -157,25 +156,26 @@ impl CubicPath {
         SegmentIterator::new(&self.points, self.closed)
     }
 
-    fn rotate_to_on_curve_start<'a>(points: &'a [&PathPoint]) -> Vec<&'a PathPoint> {
-        let start_idx = points.iter().position(|p| p.is_on_curve()).unwrap_or(0);
-
-        points[start_idx..]
-            .iter()
-            .chain(points[..start_idx].iter())
-            .copied()
-            .collect()
+    fn rotated_point(points: &[PathPoint], start_idx: usize, offset: usize) -> &PathPoint {
+        &points[(start_idx + offset) % points.len()]
     }
 
-    fn process_points(rotated: &[&PathPoint], path: &mut BezPath) {
+    fn process_points(points: &[PathPoint], start_idx: usize, path: &mut BezPath) {
         let mut i = 1;
-        while i < rotated.len() {
-            let pt = rotated[i];
+        while i < points.len() {
+            let pt = Self::rotated_point(points, start_idx, i);
 
             match pt.typ {
                 PointType::OnCurve { .. } => {
-                    let off_curve_before = Self::collect_preceding_off_curve_points(rotated, i);
-                    Self::add_segment_to_path(path, &off_curve_before, pt.point);
+                    let (control_count, first_control, second_control) =
+                        Self::preceding_off_curve_controls(points, start_idx, i);
+                    Self::add_segment_to_path(
+                        path,
+                        control_count,
+                        first_control,
+                        second_control,
+                        pt.point,
+                    );
                     i += 1;
                 }
                 PointType::OffCurve { .. } => {
@@ -187,70 +187,104 @@ impl CubicPath {
         }
     }
 
-    fn collect_preceding_off_curve_points<'a>(
-        rotated: &'a [&PathPoint],
-        current_idx: usize,
-    ) -> Vec<&'a PathPoint> {
-        let mut off_curve_before = Vec::new();
-        let mut j = current_idx.saturating_sub(1);
+    fn preceding_off_curve_controls(
+        points: &[PathPoint],
+        start_idx: usize,
+        current_offset: usize,
+    ) -> (usize, Option<kurbo::Point>, Option<kurbo::Point>) {
+        let mut count = 0;
+        let mut newest = None;
+        let mut second_newest = None;
+        let mut offset = current_offset;
 
-        while j > 0 && rotated[j].is_off_curve() {
-            off_curve_before.insert(0, rotated[j]);
-            j = j.saturating_sub(1);
+        while offset > 1 {
+            offset -= 1;
+            let point = Self::rotated_point(points, start_idx, offset);
+            if !point.is_off_curve() {
+                break;
+            }
+            count += 1;
+            if count == 1 {
+                newest = Some(point.point);
+            } else if count == 2 {
+                second_newest = Some(point.point);
+            }
         }
 
-        off_curve_before
+        (count, newest, second_newest)
     }
 
     fn add_segment_to_path(
         path: &mut BezPath,
-        off_curve_before: &[&PathPoint],
+        control_count: usize,
+        first_control: Option<kurbo::Point>,
+        second_control: Option<kurbo::Point>,
         end_point: kurbo::Point,
     ) {
-        match off_curve_before.len() {
+        match control_count {
             0 => {
                 path.line_to(end_point);
             }
             1 => {
-                path.quad_to(off_curve_before[0].point, end_point);
-            }
-            2 => {
-                path.curve_to(
-                    off_curve_before[0].point,
-                    off_curve_before[1].point,
+                path.quad_to(
+                    first_control.expect("control count guarantees point"),
                     end_point,
                 );
             }
-            n => {
-                // More than 2 — use the last two.
+            _ => {
                 path.curve_to(
-                    off_curve_before[n - 2].point,
-                    off_curve_before[n - 1].point,
+                    second_control.expect("control count guarantees first cubic point"),
+                    first_control.expect("control count guarantees second cubic point"),
                     end_point,
                 );
             }
         }
     }
 
-    fn handle_closed_path_trailing_points(rotated: &[&PathPoint], path: &mut BezPath) {
-        let trailing_off_curve = Self::collect_trailing_off_curve_points(rotated);
+    fn handle_closed_path_trailing_points(
+        points: &[PathPoint],
+        start_idx: usize,
+        path: &mut BezPath,
+    ) {
+        let (control_count, first_control, second_control) =
+            Self::trailing_off_curve_controls(points, start_idx);
 
-        if !trailing_off_curve.is_empty() {
-            let first_pt = rotated[0];
-            Self::add_segment_to_path(path, &trailing_off_curve, first_pt.point);
+        if control_count > 0 {
+            let first_pt = Self::rotated_point(points, start_idx, 0);
+            Self::add_segment_to_path(
+                path,
+                control_count,
+                first_control,
+                second_control,
+                first_pt.point,
+            );
         }
     }
 
-    fn collect_trailing_off_curve_points<'a>(rotated: &'a [&PathPoint]) -> Vec<&'a PathPoint> {
-        let mut trailing_off_curve = Vec::new();
-        let mut j = rotated.len().saturating_sub(1);
+    fn trailing_off_curve_controls(
+        points: &[PathPoint],
+        start_idx: usize,
+    ) -> (usize, Option<kurbo::Point>, Option<kurbo::Point>) {
+        let mut count = 0;
+        let mut newest = None;
+        let mut second_newest = None;
+        let mut offset = points.len();
 
-        while j > 0 && rotated[j].is_off_curve() {
-            trailing_off_curve.insert(0, rotated[j]);
-            j = j.saturating_sub(1);
+        while offset > 1 {
+            offset -= 1;
+            let point = Self::rotated_point(points, start_idx, offset);
+            if !point.is_off_curve() {
+                break;
+            }
+            count += 1;
+            if count == 1 {
+                newest = Some(point.point);
+            } else if count == 2 {
+                second_newest = Some(point.point);
+            }
         }
 
-        trailing_off_curve
+        (count, newest, second_newest)
     }
 }
 

@@ -47,6 +47,14 @@ impl Path {
         }
     }
 
+    pub fn append_to_bezpath(&self, path: &mut BezPath) {
+        match self {
+            Path::Cubic(cubic) => cubic.append_to_bezpath(path),
+            Path::Quadratic(quadratic) => quadratic.append_to_bezpath(path),
+            Path::Hyper(hyper) => hyper.append_to_bezpath(path),
+        }
+    }
+
     /// Detect the curve type from the contour and dispatch.
     pub fn from_contour(contour: &workspace::Contour) -> Self {
         let has_hyper = contour.points.iter().any(|pt| {

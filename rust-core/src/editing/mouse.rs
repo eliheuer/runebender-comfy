@@ -84,6 +84,27 @@ impl Mouse {
         matches!(self.state, MouseState::Down | MouseState::Drag)
     }
 
+    /// Whether this move will promote a button-down gesture into a drag.
+    pub fn will_start_drag(&self, pos: Point, button: MouseButton) -> bool {
+        matches!(self.state, MouseState::Down)
+            && self.current_button == Some(button)
+            && Self::should_start_drag(self.down_pos, pos)
+    }
+
+    /// Track pointer movement while a button is down but still below the
+    /// drag threshold. This matches `handle_move_while_down`'s no-delegate
+    /// path and lets hot callers skip heavier editor-state change detection.
+    pub fn track_pending_drag_move(&mut self, pos: Point, button: MouseButton) -> bool {
+        if !matches!(self.state, MouseState::Down) || self.current_button != Some(button) {
+            return false;
+        }
+        if Self::should_start_drag(self.down_pos, pos) {
+            return false;
+        }
+        self.last_pos = pos;
+        true
+    }
+
     pub fn new() -> Self {
         Self {
             state: MouseState::Up,
