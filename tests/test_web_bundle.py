@@ -13,7 +13,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-04-editor-perf-pass-83-post-render-nudge-state"
+EXPECTED_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-05-save-noop-editor-flush-fix-perf-nudge-render-cache-final"
 
 
 class WebBundleTests(unittest.TestCase):
@@ -310,6 +310,44 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn("Glyph sort order", sidebar)
         self.assertNotIn(
             "Array.from(activeMasterData.value.glyphBytes.keys()).sort()",
+            source,
+        )
+
+    def test_category_sidebar_copies_selected_glyph_text(self) -> None:
+        source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
+        sidebar = (ROOT / "web" / "src" / "components" / "CategorySidebar.vue").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("selectedTextGlyphCount: number", sidebar)
+        self.assertIn('e: "copySelectedText"', sidebar)
+        self.assertIn("Copy Selection", sidebar)
+        self.assertIn("function selectedGridGlyphNamesInVisibleOrder", source)
+        self.assertIn("filteredGlyphNames.value.filter", source)
+        self.assertIn("selectedGridGlyphTextPieces", source)
+        self.assertIn("writeTextToClipboard(text)", source)
+        self.assertIn("@copy-selected-text", source)
+
+    def test_save_does_not_abort_on_noop_editor_flush(self) -> None:
+        source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
+
+        self.assertIn("const needsEditorFlush =", source)
+        self.assertIn("flushDeferredGlyphSync();", source)
+        self.assertIn("if (editorGlyphNeedsSync) {", source)
+        self.assertNotIn(
+            "currentGlyph.value && editor && !flushDeferredGlyphSync()",
+            source,
+        )
+
+    def test_nudge_preview_defers_coordinate_panel_until_after_paint(self) -> None:
+        source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
+
+        self.assertIn("function schedulePostPaintNudgeSelectionState", source)
+        self.assertIn("postPaintNudgeSelectionRaf = requestAnimationFrame", source)
+        self.assertIn("postPaintNudgeSelectionTimer = window.setTimeout", source)
+        self.assertIn("flushPostPaintNudgeSelectionState()", source)
+        self.assertIn(
+            "schedulePostPaintNudgeSelectionState(nudgeSelectionState, nudgePerf ?? null)",
             source,
         )
 

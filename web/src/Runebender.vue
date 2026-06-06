@@ -811,6 +811,7 @@ const selectedUnicodeDisplay = computed(() => {
     ? unicodes.join(", ")
     : glyphUnicodes.value.get(selectedGlyph.value);
 });
+const selectedGridTextGlyphCount = computed(() => selectedGridGlyphTextPieces().length);
 const activeGlyphSvg = computed(() =>
   currentGlyph.value ? glyphSvgs.value.get(currentGlyph.value) : undefined,
 );
@@ -985,6 +986,13 @@ type Editor = {
     ctrl: boolean,
     independent: boolean,
   ): boolean;
+  nudgeSelectionFastState(
+    dx: number,
+    dy: number,
+    shift: boolean,
+    ctrl: boolean,
+    independent: boolean,
+  ): Float64Array;
   nudgeSelectionState(
     dx: number,
     dy: number,
@@ -1024,6 +1032,22 @@ type SaveAsDestination = {
   relink: boolean;
 };
 
+type NudgePerfSample = {
+  id: number;
+  start: number;
+  mutation?: number;
+  renderStart?: number;
+  renderEnd?: number;
+  panel?: number;
+  syncStart?: number;
+  syncEnd?: number;
+  queued: boolean;
+};
+
+const NUDGE_IDLE_COMMIT_DELAY_MS = 500;
+const NUDGE_PANEL_REFRESH_INTERVAL_MS = 80;
+const NUDGE_PERF_LOG_EVERY = 12;
+
 let editor: Editor | null = null;
 let editorComponentGlyphsData: MasterData | null = null;
 let editorComponentGlyphsVersion = -1;
@@ -1035,13 +1059,28 @@ let rafNeedsCompatibilityMarkers = false;
 let rafNeedsCompatibilityErrors = false;
 let compatibilityErrorRefreshTimer: number | null = null;
 let pendingNudgeSelectionState: Float64Array | null = null;
+let pendingNudgeSelectionRefresh = false;
 let resizeObserver: ResizeObserver | null = null;
 let themeObserver: MutationObserver | null = null;
 let comfySyncTimer: number | null = null;
 let deferredGlyphSyncTimer: number | null = null;
+let deferredGlyphSyncCommitRaf: number | null = null;
+let deferredGlyphSyncCommitTimer: number | null = null;
 let deferredGlyphDerivedSyncTimer: number | null = null;
 let deferredGlyphDerivedSyncGlyph = "";
 let deferredGlyphDerivedSyncMaster = "";
+let postPaintNudgeSelectionState: Float64Array | null = null;
+let postPaintNudgeSelectionRefresh = false;
+let postPaintNudgeSelectionPerf: NudgePerfSample | null = null;
+let postPaintNudgeSelectionRaf: number | null = null;
+let postPaintNudgeSelectionTimer: number | null = null;
+let lastNudgeSelectionRefreshAt = 0;
+let nudgePreviewActive = false;
+let nudgePerfLoggingEnabled = false;
+let nudgePerfNextId = 1;
+let pendingNudgePerf: NudgePerfSample | null = null;
+let lastRenderedNudgePerf: NudgePerfSample | null = null;
+let completedNudgePerfSamples: NudgePerfSample[] = [];
 let textPointerMayMutate = false;
 let textKerningNeedsSync = false;
 let lastPublishedComfyState = "";
@@ -1068,6 +1107,10 @@ onMounted(async () => {
     editor = (await GlyphEditor.new(canvas.value, width, height)) as unknown as Editor;
     editor.setDeviceScale(dpr);
     applyCanvasTheme();
+    nudgePerfLoggingEnabled = readNudgePerfEnabled();
+    if (nudgePerfLoggingEnabled) {
+      console.info("[runebender-perf] nudge telemetry enabled");
+    }
 
     status.value = "ready";
 
@@ -1090,6 +1133,7 @@ onMounted(async () => {
     updateGridViewportSize();
     window.addEventListener("keydown", onGlobalKeyDownCapture, { capture: true });
     window.addEventListener("keyup", onGlobalKeyUpCapture, { capture: true });
+    window.addEventListener("blur", onWindowBlur);
     window.addEventListener("pointerdown", onWindowPointerDown);
     // Window-level drag listeners stop the browser from "opening" a
     // dropped .ufo as a file:// URL when the drop lands outside the
@@ -1131,6 +1175,83 @@ type RenderRequestOptions = {
   refreshCompatibilityErrors?: boolean;
 };
 
+function readNudgePerfEnabled(): boolean {
+  try {
+    return (
+      window.localStorage?.getItem("runebender:perf") === "1" ||
+      new URLSearchParams(window.location.search).has("rb_perf")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function nudgePerfEnabled(): boolean {
+  return nudgePerfLoggingEnabled;
+}
+
+function startNudgePerf(queued: boolean): NudgePerfSample | undefined {
+  if (!nudgePerfEnabled()) return undefined;
+  return {
+    id: nudgePerfNextId++,
+    start: performance.now(),
+    queued,
+  };
+}
+
+function markNudgePerfMutation(sample: NudgePerfSample | undefined) {
+  if (sample) sample.mutation = performance.now();
+}
+
+function queueNudgePerfForRender(sample: NudgePerfSample | undefined) {
+  if (sample) pendingNudgePerf = sample;
+}
+
+function recordCompletedNudgePerf(sample: NudgePerfSample | null) {
+  if (!sample || !nudgePerfEnabled()) return;
+  lastRenderedNudgePerf = sample;
+  completedNudgePerfSamples.push(sample);
+  if (completedNudgePerfSamples.length < NUDGE_PERF_LOG_EVERY) return;
+  const samples = completedNudgePerfSamples;
+  completedNudgePerfSamples = [];
+  const avg = (values: number[]) =>
+    values.length === 0
+      ? 0
+      : values.reduce((sum, value) => sum + value, 0) / values.length;
+  const mutation = samples
+    .filter((sample) => sample.mutation !== undefined)
+    .map((sample) => sample.mutation! - sample.start);
+  const render = samples
+    .filter((sample) => sample.renderStart !== undefined && sample.renderEnd !== undefined)
+    .map((sample) => sample.renderEnd! - sample.renderStart!);
+  const visible = samples
+    .filter((sample) => sample.renderEnd !== undefined)
+    .map((sample) => sample.renderEnd! - sample.start);
+  const panel = samples
+    .filter((sample) => sample.panel !== undefined)
+    .map((sample) => sample.panel! - sample.start);
+  const queued = samples.filter((sample) => sample.queued).length;
+  console.info(
+    `[runebender-perf] nudge avg over ${samples.length}: ` +
+      `mutate ${avg(mutation).toFixed(1)}ms, ` +
+      `render ${avg(render).toFixed(1)}ms, ` +
+      `visible ${avg(visible).toFixed(1)}ms, ` +
+      `panel ${avg(panel).toFixed(1)}ms, ` +
+      `queued ${queued}`,
+  );
+}
+
+function logNudgeSyncPerf(sample: NudgePerfSample | undefined) {
+  if (!sample || !nudgePerfEnabled() || sample.syncStart === undefined || sample.syncEnd === undefined) {
+    return;
+  }
+  console.info(
+    `[runebender-perf] nudge sync ${sample.id}: ` +
+      `${(sample.syncEnd - sample.syncStart).toFixed(1)}ms, ` +
+      `total ${(sample.syncEnd - sample.start).toFixed(1)}ms`,
+  );
+}
+
 function requestRender(options: RenderRequestOptions = {}) {
   if (!editor || (viewMode.value !== "editor" && glyphNames.value.length > 0)) return;
   const refreshAll = options.refreshDerivedState !== false;
@@ -1152,11 +1273,21 @@ function requestRender(options: RenderRequestOptions = {}) {
     rafNeedsCompatibilityMarkers = false;
     rafNeedsCompatibilityErrors = false;
     if (!editor || (viewMode.value !== "editor" && glyphNames.value.length > 0)) return;
+    const nudgePerf = pendingNudgePerf;
+    if (nudgePerf) nudgePerf.renderStart = performance.now();
     editor?.render();
+    if (nudgePerf) nudgePerf.renderEnd = performance.now();
     const nudgeSelectionState = pendingNudgeSelectionState;
+    const nudgeSelectionRefresh = pendingNudgeSelectionRefresh;
     pendingNudgeSelectionState = null;
+    pendingNudgeSelectionRefresh = false;
     if (nudgeSelectionState) {
-      applyNudgeSelectionState(nudgeSelectionState);
+      schedulePostPaintNudgeSelectionState(nudgeSelectionState, nudgePerf ?? null);
+    } else if (nudgeSelectionRefresh) {
+      schedulePostPaintNudgeSelectionState(null, nudgePerf ?? null, true);
+    } else if (nudgePerf) {
+      recordCompletedNudgePerf(nudgePerf);
+      if (pendingNudgePerf === nudgePerf) pendingNudgePerf = null;
     }
     if (refreshBackground) {
       refreshBackgroundImageFrame();
@@ -1396,6 +1527,9 @@ function applySelectionState(
   options: { reuseAnchorName?: boolean } = {},
   offset = 0,
 ) {
+  cancelPostPaintNudgeSelectionState();
+  postPaintNudgeSelectionState = null;
+  postPaintNudgeSelectionPerf = null;
   if (!editor) {
     setSelectionState(0, 0, undefined);
     selectedAnchor.value = null;
@@ -1467,6 +1601,74 @@ function applyNudgeSelectionState(state: ArrayLike<number>) {
   if (!sameAnchorContext(selectedAnchor.value, nextAnchor)) {
     selectedAnchor.value = nextAnchor;
   }
+}
+
+function cancelPostPaintNudgeSelectionState() {
+  if (postPaintNudgeSelectionRaf !== null) {
+    cancelAnimationFrame(postPaintNudgeSelectionRaf);
+    postPaintNudgeSelectionRaf = null;
+  }
+  if (postPaintNudgeSelectionTimer !== null) {
+    window.clearTimeout(postPaintNudgeSelectionTimer);
+    postPaintNudgeSelectionTimer = null;
+  }
+}
+
+function flushPostPaintNudgeSelectionState() {
+  cancelPostPaintNudgeSelectionState();
+  const state = postPaintNudgeSelectionState;
+  const refresh = postPaintNudgeSelectionRefresh;
+  const nudgePerf = postPaintNudgeSelectionPerf;
+  postPaintNudgeSelectionState = null;
+  postPaintNudgeSelectionRefresh = false;
+  postPaintNudgeSelectionPerf = null;
+  if (state) {
+    applyNudgeSelectionState(state);
+  } else if (refresh) {
+    refreshSelectionState({ reuseAnchorName: true });
+  } else {
+    return;
+  }
+  lastNudgeSelectionRefreshAt = performance.now();
+  if (nudgePerf) {
+    nudgePerf.panel = performance.now();
+    recordCompletedNudgePerf(nudgePerf);
+    if (pendingNudgePerf === nudgePerf) pendingNudgePerf = null;
+  }
+}
+
+function schedulePostPaintNudgeSelectionState(
+  state: Float64Array | null,
+  nudgePerf: NudgePerfSample | null,
+  refresh = false,
+) {
+  postPaintNudgeSelectionState = state;
+  postPaintNudgeSelectionRefresh = refresh;
+  postPaintNudgeSelectionPerf = nudgePerf;
+  cancelPostPaintNudgeSelectionState();
+  const now = performance.now();
+  const elapsed = now - lastNudgeSelectionRefreshAt;
+  const delay =
+    nudgePreviewActive && elapsed < NUDGE_PANEL_REFRESH_INTERVAL_MS
+      ? NUDGE_PANEL_REFRESH_INTERVAL_MS - elapsed
+      : 0;
+  if (delay > 0) {
+    postPaintNudgeSelectionTimer = window.setTimeout(() => {
+      postPaintNudgeSelectionTimer = null;
+      postPaintNudgeSelectionRaf = requestAnimationFrame(() => {
+        postPaintNudgeSelectionRaf = null;
+        flushPostPaintNudgeSelectionState();
+      });
+    }, delay);
+    return;
+  }
+  postPaintNudgeSelectionRaf = requestAnimationFrame(() => {
+    postPaintNudgeSelectionRaf = null;
+    postPaintNudgeSelectionTimer = window.setTimeout(() => {
+      postPaintNudgeSelectionTimer = null;
+      flushPostPaintNudgeSelectionState();
+    }, 0);
+  });
 }
 
 function applyEditorPanelState(state: ArrayLike<number>, offset = 0) {
@@ -4598,6 +4800,81 @@ function copyGridGlyph(): boolean {
   return true;
 }
 
+function selectedGridGlyphNamesInVisibleOrder(): string[] {
+  const data = activeMasterData.value;
+  if (!data) return [];
+  const selected = selectedGlyphs.value;
+  const names = filteredGlyphNames.value.filter((name) =>
+    selected.has(name) && data.glyphBytes.has(name),
+  );
+  if (names.length > 0) return names;
+  const primary = currentPrimarySelectedGlyph();
+  return primary && data.glyphBytes.has(primary) ? [primary] : [];
+}
+
+function glyphUnicodeText(name: string): string {
+  const unicodes =
+    glyphMetadataMap.value.get(name)?.unicodes ??
+    glyphUnicodes.value.get(name)?.split(/[\s,]+/) ??
+    [];
+  return unicodes
+    .map((hex) => Number.parseInt(hex.replace(/^U\+/i, ""), 16))
+    .filter((cp) => Number.isFinite(cp) && cp >= 0 && cp <= 0x10ffff)
+    .map((cp) => String.fromCodePoint(cp))
+    .join("");
+}
+
+function selectedGridGlyphTextPieces(): Array<{ name: string; text: string }> {
+  return selectedGridGlyphNamesInVisibleOrder()
+    .map((name) => ({ name, text: glyphUnicodeText(name) }))
+    .filter((item) => item.text.length > 0);
+}
+
+async function writeTextToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fall through to the selection-based copy path.
+    }
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.focus({ preventScroll: true });
+  textarea.select();
+  try {
+    if (!document.execCommand("copy")) {
+      throw new Error("copy command failed");
+    }
+  } finally {
+    textarea.remove();
+  }
+}
+
+async function copySelectedGridGlyphText(): Promise<boolean> {
+  const pieces = selectedGridGlyphTextPieces();
+  if (pieces.length === 0) {
+    status.value = "selected glyphs have no Unicode text";
+    return false;
+  }
+  const text = pieces.map((item) => item.text).join("");
+  try {
+    await writeTextToClipboard(text);
+    status.value = `copied ${pieces.length} selected glyph${pieces.length === 1 ? "" : "s"} as text`;
+    return true;
+  } catch (e) {
+    console.warn("copying selected glyph text failed:", e);
+    status.value = `copy text failed: ${e}`;
+    return false;
+  }
+}
+
 function pasteGridGlyph(): boolean {
   const data = activeMasterData.value;
   const source = gridGlyphClipboard.value;
@@ -4955,6 +5232,8 @@ function syncEditorMutationAfterWasmChange(): boolean {
 }
 
 function flushDeferredGlyphSync(): boolean {
+  cancelDeferredGlyphSyncCommit();
+  flushPostPaintNudgeSelectionState();
   if (deferredGlyphSyncTimer !== null) {
     window.clearTimeout(deferredGlyphSyncTimer);
     deferredGlyphSyncTimer = null;
@@ -4969,7 +5248,25 @@ function flushDeferredGlyphSync(): boolean {
     deferredGlyphDerivedSyncMaster = "";
   }
   editor?.finishNudgeSelection();
-  return syncCurrentGlyphBytesFromEditor({ skipUnchanged: true, preserveMetadata: true });
+  nudgePreviewActive = false;
+  const syncPerf = pendingNudgePerf ?? lastRenderedNudgePerf ?? undefined;
+  if (syncPerf) syncPerf.syncStart = performance.now();
+  const glyphName = currentGlyph.value;
+  const masterName = activeMasterName.value;
+  const changed = syncCurrentGlyphBytesFromEditor({
+    skipUnchanged: true,
+    preserveMetadata: true,
+  });
+  if (syncPerf) {
+    syncPerf.syncEnd = performance.now();
+    logNudgeSyncPerf(syncPerf);
+    if (pendingNudgePerf === syncPerf) pendingNudgePerf = null;
+    if (lastRenderedNudgePerf === syncPerf) lastRenderedNudgePerf = null;
+  }
+  if (changed && glyphName) {
+    markGlyphDirty(glyphName, masterName);
+  }
+  return changed;
 }
 
 function refreshDeferredGlyphDerivedState(glyphName: string, masterName: string): boolean {
@@ -5004,6 +5301,32 @@ function flushDeferredGlyphDerivedRefresh(): boolean {
   return refreshDeferredGlyphDerivedState(glyphName, masterName);
 }
 
+function cancelDeferredGlyphSyncCommit() {
+  if (deferredGlyphSyncCommitRaf !== null) {
+    cancelAnimationFrame(deferredGlyphSyncCommitRaf);
+    deferredGlyphSyncCommitRaf = null;
+  }
+  if (deferredGlyphSyncCommitTimer !== null) {
+    window.clearTimeout(deferredGlyphSyncCommitTimer);
+    deferredGlyphSyncCommitTimer = null;
+  }
+}
+
+function scheduleDeferredGlyphSyncCommitAfterPaint() {
+  cancelDeferredGlyphSyncCommit();
+  if (deferredGlyphSyncTimer !== null) {
+    window.clearTimeout(deferredGlyphSyncTimer);
+    deferredGlyphSyncTimer = null;
+  }
+  deferredGlyphSyncCommitRaf = requestAnimationFrame(() => {
+    deferredGlyphSyncCommitRaf = null;
+    deferredGlyphSyncCommitTimer = window.setTimeout(() => {
+      deferredGlyphSyncCommitTimer = null;
+      flushDeferredGlyphSync();
+    }, 0);
+  });
+}
+
 function scheduleDeferredGlyphDerivedRefresh(glyphName: string, masterName: string) {
   if (deferredGlyphDerivedSyncTimer !== null) {
     window.clearTimeout(deferredGlyphDerivedSyncTimer);
@@ -5032,6 +5355,7 @@ function scheduleDeferredGlyphSync(glyphName: string, masterName: string) {
     deferredGlyphSyncTimer = null;
     if (currentGlyph.value !== glyphName || activeMasterName.value !== masterName) return;
     editor?.finishNudgeSelection();
+    nudgePreviewActive = false;
     if (
       syncCurrentGlyphBytesFromEditor({
         skipUnchanged: true,
@@ -5047,7 +5371,26 @@ function scheduleDeferredGlyphSync(glyphName: string, masterName: string) {
       markGlyphDirty(glyphName, masterName);
       scheduleDeferredGlyphDerivedRefresh(glyphName, masterName);
     }
-  }, 120);
+  }, NUDGE_IDLE_COMMIT_DELAY_MS);
+}
+
+function applyImmediateEditorNudge(
+  dx: number,
+  dy: number,
+  shift: boolean,
+  ctrl: boolean,
+  independent: boolean,
+  perf?: NudgePerfSample,
+): boolean {
+  const state = editor?.nudgeSelectionFastState(dx, dy, shift, ctrl, independent);
+  if (!state || state[0] <= 0) return false;
+  markNudgePerfMutation(perf);
+  applyNudgeSelectionState(state);
+  if (perf) perf.panel = performance.now();
+  editorGlyphNeedsSync = true;
+  nudgePreviewActive = true;
+  queueNudgePerfForRender(perf);
+  return true;
 }
 
 function applyEditorNudge(
@@ -5058,13 +5401,11 @@ function applyEditorNudge(
   independent: boolean,
 ): boolean {
   if (!editor || !currentGlyph.value || !activeMasterName.value) return false;
+  cancelDeferredGlyphSyncCommit();
   const glyphName = currentGlyph.value;
   const masterName = activeMasterName.value;
-  const nudgeState = editor.nudgeSelectionState(dx, dy, shift, ctrl, independent);
-  if (nudgeState.length === 0 || nudgeState[0] <= 0) return false;
-
-  editorGlyphNeedsSync = true;
-  pendingNudgeSelectionState = nudgeState;
+  const perf = startNudgePerf(raf !== null);
+  if (!applyImmediateEditorNudge(dx, dy, shift, ctrl, independent, perf)) return false;
   requestRender({ refreshDerivedState: false });
   scheduleDeferredGlyphSync(glyphName, masterName);
   return true;
@@ -5141,7 +5482,14 @@ async function onSave(): Promise<boolean> {
   try {
     status.value = "saving…";
     mirroredSaveWrites.value = 0;
-    if (currentGlyph.value && editor && !flushDeferredGlyphSync()) {
+    const needsEditorFlush =
+      currentGlyph.value &&
+      editor &&
+      (editorGlyphNeedsSync || nudgePreviewActive);
+    if (needsEditorFlush) {
+      flushDeferredGlyphSync();
+    }
+    if (editorGlyphNeedsSync) {
       status.value = "save failed";
       return false;
     }
@@ -6343,12 +6691,25 @@ function onKeyUp(e: KeyboardEvent) {
   if (textModeActive.value) {
     return;
   }
+  if (arrowNudgeDelta(e.key)) {
+    e.preventDefault();
+    if (nudgePreviewActive || editorGlyphNeedsSync) {
+      scheduleDeferredGlyphSyncCommitAfterPaint();
+    }
+    return;
+  }
   if (e.key !== " ") return;
   e.preventDefault();
   const previous = temporaryPreviewReturnTool.value;
   temporaryPreviewReturnTool.value = null;
   if (previous && activeTool.value === "Preview") {
     onToolSelect(previous);
+  }
+}
+
+function onWindowBlur() {
+  if (nudgePreviewActive || editorGlyphNeedsSync) {
+    flushDeferredGlyphSync();
   }
 }
 
@@ -6383,6 +6744,7 @@ onBeforeUnmount(() => {
     pendingGridScrollRaf = null;
   }
   flushDeferredGlyphSync();
+  cancelPostPaintNudgeSelectionState();
   if (comfySyncTimer !== null) {
     clearTimeout(comfySyncTimer);
     comfySyncTimer = null;
@@ -6397,6 +6759,7 @@ onBeforeUnmount(() => {
   clearBackgroundImage();
   window.removeEventListener("keydown", onGlobalKeyDownCapture, { capture: true });
   window.removeEventListener("keyup", onGlobalKeyUpCapture, { capture: true });
+  window.removeEventListener("blur", onWindowBlur);
   window.removeEventListener("pointerdown", onWindowPointerDown);
   window.removeEventListener("dragenter", onWindowDragOver, { capture: true });
   window.removeEventListener("dragover", onWindowDragOver, { capture: true });
@@ -6456,10 +6819,12 @@ onBeforeUnmount(() => {
             :selected="selectedSidebarFilter"
             :counts="categoryCounts"
             :total-count="glyphNames.length"
+            :selected-text-glyph-count="selectedGridTextGlyphCount"
             :category-groups="CATEGORY_GROUPS"
             :language-groups="SIDEBAR_LANGUAGE_GROUPS"
             :filters="SIDEBAR_FILTERS"
             @select="onSelectSidebarFilter"
+            @copy-selected-text="copySelectedGridGlyphText"
           />
       </div>
 

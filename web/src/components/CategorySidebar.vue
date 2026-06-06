@@ -31,10 +31,12 @@ const props = defineProps<{
   filters: SidebarBuiltinFilter[];
   counts?: Record<string, number>;
   totalCount: number;
+  selectedTextGlyphCount: number;
 }>();
 
 const emit = defineEmits<{
   (e: "select", filter: GlyphSidebarFilter): void;
+  (e: "copySelectedText"): void;
   (e: "update:searchQuery", value: string): void;
   (e: "update:searchMode", value: SidebarSearchMode): void;
   (e: "update:searchMatchCase", value: boolean): void;
@@ -297,6 +299,20 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
         </li>
       </ul>
     </div>
+
+    <div class="sidebar-footer">
+      <button
+        type="button"
+        class="copy-selection-btn"
+        :disabled="selectedTextGlyphCount === 0"
+        :aria-label="`Copy ${selectedTextGlyphCount} selected glyph${selectedTextGlyphCount === 1 ? '' : 's'} as text`"
+        @click="$emit('copySelectedText')"
+      >
+        <span class="copy-icon" aria-hidden="true">⧉</span>
+        <span class="copy-label">Copy Selection</span>
+        <span class="copy-count">{{ selectedTextGlyphCount }}</span>
+      </button>
+    </div>
   </aside>
 </template>
 
@@ -493,6 +509,68 @@ function badgeFor(filter: GlyphSidebarFilter, expected?: number): string {
   box-sizing: border-box;
   width: calc(100% + 7.5px);
   padding: 0 15.5px 8px 8px;
+}
+
+.sidebar-footer {
+  padding: 8px;
+  border-top: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
+}
+
+.copy-selection-btn {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 30px;
+  min-width: 0;
+  padding: 0 8px;
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
+  border-radius: 7px;
+  background: var(--rb-canvas-background, #0c0c0c);
+  color: var(--rb-primary-text, #e8e8e8);
+  cursor: pointer;
+  font: 14px ui-sans-serif, system-ui, sans-serif;
+  text-align: left;
+}
+
+.copy-selection-btn:not(:disabled):hover {
+  border-color: var(--rb-accent, #18b86f);
+  color: var(--rb-accent, #18b86f);
+}
+
+.copy-selection-btn:disabled {
+  cursor: default;
+  opacity: 0.48;
+}
+
+.copy-selection-btn:focus {
+  outline: none;
+}
+
+.copy-selection-btn:focus-visible {
+  outline: var(--rb-stroke-width, 1px) solid var(--rb-accent, #18b86f);
+  outline-offset: var(--rb-stroke-width, 1px);
+}
+
+.copy-icon {
+  flex: 0 0 20px;
+  color: var(--rb-accent, #18b86f);
+  font-size: 16px;
+  line-height: 1;
+  text-align: center;
+}
+
+.copy-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copy-count {
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: inherit;
 }
 
 .scroll::-webkit-scrollbar {

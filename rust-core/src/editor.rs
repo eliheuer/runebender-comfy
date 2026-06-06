@@ -937,8 +937,84 @@ impl EditorState {
                 translate_and_snap_in_path_with_handles(path, &self.selection, delta, &mut bounds);
             }
         }
-        self.bump_edit_revision();
+        if bounds.count > 0 {
+            self.bump_edit_revision();
+        }
         bounds.finish()
+    }
+
+    fn translate_selection_bounds_in_paths(
+        &mut self,
+        delta: Vec2,
+        independent: bool,
+        path_indices: &[usize],
+    ) -> Option<(usize, Rect)> {
+        if self.selection.is_empty() || delta == Vec2::ZERO || path_indices.is_empty() {
+            return None;
+        }
+        let mut bounds = SelectionBoundsAccumulator::default();
+        for &path_index in path_indices {
+            let Some(path) = self.paths.get_mut(path_index) else {
+                continue;
+            };
+            if independent {
+                translate_and_snap_in_path(path, &self.selection, delta, &mut bounds);
+            } else {
+                translate_and_snap_in_path_with_handles(path, &self.selection, delta, &mut bounds);
+            }
+        }
+        if bounds.count > 0 {
+            self.bump_edit_revision();
+        }
+        bounds.finish()
+    }
+
+    fn translate_selection_in_paths(
+        &mut self,
+        delta: Vec2,
+        independent: bool,
+        path_indices: &[usize],
+    ) -> bool {
+        if self.selection.is_empty() || delta == Vec2::ZERO || path_indices.is_empty() {
+            return false;
+        }
+        let mut changed = false;
+        for &path_index in path_indices {
+            let Some(path) = self.paths.get_mut(path_index) else {
+                continue;
+            };
+            changed |= if independent {
+                translate_and_snap_in_path_fast(path, &self.selection, delta)
+            } else {
+                translate_and_snap_in_path_with_handles_fast(path, &self.selection, delta)
+            };
+        }
+        if changed {
+            self.bump_edit_revision();
+        }
+        changed
+    }
+
+    fn translate_selection_with_move_indices(
+        &mut self,
+        delta: Vec2,
+        path_move_indices: &[(usize, Vec<usize>)],
+    ) -> bool {
+        if self.selection.is_empty() || delta == Vec2::ZERO || path_move_indices.is_empty() {
+            return false;
+        }
+        let mut changed = false;
+        for (path_index, move_indices) in path_move_indices {
+            let Some(path) = self.paths.get_mut(*path_index) else {
+                continue;
+            };
+            changed |=
+                translate_and_snap_indices_in_path(path, &self.selection, delta, move_indices);
+        }
+        if changed {
+            self.bump_edit_revision();
+        }
+        changed
     }
 
     /// Nudge selected points or components by xilem's keyboard amounts.
@@ -1001,6 +1077,113 @@ impl EditorState {
             bounds,
             anchor: None,
         })
+    }
+
+    pub fn nudge_selection_result_for_paths(
+        &mut self,
+        dx: f64,
+        dy: f64,
+        shift: bool,
+        ctrl: bool,
+        independent: bool,
+        path_indices: &[usize],
+    ) -> Option<NudgeSelectionResult> {
+        let amount = if ctrl {
+            32.0
+        } else if shift {
+            8.0
+        } else {
+            2.0
+        };
+        let delta = Vec2::new(dx * amount, dy * amount);
+        if delta == Vec2::ZERO {
+            return None;
+        }
+        if self.selected_component.is_some() {
+            return self
+                .translate_selected_component(delta)
+                .then(|| NudgeSelectionResult {
+                    selection_count: 1,
+                    bounds: self.selected_component_bounds().map(|bounds| (1, bounds)),
+                    anchor: None,
+                });
+        }
+        if self.selected_anchor.is_some() {
+            return self
+                .translate_selected_anchor(delta)
+                .then(|| NudgeSelectionResult {
+                    selection_count: 1,
+                    bounds: self.selected_anchor_bounds().map(|bounds| (1, bounds)),
+                    anchor: self.selected_anchor().map(|anchor| anchor.point),
+                });
+        }
+        if self.selection.is_empty() {
+            return None;
+        }
+        let selection_count = self.selection.len();
+        let bounds = self.translate_selection_bounds_in_paths(delta, independent, path_indices);
+        Some(NudgeSelectionResult {
+            selection_count,
+            bounds,
+            anchor: None,
+        })
+    }
+
+    pub fn nudge_selection_for_paths(
+        &mut self,
+        dx: f64,
+        dy: f64,
+        shift: bool,
+        ctrl: bool,
+        independent: bool,
+        path_indices: &[usize],
+    ) -> bool {
+        let amount = if ctrl {
+            32.0
+        } else if shift {
+            8.0
+        } else {
+            2.0
+        };
+        let delta = Vec2::new(dx * amount, dy * amount);
+        if delta == Vec2::ZERO {
+            return false;
+        }
+        if self.selected_component.is_some() {
+            return self.translate_selected_component(delta);
+        }
+        if self.selected_anchor.is_some() {
+            return self.translate_selected_anchor(delta);
+        }
+        self.translate_selection_in_paths(delta, independent, path_indices)
+    }
+
+    pub fn nudge_selection_for_move_indices(
+        &mut self,
+        dx: f64,
+        dy: f64,
+        shift: bool,
+        ctrl: bool,
+        path_move_indices: &[(usize, Vec<usize>)],
+    ) -> bool {
+        let amount = if ctrl {
+            32.0
+        } else if shift {
+            8.0
+        } else {
+            2.0
+        };
+        let delta = Vec2::new(dx * amount, dy * amount);
+        if delta == Vec2::ZERO {
+            return false;
+        }
+        if self.selected_component.is_some() {
+            return self.translate_selected_component(delta);
+        }
+        if self.selected_anchor.is_some() {
+            return self.translate_selected_anchor(delta);
+        }
+        self.translate_selection_with_move_indices(delta, path_move_indices)
     }
 
     /// Snap selected on-curve points to xilem's 2-unit design grid.
@@ -2404,6 +2587,39 @@ impl EditorState {
             .count()
     }
 
+    pub fn selected_point_path_indices(&self) -> Vec<usize> {
+        if self.selection.is_empty() {
+            return Vec::new();
+        }
+        self.paths
+            .iter()
+            .enumerate()
+            .filter_map(|(index, path)| {
+                path.points()
+                    .iter()
+                    .any(|pt| self.selection.contains(&pt.id))
+                    .then_some(index)
+            })
+            .collect()
+    }
+
+    pub fn selected_point_path_move_indices(&self, independent: bool) -> Vec<(usize, Vec<usize>)> {
+        if self.selection.is_empty() {
+            return Vec::new();
+        }
+        self.paths
+            .iter()
+            .enumerate()
+            .filter_map(|(path_index, path)| {
+                let points = path.points();
+                let closed = path_is_closed(path);
+                let move_indices =
+                    selected_move_indices(points.as_slice(), &self.selection, closed, independent);
+                (!move_indices.is_empty()).then_some((path_index, move_indices))
+            })
+            .collect()
+    }
+
     pub fn selection_entity_count(&self) -> usize {
         self.selection.len()
             + usize::from(self.selected_component.is_some())
@@ -2595,6 +2811,63 @@ fn translate_and_snap_in_path(
     }
 }
 
+fn translate_and_snap_in_path_fast(path: &mut Path, selection: &Selection, delta: Vec2) -> bool {
+    match path {
+        Path::Cubic(cubic) => {
+            let closed = cubic.closed;
+            let points = cubic.points.make_mut();
+            let mut has_selection = false;
+            let mut changed = false;
+            for pt in points.iter_mut() {
+                if selection.contains(&pt.id) {
+                    has_selection = true;
+                    let snapped = snap_point_to_grid(pt.point + delta);
+                    if snapped != pt.point {
+                        pt.point = snapped;
+                        changed = true;
+                    }
+                }
+            }
+            if !has_selection {
+                return false;
+            }
+            if changed {
+                changed |= maintain_smooth_handle_tangents(points, selection, closed);
+            }
+            changed
+        }
+        Path::Quadratic(_) => {
+            let mut changed = false;
+            for pt in path_points_mut(path) {
+                if selection.contains(&pt.id) {
+                    let snapped = snap_point_to_grid(pt.point + delta);
+                    if snapped != pt.point {
+                        pt.point = snapped;
+                        changed = true;
+                    }
+                }
+            }
+            changed
+        }
+        Path::Hyper(hyper) => {
+            let mut changed = false;
+            for pt in hyper.points.make_mut() {
+                if selection.contains(&pt.id) {
+                    let snapped = snap_point_to_grid(pt.point + delta);
+                    if snapped != pt.point {
+                        pt.point = snapped;
+                        changed = true;
+                    }
+                }
+            }
+            if changed {
+                hyper.after_change();
+            }
+            changed
+        }
+    }
+}
+
 fn maintain_smooth_handle_tangents(
     points: &mut [PathPoint],
     selection: &Selection,
@@ -2610,56 +2883,94 @@ fn maintain_smooth_handle_tangents(
         if !selection.contains(&points[index].id) || !points[index].is_off_curve() {
             continue;
         }
+        append_smooth_handle_updates(points, selection, closed, index, &mut updates);
+    }
 
-        if let Some(on_index) = previous_index(index, len, closed)
-            && matches!(points[on_index].typ, PointType::OnCurve { smooth: true })
-            && let Some(opposite_index) = previous_index(on_index, len, closed)
-            && !selection.contains(&points[opposite_index].id)
-        {
-            if points[opposite_index].is_off_curve() {
-                if let Some(point) = mirrored_smooth_handle(
-                    points[index].point,
-                    points[on_index].point,
-                    points[opposite_index].point,
-                ) {
-                    updates.push((opposite_index, point));
-                }
-            } else if points[opposite_index].is_on_curve()
-                && let Some(point) = projected_smooth_handle(
-                    points[index].point,
-                    points[on_index].point,
-                    points[opposite_index].point,
-                )
-            {
-                updates.push((index, point));
-            }
+    apply_smooth_handle_updates(points, updates)
+}
+
+fn maintain_smooth_handle_tangents_for_indices(
+    points: &mut [PathPoint],
+    selection: &Selection,
+    closed: bool,
+    indices: &[usize],
+) -> bool {
+    if points.len() < 3 {
+        return false;
+    }
+
+    let mut updates = Vec::new();
+    for &index in indices {
+        let Some(point) = points.get(index) else {
+            continue;
+        };
+        if !selection.contains(&point.id) || !point.is_off_curve() {
+            continue;
         }
+        append_smooth_handle_updates(points, selection, closed, index, &mut updates);
+    }
 
-        if let Some(on_index) = next_index(index, len, closed)
-            && matches!(points[on_index].typ, PointType::OnCurve { smooth: true })
-            && let Some(opposite_index) = next_index(on_index, len, closed)
-            && !selection.contains(&points[opposite_index].id)
-        {
-            if points[opposite_index].is_off_curve() {
-                if let Some(point) = mirrored_smooth_handle(
-                    points[index].point,
-                    points[on_index].point,
-                    points[opposite_index].point,
-                ) {
-                    updates.push((opposite_index, point));
-                }
-            } else if points[opposite_index].is_on_curve()
-                && let Some(point) = projected_smooth_handle(
-                    points[index].point,
-                    points[on_index].point,
-                    points[opposite_index].point,
-                )
-            {
-                updates.push((index, point));
+    apply_smooth_handle_updates(points, updates)
+}
+
+fn append_smooth_handle_updates(
+    points: &[PathPoint],
+    selection: &Selection,
+    closed: bool,
+    index: usize,
+    updates: &mut Vec<(usize, Point)>,
+) {
+    let len = points.len();
+    if let Some(on_index) = previous_index(index, len, closed)
+        && matches!(points[on_index].typ, PointType::OnCurve { smooth: true })
+        && let Some(opposite_index) = previous_index(on_index, len, closed)
+        && !selection.contains(&points[opposite_index].id)
+    {
+        if points[opposite_index].is_off_curve() {
+            if let Some(point) = mirrored_smooth_handle(
+                points[index].point,
+                points[on_index].point,
+                points[opposite_index].point,
+            ) {
+                updates.push((opposite_index, point));
             }
+        } else if points[opposite_index].is_on_curve()
+            && let Some(point) = projected_smooth_handle(
+                points[index].point,
+                points[on_index].point,
+                points[opposite_index].point,
+            )
+        {
+            updates.push((index, point));
         }
     }
 
+    if let Some(on_index) = next_index(index, len, closed)
+        && matches!(points[on_index].typ, PointType::OnCurve { smooth: true })
+        && let Some(opposite_index) = next_index(on_index, len, closed)
+        && !selection.contains(&points[opposite_index].id)
+    {
+        if points[opposite_index].is_off_curve() {
+            if let Some(point) = mirrored_smooth_handle(
+                points[index].point,
+                points[on_index].point,
+                points[opposite_index].point,
+            ) {
+                updates.push((opposite_index, point));
+            }
+        } else if points[opposite_index].is_on_curve()
+            && let Some(point) = projected_smooth_handle(
+                points[index].point,
+                points[on_index].point,
+                points[opposite_index].point,
+            )
+        {
+            updates.push((index, point));
+        }
+    }
+}
+
+fn apply_smooth_handle_updates(points: &mut [PathPoint], updates: Vec<(usize, Point)>) -> bool {
     let mut changed = false;
     for (index, point) in updates {
         if points[index].point != point {
@@ -2729,7 +3040,7 @@ fn translate_and_snap_in_path_with_handles(
             };
             let points = cubic.points.make_mut();
             let mut changed = false;
-            for index in move_indices {
+            for &index in &move_indices {
                 let point = &mut points[index];
                 let snapped = snap_point_to_grid(point.point + delta);
                 if snapped != point.point {
@@ -2738,7 +3049,12 @@ fn translate_and_snap_in_path_with_handles(
                 }
             }
             if changed {
-                maintain_smooth_handle_tangents(points, selection, closed);
+                maintain_smooth_handle_tangents_for_indices(
+                    points,
+                    selection,
+                    closed,
+                    &move_indices,
+                );
             }
             for index in selected_indices {
                 bounds.add(points[index].point);
@@ -2753,7 +3069,7 @@ fn translate_and_snap_in_path_with_handles(
                 return;
             };
             let points = quadratic.points.make_mut();
-            for index in move_indices {
+            for &index in &move_indices {
                 let point = &mut points[index];
                 point.point = snap_point_to_grid(point.point + delta);
             }
@@ -2782,6 +3098,161 @@ fn translate_and_snap_in_path_with_handles(
             if changed {
                 hyper.after_change();
             }
+        }
+    }
+}
+
+fn translate_and_snap_in_path_with_handles_fast(
+    path: &mut Path,
+    selection: &Selection,
+    delta: Vec2,
+) -> bool {
+    match path {
+        Path::Cubic(cubic) => {
+            let closed = cubic.closed;
+            let Some((move_indices, _)) =
+                selected_and_adjacent_handle_indices(cubic.points.as_slice(), selection, closed)
+            else {
+                return false;
+            };
+            let points = cubic.points.make_mut();
+            let mut changed = false;
+            for &index in &move_indices {
+                let point = &mut points[index];
+                let snapped = snap_point_to_grid(point.point + delta);
+                if snapped != point.point {
+                    point.point = snapped;
+                    changed = true;
+                }
+            }
+            if changed {
+                changed |= maintain_smooth_handle_tangents_for_indices(
+                    points,
+                    selection,
+                    closed,
+                    &move_indices,
+                );
+            }
+            changed
+        }
+        Path::Quadratic(quadratic) => {
+            let Some((move_indices, _)) = selected_and_adjacent_handle_indices(
+                quadratic.points.as_slice(),
+                selection,
+                quadratic.closed,
+            ) else {
+                return false;
+            };
+            let points = quadratic.points.make_mut();
+            let mut changed = false;
+            for index in move_indices {
+                let point = &mut points[index];
+                let snapped = snap_point_to_grid(point.point + delta);
+                if snapped != point.point {
+                    point.point = snapped;
+                    changed = true;
+                }
+            }
+            changed
+        }
+        Path::Hyper(hyper) => {
+            let mut changed = false;
+            for point in hyper.points.make_mut() {
+                if selection.contains(&point.id) {
+                    let snapped = snap_point_to_grid(point.point + delta);
+                    if snapped != point.point {
+                        point.point = snapped;
+                        changed = true;
+                    }
+                }
+            }
+            if changed {
+                hyper.after_change();
+            }
+            changed
+        }
+    }
+}
+
+fn selected_move_indices(
+    points: &[PathPoint],
+    selection: &Selection,
+    closed: bool,
+    independent: bool,
+) -> Vec<usize> {
+    if independent {
+        return points
+            .iter()
+            .enumerate()
+            .filter_map(|(index, point)| selection.contains(&point.id).then_some(index))
+            .collect();
+    }
+    selected_and_adjacent_handle_indices(points, selection, closed)
+        .map(|(move_indices, _)| move_indices)
+        .unwrap_or_default()
+}
+
+fn translate_and_snap_indices_in_path(
+    path: &mut Path,
+    selection: &Selection,
+    delta: Vec2,
+    move_indices: &[usize],
+) -> bool {
+    if move_indices.is_empty() {
+        return false;
+    }
+    match path {
+        Path::Cubic(cubic) => {
+            let closed = cubic.closed;
+            let points = cubic.points.make_mut();
+            let mut changed = false;
+            for &index in move_indices {
+                let Some(point) = points.get_mut(index) else {
+                    continue;
+                };
+                let snapped = snap_point_to_grid(point.point + delta);
+                if snapped != point.point {
+                    point.point = snapped;
+                    changed = true;
+                }
+            }
+            if changed {
+                changed |= maintain_smooth_handle_tangents(points, selection, closed);
+            }
+            changed
+        }
+        Path::Quadratic(quadratic) => {
+            let points = quadratic.points.make_mut();
+            let mut changed = false;
+            for &index in move_indices {
+                let Some(point) = points.get_mut(index) else {
+                    continue;
+                };
+                let snapped = snap_point_to_grid(point.point + delta);
+                if snapped != point.point {
+                    point.point = snapped;
+                    changed = true;
+                }
+            }
+            changed
+        }
+        Path::Hyper(hyper) => {
+            let points = hyper.points.make_mut();
+            let mut changed = false;
+            for &index in move_indices {
+                let Some(point) = points.get_mut(index) else {
+                    continue;
+                };
+                let snapped = snap_point_to_grid(point.point + delta);
+                if snapped != point.point {
+                    point.point = snapped;
+                    changed = true;
+                }
+            }
+            if changed {
+                hyper.after_change();
+            }
+            changed
         }
     }
 }
@@ -4247,6 +4718,92 @@ mod tests {
         let point = state.paths[0].points().iter().next().expect("point exists");
         assert_eq!(point.point, Point::new(18.0, 12.0));
         assert!(state.edit_revision > revision);
+    }
+
+    #[test]
+    fn nudge_selection_can_reuse_selected_path_indices() {
+        let mut state = EditorState::default();
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![
+                on_curve(Point::new(0.0, 0.0), false),
+                on_curve(Point::new(100.0, 0.0), false),
+            ]),
+            false,
+        )));
+        let selected = on_curve(Point::new(10.0, 20.0), false);
+        let selected_id = selected.id;
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![selected, on_curve(Point::new(100.0, 20.0), false)]),
+            false,
+        )));
+        state.selection.insert(selected_id);
+        let path_indices = state.selected_point_path_indices();
+        let revision = state.edit_revision;
+
+        let result = state
+            .nudge_selection_result_for_paths(1.0, 0.0, false, false, false, &path_indices)
+            .expect("selected point nudges");
+
+        assert_eq!(path_indices, vec![1]);
+        let untouched = state.paths[0].points().iter().next().expect("point exists");
+        assert_eq!(untouched.point, Point::new(0.0, 0.0));
+        let moved = state.paths[1].points().iter().next().expect("point exists");
+        assert_eq!(moved.point, Point::new(12.0, 20.0));
+        assert_eq!(result.selection_count, 1);
+        assert_eq!(result.bounds.expect("bounds returned").1.x0, 12.0);
+        assert!(state.edit_revision > revision);
+    }
+
+    #[test]
+    fn nudge_selection_for_paths_skips_unselected_paths_without_bounds() {
+        let mut state = EditorState::default();
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![
+                on_curve(Point::new(0.0, 0.0), false),
+                on_curve(Point::new(100.0, 0.0), false),
+            ]),
+            false,
+        )));
+        let selected = on_curve(Point::new(10.3, 20.7), false);
+        let selected_id = selected.id;
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![selected, on_curve(Point::new(100.0, 20.0), false)]),
+            false,
+        )));
+        state.selection.insert(selected_id);
+        let path_indices = state.selected_point_path_indices();
+        let revision = state.edit_revision;
+
+        assert!(state.nudge_selection_for_paths(1.0, 0.0, false, false, false, &path_indices));
+
+        assert_eq!(path_indices, vec![1]);
+        let untouched = state.paths[0].points().iter().next().expect("point exists");
+        assert_eq!(untouched.point, Point::new(0.0, 0.0));
+        let moved = state.paths[1].points().iter().next().expect("point exists");
+        assert_eq!(moved.point, Point::new(12.0, 20.0));
+        assert!(state.edit_revision > revision);
+    }
+
+    #[test]
+    fn cached_nudge_move_indices_preserve_handle_behavior() {
+        let mut state = EditorState::default();
+        let selected = on_curve(Point::new(10.0, 0.0), false);
+        let selected_id = selected.id;
+        state.paths.push(Path::Cubic(CubicPath::new(
+            PathPoints::from_vec(vec![
+                off_curve(Point::new(0.0, 0.0)),
+                selected,
+                off_curve(Point::new(20.0, 0.0)),
+            ]),
+            false,
+        )));
+        state.selection.insert(selected_id);
+
+        let normal = state.selected_point_path_move_indices(false);
+        let independent = state.selected_point_path_move_indices(true);
+
+        assert_eq!(normal, vec![(0, vec![1, 0, 2])]);
+        assert_eq!(independent, vec![(0, vec![1])]);
     }
 
     #[test]

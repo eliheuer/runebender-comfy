@@ -991,13 +991,36 @@ pub struct GlyphEditor {
     /// arrow-key events reuse this one snapshot so large glyphs do not
     /// clone the full editor state on every key repeat.
     pending_nudge_snapshot: Option<EditorState>,
+    /// Contours touched by the current keyboard nudge burst. Reused
+    /// across key-repeat nudges so large glyphs don't rediscover the
+    /// selected contour by scanning every path on every arrow event.
+    pending_nudge_path_indices: Vec<usize>,
+    /// Exact point indices to move for the current keyboard nudge
+    /// burst. We cache both normal and independent movement because
+    /// Alt can change during key repeat while the selection remains
+    /// stable for the burst.
+    pending_nudge_move_indices: Vec<(usize, Vec<usize>)>,
+    pending_nudge_independent_move_indices: Vec<(usize, Vec<usize>)>,
 }
 
 impl GlyphEditor {
+    fn clear_pending_nudge_snapshot(&mut self) {
+        self.pending_nudge_snapshot = None;
+        self.pending_nudge_path_indices.clear();
+        self.pending_nudge_move_indices.clear();
+        self.pending_nudge_independent_move_indices.clear();
+    }
+
     fn commit_pending_nudge_snapshot(&mut self) {
         let Some(snapshot) = self.pending_nudge_snapshot.take() else {
+            self.pending_nudge_path_indices.clear();
+            self.pending_nudge_move_indices.clear();
+            self.pending_nudge_independent_move_indices.clear();
             return;
         };
+        self.pending_nudge_path_indices.clear();
+        self.pending_nudge_move_indices.clear();
+        self.pending_nudge_independent_move_indices.clear();
         if self.state.edit_revision() != snapshot.edit_revision() {
             self.undo.add_undo_group(snapshot);
         }
@@ -1223,17 +1246,79 @@ impl GlyphEditor {
         out.extend_from_slice(&[0.0; 9]);
         if let Some((count, bounds)) = result.bounds {
             let reference = self.state.selection_reference_point(bounds);
-            out[1] = 1.0;
-            out[2] = count as f64;
-            out[3] = reference.x;
-            out[4] = reference.y;
-            out[5] = bounds.width();
-            out[6] = bounds.height();
+            out[2] = 1.0;
+            out[3] = count as f64;
+            out[4] = reference.x;
+            out[5] = reference.y;
+            out[6] = bounds.width();
+            out[7] = bounds.height();
         }
         if let Some(anchor) = result.anchor {
-            out[7] = 1.0;
-            out[8] = anchor.x;
-            out[9] = anchor.y;
+            out[8] = 1.0;
+            out[9] = anchor.x;
+            out[10] = anchor.y;
+        }
+    }
+
+    fn selected_point_bounds_for_cached_nudge_paths(&self) -> Option<(usize, Rect)> {
+        if self.state.selection.is_empty() {
+            return None;
+        }
+        let path_indices = if self.pending_nudge_path_indices.is_empty() {
+            None
+        } else {
+            Some(self.pending_nudge_path_indices.as_slice())
+        };
+        let mut count = 0usize;
+        let mut min_x = f64::INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+
+        let mut add_selected_points = |path: &crate::path::Path| {
+            for point in path.points().iter() {
+                if !self.state.selection.contains(&point.id) {
+                    continue;
+                }
+                count += 1;
+                min_x = min_x.min(point.point.x);
+                min_y = min_y.min(point.point.y);
+                max_x = max_x.max(point.point.x);
+                max_y = max_y.max(point.point.y);
+            }
+        };
+
+        if let Some(indices) = path_indices {
+            for &path_index in indices {
+                let Some(path) = self.state.paths.get(path_index) else {
+                    continue;
+                };
+                add_selected_points(path);
+            }
+        } else {
+            for path in &self.state.paths {
+                add_selected_points(path);
+            }
+        }
+
+        (count > 0).then(|| (count, Rect::new(min_x, min_y, max_x, max_y)))
+    }
+
+    fn cached_nudge_selection_result(&self) -> NudgeSelectionResult {
+        let bounds = self
+            .state
+            .selected_component_bounds()
+            .map(|bounds| (1, bounds))
+            .or_else(|| {
+                self.state
+                    .selected_anchor_bounds()
+                    .map(|bounds| (1, bounds))
+            })
+            .or_else(|| self.selected_point_bounds_for_cached_nudge_paths());
+        NudgeSelectionResult {
+            selection_count: self.state.selection_entity_count(),
+            bounds,
+            anchor: self.state.selected_anchor().map(|anchor| anchor.point),
         }
     }
 }
@@ -1259,6 +1344,9 @@ impl GlyphEditor {
             source_glyph: None,
             pending_snapshot: None,
             pending_nudge_snapshot: None,
+            pending_nudge_path_indices: Vec::new(),
+            pending_nudge_move_indices: Vec::new(),
+            pending_nudge_independent_move_indices: Vec::new(),
         })
     }
 
@@ -1275,7 +1363,7 @@ impl GlyphEditor {
         self.component_glyphs.clear();
         self.source_glyph = None;
         self.pending_snapshot = None;
-        self.pending_nudge_snapshot = None;
+        self.clear_pending_nudge_snapshot();
         Ok(())
     }
 
@@ -1292,7 +1380,7 @@ impl GlyphEditor {
         self.point_clipboard = None;
         self.component_glyphs.clear();
         self.pending_snapshot = None;
-        self.pending_nudge_snapshot = None;
+        self.clear_pending_nudge_snapshot();
         Ok(())
     }
 
@@ -1315,7 +1403,7 @@ impl GlyphEditor {
         self.undo.clear();
         self.point_clipboard = None;
         self.pending_snapshot = None;
-        self.pending_nudge_snapshot = None;
+        self.clear_pending_nudge_snapshot();
         Ok(())
     }
 
@@ -1363,7 +1451,7 @@ impl GlyphEditor {
         self.undo.clear();
         self.point_clipboard = None;
         self.pending_snapshot = None;
-        self.pending_nudge_snapshot = None;
+        self.clear_pending_nudge_snapshot();
         Ok(())
     }
 
@@ -1389,7 +1477,7 @@ impl GlyphEditor {
         self.undo.clear();
         self.point_clipboard = None;
         self.pending_snapshot = None;
-        self.pending_nudge_snapshot = None;
+        self.clear_pending_nudge_snapshot();
         Ok(true)
     }
 
@@ -1468,8 +1556,21 @@ impl GlyphEditor {
 
     pub fn render(&mut self) -> Result<(), JsValue> {
         let text_mode_active = self.tool.is_text() && self.state.has_text_session;
-        self.renderer
-            .render(&self.state, self.tool.is_preview(), text_mode_active)
+        let preview_mode = self.tool.is_preview();
+        if self.pending_nudge_snapshot.is_some()
+            && !self.pending_nudge_path_indices.is_empty()
+            && !preview_mode
+        {
+            self.renderer.render_changed_paths(
+                &self.state,
+                &self.pending_nudge_path_indices,
+                preview_mode,
+                text_mode_active,
+            )
+        } else {
+            self.renderer
+                .render(&self.state, preview_mode, text_mode_active)
+        }
     }
 
     #[wasm_bindgen(js_name = setTool)]
@@ -1905,7 +2006,7 @@ impl GlyphEditor {
         let revision = self.state.edit_revision();
         self.mouse.cancel(&mut self.tool, &mut self.state);
         self.pending_snapshot = None;
-        self.pending_nudge_snapshot = None;
+        self.clear_pending_nudge_snapshot();
         self.state.edit_revision() != revision
     }
 
@@ -2475,8 +2576,70 @@ impl GlyphEditor {
         ctrl: bool,
         independent: bool,
     ) -> bool {
-        self.nudge_selection_result(dx, dy, shift, ctrl, independent)
-            .is_some()
+        self.nudge_selection_fast(dx, dy, shift, ctrl, independent)
+    }
+
+    #[wasm_bindgen(js_name = nudgeSelectionFastState)]
+    pub fn nudge_selection_fast_state(
+        &mut self,
+        dx: f64,
+        dy: f64,
+        shift: bool,
+        ctrl: bool,
+        independent: bool,
+    ) -> Vec<f64> {
+        if !self.nudge_selection_fast(dx, dy, shift, ctrl, independent) {
+            return vec![0.0];
+        }
+        let mut out = Vec::with_capacity(11);
+        out.push(1.0);
+        self.push_nudge_selection_result_values(&mut out, self.cached_nudge_selection_result());
+        out
+    }
+
+    fn nudge_selection_fast(
+        &mut self,
+        dx: f64,
+        dy: f64,
+        shift: bool,
+        ctrl: bool,
+        independent: bool,
+    ) -> bool {
+        if self.state.selection_entity_count() == 0 {
+            return false;
+        }
+        if self.pending_nudge_snapshot.is_none() {
+            self.pending_nudge_snapshot = Some(self.state.clone());
+            self.pending_nudge_path_indices = self.state.selected_point_path_indices();
+            self.pending_nudge_move_indices = self.state.selected_point_path_move_indices(false);
+            self.pending_nudge_independent_move_indices =
+                self.state.selected_point_path_move_indices(true);
+        }
+        if self.pending_nudge_move_indices.is_empty()
+            && self.pending_nudge_independent_move_indices.is_empty()
+            && self.state.selected_component.is_none()
+            && self.state.selected_anchor.is_none()
+        {
+            self.pending_nudge_move_indices = self.state.selected_point_path_move_indices(false);
+            self.pending_nudge_independent_move_indices =
+                self.state.selected_point_path_move_indices(true);
+        }
+        let changed =
+            if self.state.selected_component.is_some() || self.state.selected_anchor.is_some() {
+                self.state.nudge_selection(dx, dy, shift, ctrl, independent)
+            } else {
+                let move_indices = if independent {
+                    &self.pending_nudge_independent_move_indices
+                } else {
+                    &self.pending_nudge_move_indices
+                };
+                self.state
+                    .nudge_selection_for_move_indices(dx, dy, shift, ctrl, move_indices)
+            };
+        if changed {
+            self.pending_snapshot = None;
+        }
+        changed
     }
 
     fn nudge_selection_result(
@@ -2492,10 +2655,22 @@ impl GlyphEditor {
         }
         if self.pending_nudge_snapshot.is_none() {
             self.pending_nudge_snapshot = Some(self.state.clone());
+            self.pending_nudge_path_indices = self.state.selected_point_path_indices();
         }
-        let result = self
-            .state
-            .nudge_selection_result(dx, dy, shift, ctrl, independent)?;
+        let result =
+            if self.state.selected_component.is_some() || self.state.selected_anchor.is_some() {
+                self.state
+                    .nudge_selection_result(dx, dy, shift, ctrl, independent)?
+            } else {
+                self.state.nudge_selection_result_for_paths(
+                    dx,
+                    dy,
+                    shift,
+                    ctrl,
+                    independent,
+                    &self.pending_nudge_path_indices,
+                )?
+            };
         self.pending_snapshot = None;
         Some(result)
     }

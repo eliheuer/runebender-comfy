@@ -9,7 +9,8 @@
 use kurbo::{Affine, BezPath, Circle, Ellipse, Line, Point, Rect, Stroke};
 use runebender_core::theme;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, hash_map::DefaultHasher};
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use vello::peniko::{Fill, color::AlphaColor};
 use vello::wgpu;
@@ -21,6 +22,7 @@ use web_sys::HtmlCanvasElement;
 use crate::editor::{
     EditorState, KnifePreview, MeasurePreview, PenPreview, SegmentHoverPreview, ShapePreview,
 };
+use crate::model::EntityId;
 use crate::path::{Path, PathPoint, PointType};
 use crate::text::TextLayout;
 
@@ -266,6 +268,9 @@ pub struct Renderer {
     scene: Scene,
     theme: CanvasTheme,
     editable_outline_cache: Option<EditableOutlineCacheEntry>,
+    path_outline_cache: HashMap<EntityId, PathOutlineCacheEntry>,
+    edit_controls_cache: HashMap<EntityId, EditControlsCacheEntry>,
+    design_grid_cache: Vec<DesignGridCacheEntry>,
     text_outline_cache: HashMap<String, TextOutlineCacheEntry>,
     device_scale: f64,
     width: u32,
@@ -275,8 +280,172 @@ pub struct Renderer {
 #[derive(Clone)]
 struct EditableOutlineCacheEntry {
     edit_revision: u64,
-    path_signature: u64,
     path: Rc<BezPath>,
+}
+
+#[derive(Clone)]
+struct PathOutlineCacheEntry {
+    signature: u64,
+    path: Rc<BezPath>,
+}
+
+#[derive(Clone)]
+struct EditControlsCacheEntry {
+    key: EditControlsCacheKey,
+    geometry: Rc<EditControlsGeometry>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct EditControlsCacheKey {
+    path_signature: u64,
+    selection_signature: u64,
+    view_coeffs: [u64; 6],
+    point_scale_bits: u64,
+}
+
+impl EditControlsCacheKey {
+    fn new(
+        path: &Path,
+        selection: &crate::editing::Selection,
+        view: Affine,
+        point_scale: f64,
+    ) -> Self {
+        Self {
+            path_signature: path_outline_signature(path),
+            selection_signature: path_selection_signature(path, selection),
+            view_coeffs: view.as_coeffs().map(f64::to_bits),
+            point_scale_bits: point_scale.to_bits(),
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+struct EditControlsGeometry {
+    handle_lines: BezPath,
+    smooth_circles: BezPath,
+    corner_squares: BezPath,
+    offcurve_circles: BezPath,
+    hyper_circles: BezPath,
+    selected_circles: BezPath,
+    selected_squares: BezPath,
+    start_arrow: Option<StartArrowGeometry>,
+}
+
+impl EditControlsGeometry {
+    fn with_capacity(capacity: EditControlsGeometryCapacity) -> Self {
+        Self {
+            handle_lines: BezPath::with_capacity(capacity.handle_lines),
+            smooth_circles: BezPath::with_capacity(capacity.smooth_circles),
+            corner_squares: BezPath::with_capacity(capacity.corner_squares),
+            offcurve_circles: BezPath::with_capacity(capacity.offcurve_circles),
+            hyper_circles: BezPath::with_capacity(capacity.hyper_circles),
+            selected_circles: BezPath::with_capacity(capacity.selected_circles),
+            selected_squares: BezPath::with_capacity(capacity.selected_squares),
+            start_arrow: None,
+        }
+    }
+
+    fn capacity(&self) -> EditControlsGeometryCapacity {
+        EditControlsGeometryCapacity {
+            handle_lines: self.handle_lines.elements().len(),
+            smooth_circles: self.smooth_circles.elements().len(),
+            corner_squares: self.corner_squares.elements().len(),
+            offcurve_circles: self.offcurve_circles.elements().len(),
+            hyper_circles: self.hyper_circles.elements().len(),
+            selected_circles: self.selected_circles.elements().len(),
+            selected_squares: self.selected_squares.elements().len(),
+        }
+    }
+
+    fn append(&mut self, other: &Self) {
+        append_bezpath(&mut self.handle_lines, &other.handle_lines);
+        append_bezpath(&mut self.smooth_circles, &other.smooth_circles);
+        append_bezpath(&mut self.corner_squares, &other.corner_squares);
+        append_bezpath(&mut self.offcurve_circles, &other.offcurve_circles);
+        append_bezpath(&mut self.hyper_circles, &other.hyper_circles);
+        append_bezpath(&mut self.selected_circles, &other.selected_circles);
+        append_bezpath(&mut self.selected_squares, &other.selected_squares);
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct EditControlsGeometryCapacity {
+    handle_lines: usize,
+    smooth_circles: usize,
+    corner_squares: usize,
+    offcurve_circles: usize,
+    hyper_circles: usize,
+    selected_circles: usize,
+    selected_squares: usize,
+}
+
+impl EditControlsGeometryCapacity {
+    fn add(&mut self, other: Self) {
+        self.handle_lines += other.handle_lines;
+        self.smooth_circles += other.smooth_circles;
+        self.corner_squares += other.corner_squares;
+        self.offcurve_circles += other.offcurve_circles;
+        self.hyper_circles += other.hyper_circles;
+        self.selected_circles += other.selected_circles;
+        self.selected_squares += other.selected_squares;
+    }
+}
+
+#[derive(Clone, Copy)]
+struct StartArrowGeometry {
+    center: Point,
+    next: Point,
+    selected: bool,
+}
+
+#[derive(Clone)]
+struct DesignGridCacheEntry {
+    key: DesignGridCacheKey,
+    fine_path: Rc<BezPath>,
+    coarse_path: Rc<BezPath>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct DesignGridCacheKey {
+    spacing_bits: u64,
+    coarse_n: u32,
+    width: u32,
+    height: u32,
+    view_coeffs: [u64; 6],
+    bounds: [u64; 4],
+    origin: [u64; 2],
+}
+
+impl DesignGridCacheKey {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        spacing: f64,
+        coarse_n: u32,
+        width: u32,
+        height: u32,
+        view: Affine,
+        min_x: f64,
+        max_x: f64,
+        min_y: f64,
+        max_y: f64,
+        origin_x: f64,
+        origin_y: f64,
+    ) -> Self {
+        Self {
+            spacing_bits: spacing.to_bits(),
+            coarse_n,
+            width,
+            height,
+            view_coeffs: view.as_coeffs().map(f64::to_bits),
+            bounds: [
+                min_x.to_bits(),
+                max_x.to_bits(),
+                min_y.to_bits(),
+                max_y.to_bits(),
+            ],
+            origin: [origin_x.to_bits(), origin_y.to_bits()],
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -338,7 +507,7 @@ impl Renderer {
             width,
             height,
             present_mode: wgpu::PresentMode::AutoVsync,
-            desired_maximum_frame_latency: 2,
+            desired_maximum_frame_latency: 1,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
         };
@@ -370,6 +539,9 @@ impl Renderer {
             scene: Scene::new(),
             theme: CanvasTheme::default(),
             editable_outline_cache: None,
+            path_outline_cache: HashMap::new(),
+            edit_controls_cache: HashMap::new(),
+            design_grid_cache: Vec::new(),
             text_outline_cache: HashMap::new(),
             device_scale: 1.0,
             width,
@@ -381,6 +553,7 @@ impl Renderer {
         let input: CanvasThemeInput = serde_json::from_str(theme_json)
             .map_err(|e| JsValue::from_str(&format!("parse canvas theme: {e}")))?;
         self.theme.apply_input(input);
+        self.design_grid_cache.clear();
         Ok(())
     }
 
@@ -396,10 +569,15 @@ impl Renderer {
         self.target_view = target_view;
         self.width = width;
         self.height = height;
+        self.design_grid_cache.clear();
     }
 
     pub fn set_device_scale(&mut self, scale: f64) {
-        self.device_scale = scale.clamp(1.0, 8.0);
+        let next = scale.clamp(1.0, 8.0);
+        if (self.device_scale - next).abs() > f64::EPSILON {
+            self.device_scale = next;
+            self.design_grid_cache.clear();
+        }
     }
 
     fn px(&self, value: f64) -> f64 {
@@ -466,11 +644,35 @@ impl Renderer {
         text_mode_active: bool,
     ) -> Result<(), JsValue> {
         self.scene.reset();
-        self.draw_state(state, preview_mode, text_mode_active);
+        self.draw_state(state, preview_mode, text_mode_active, None);
         self.present()
     }
 
-    fn draw_state(&mut self, state: &EditorState, preview_mode: bool, text_mode_active: bool) {
+    /// Paint one frame while a keyboard nudge burst is active.
+    ///
+    /// The editor already knows which contours are being translated
+    /// during a nudge burst, so reuse cached geometry for all other
+    /// contours and only rebuild the paths that actually changed.
+    pub fn render_changed_paths(
+        &mut self,
+        state: &EditorState,
+        changed_path_indices: &[usize],
+        preview_mode: bool,
+        text_mode_active: bool,
+    ) -> Result<(), JsValue> {
+        self.scene.reset();
+        let changed_paths = changed_path_indices.iter().copied().collect::<HashSet<_>>();
+        self.draw_state(state, preview_mode, text_mode_active, Some(&changed_paths));
+        self.present()
+    }
+
+    fn draw_state(
+        &mut self,
+        state: &EditorState,
+        preview_mode: bool,
+        text_mode_active: bool,
+        changed_path_indices: Option<&HashSet<usize>>,
+    ) {
         let view = state.viewport.affine();
         let has_text_session = state.has_text_session;
         let text_layout =
@@ -506,7 +708,7 @@ impl Renderer {
                 text_layout.as_ref(),
             );
             if !preview_mode && !text_mode_active {
-                self.draw_edit_controls(state, glyph_view);
+                self.draw_edit_controls(state, glyph_view, changed_path_indices);
             }
             return;
         }
@@ -516,7 +718,10 @@ impl Renderer {
         // NonZero winding rule treats opposite-wound inner contours as
         // holes (UFO/PostScript convention). Filling each contour
         // separately would paint counters solid.
-        let outline = self.editable_outline_path(state);
+        let outline = changed_path_indices
+            .filter(|indices| !indices.is_empty() && !preview_mode)
+            .map(|indices| self.editable_outline_path_for_changed_paths(state, indices))
+            .unwrap_or_else(|| self.editable_outline_path(state));
         if preview_mode {
             let mut combined = outline.as_ref().clone();
             for component in &state.component_previews {
@@ -583,18 +788,47 @@ impl Renderer {
                 );
             }
         }
-        self.draw_edit_controls(state, glyph_view);
+        self.draw_edit_controls(state, glyph_view, changed_path_indices);
     }
 
-    fn draw_edit_controls(&mut self, state: &EditorState, glyph_view: Affine) {
+    fn draw_edit_controls(
+        &mut self,
+        state: &EditorState,
+        glyph_view: Affine,
+        changed_path_indices: Option<&HashSet<usize>>,
+    ) {
         // Handle lines and points are drawn in screen space so they
         // stay at constant pixel size regardless of zoom.
-        for path in &state.paths {
-            self.draw_handle_lines(path, glyph_view);
+        let point_scale = self.point_scale(state.viewport.zoom);
+        let mut current_path_ids = HashSet::with_capacity(state.paths.len());
+        let mut controls_by_path = Vec::with_capacity(state.paths.len());
+        let mut combined_capacity = EditControlsGeometryCapacity::default();
+        let mut start_arrows = Vec::new();
+        for (index, path) in state.paths.iter().enumerate() {
+            let id = path_id(path);
+            current_path_ids.insert(id);
+            let controls = self.edit_controls_for_path(
+                index,
+                path,
+                glyph_view,
+                &state.selection,
+                point_scale,
+                changed_path_indices,
+            );
+            combined_capacity.add(controls.capacity());
+            if let Some(start_arrow) = controls.start_arrow {
+                start_arrows.push(start_arrow);
+            }
+            controls_by_path.push(controls);
         }
-        for path in &state.paths {
-            self.draw_points(path, glyph_view, &state.selection, state.viewport.zoom);
+        self.edit_controls_cache
+            .retain(|id, _| current_path_ids.contains(id));
+        let mut combined = EditControlsGeometry::with_capacity(combined_capacity);
+        for controls in &controls_by_path {
+            combined.append(controls);
         }
+        self.draw_edit_controls_geometry(&combined, &start_arrows, point_scale);
+
         self.draw_propagated_anchors(state, glyph_view);
         self.draw_anchors(state, glyph_view);
 
@@ -830,20 +1064,129 @@ impl Renderer {
 
     fn editable_outline_path(&mut self, state: &EditorState) -> Rc<BezPath> {
         let edit_revision = state.edit_revision();
-        let path_signature = editable_outline_signature(state);
         if let Some(entry) = &self.editable_outline_cache {
-            if entry.edit_revision == edit_revision && entry.path_signature == path_signature {
+            if entry.edit_revision == edit_revision {
                 return Rc::clone(&entry.path);
             }
         }
 
-        let path = Rc::new(build_editable_outline_path(state));
+        let path = self.build_editable_outline_path_with_cache(state);
+        let path = Rc::new(path);
         self.editable_outline_cache = Some(EditableOutlineCacheEntry {
             edit_revision,
-            path_signature,
             path: Rc::clone(&path),
         });
         path
+    }
+
+    fn editable_outline_path_for_changed_paths(
+        &mut self,
+        state: &EditorState,
+        changed_path_indices: &HashSet<usize>,
+    ) -> Rc<BezPath> {
+        let mut current_path_ids = HashSet::with_capacity(state.paths.len());
+        let mut path_outlines = Vec::with_capacity(state.paths.len());
+        let mut combined_capacity = 0usize;
+
+        for (index, path) in state.paths.iter().enumerate() {
+            let id = path_id(path);
+            current_path_ids.insert(id);
+            let path_changed = changed_path_indices.contains(&index);
+            let cached = (!path_changed)
+                .then(|| {
+                    self.path_outline_cache
+                        .get(&id)
+                        .map(|entry| Rc::clone(&entry.path))
+                })
+                .flatten();
+            let path_outline = if let Some(cached) = cached {
+                cached
+            } else {
+                let signature = path_outline_signature(path);
+                let cached = self
+                    .path_outline_cache
+                    .get(&id)
+                    .filter(|entry| entry.signature == signature)
+                    .map(|entry| Rc::clone(&entry.path));
+                if let Some(cached) = cached {
+                    cached
+                } else {
+                    let mut outline = BezPath::new();
+                    path.append_to_bezpath(&mut outline);
+                    let outline = Rc::new(outline);
+                    self.path_outline_cache.insert(
+                        id,
+                        PathOutlineCacheEntry {
+                            signature,
+                            path: Rc::clone(&outline),
+                        },
+                    );
+                    outline
+                }
+            };
+            combined_capacity += path_outline.elements().len();
+            path_outlines.push(path_outline);
+        }
+
+        self.path_outline_cache
+            .retain(|id, _| current_path_ids.contains(id));
+
+        let mut combined = BezPath::with_capacity(combined_capacity);
+        for path_outline in &path_outlines {
+            append_bezpath(&mut combined, path_outline);
+        }
+
+        let path = Rc::new(combined);
+        self.editable_outline_cache = Some(EditableOutlineCacheEntry {
+            edit_revision: state.edit_revision(),
+            path: Rc::clone(&path),
+        });
+        path
+    }
+
+    fn build_editable_outline_path_with_cache(&mut self, state: &EditorState) -> BezPath {
+        let mut current_path_ids = HashSet::with_capacity(state.paths.len());
+        let mut path_outlines = Vec::with_capacity(state.paths.len());
+        let mut combined_capacity = 0usize;
+
+        for path in &state.paths {
+            let id = path_id(path);
+            let signature = path_outline_signature(path);
+            current_path_ids.insert(id);
+
+            let cached = self
+                .path_outline_cache
+                .get(&id)
+                .filter(|entry| entry.signature == signature)
+                .map(|entry| Rc::clone(&entry.path));
+            let path_outline = if let Some(cached) = cached {
+                cached
+            } else {
+                let mut outline = BezPath::new();
+                path.append_to_bezpath(&mut outline);
+                let outline = Rc::new(outline);
+                self.path_outline_cache.insert(
+                    id,
+                    PathOutlineCacheEntry {
+                        signature,
+                        path: Rc::clone(&outline),
+                    },
+                );
+                outline
+            };
+            combined_capacity += path_outline.elements().len();
+            path_outlines.push(path_outline);
+        }
+
+        self.path_outline_cache
+            .retain(|id, _| current_path_ids.contains(id));
+
+        let mut combined = BezPath::with_capacity(combined_capacity);
+        for path_outline in &path_outlines {
+            append_bezpath(&mut combined, path_outline);
+        }
+
+        combined
     }
 
     fn text_preview_path(&mut self, glyph_name: &str, outline: &str) -> Option<Rc<BezPath>> {
@@ -977,19 +1320,130 @@ impl Renderer {
         );
     }
 
-    /// Draw thin lines connecting each on-curve point to its
-    /// IMMEDIATELY-adjacent off-curve handle, in either direction.
-    /// Matches runebender-xilem's `draw_control_handles` —
-    /// iterating off-curves and searching for the nearest on-curve
-    /// would leap over intermediate off-curves and draw lines across
-    /// the glyph.
-    fn draw_handle_lines(&mut self, path: &Path, view: Affine) {
+    fn edit_controls_for_path(
+        &mut self,
+        path_index: usize,
+        path: &Path,
+        view: Affine,
+        selection: &crate::editing::Selection,
+        point_scale: f64,
+        changed_path_indices: Option<&HashSet<usize>>,
+    ) -> Rc<EditControlsGeometry> {
+        let id = path_id(path);
+        let path_changed = changed_path_indices
+            .map(|indices| indices.contains(&path_index))
+            .unwrap_or(true);
+        if !path_changed {
+            let view_coeffs = view.as_coeffs().map(f64::to_bits);
+            let point_scale_bits = point_scale.to_bits();
+            if let Some(entry) = self.edit_controls_cache.get(&id)
+                && entry.key.view_coeffs == view_coeffs
+                && entry.key.point_scale_bits == point_scale_bits
+            {
+                return Rc::clone(&entry.geometry);
+            }
+        }
+        let key = EditControlsCacheKey::new(path, selection, view, point_scale);
+        if let Some(entry) = self.edit_controls_cache.get(&id)
+            && entry.key == key
+        {
+            return Rc::clone(&entry.geometry);
+        }
+        let geometry = Rc::new(Self::build_edit_controls_geometry(
+            path,
+            view,
+            selection,
+            point_scale,
+        ));
+        self.edit_controls_cache.insert(
+            id,
+            EditControlsCacheEntry {
+                key,
+                geometry: Rc::clone(&geometry),
+            },
+        );
+        geometry
+    }
+
+    fn draw_edit_controls_geometry(
+        &mut self,
+        controls: &EditControlsGeometry,
+        start_arrows: &[StartArrowGeometry],
+        point_scale: f64,
+    ) {
+        if !controls.handle_lines.elements().is_empty() {
+            self.scene.stroke(
+                &Stroke::new(self.px(HANDLE_LINE_PX)),
+                Affine::IDENTITY,
+                self.theme.handle_line,
+                None,
+                &controls.handle_lines,
+            );
+        }
+        let outline_stroke = Stroke::new(POINT_OUTLINE_PX * point_scale);
+        self.draw_point_batch(
+            &controls.smooth_circles,
+            self.theme.point_smooth_inner,
+            self.theme.point_smooth_outer,
+            &outline_stroke,
+        );
+        self.draw_point_batch(
+            &controls.corner_squares,
+            self.theme.point_corner_inner,
+            self.theme.point_corner_outer,
+            &outline_stroke,
+        );
+        self.draw_point_batch(
+            &controls.offcurve_circles,
+            self.theme.point_offcurve_inner,
+            self.theme.point_offcurve_outer,
+            &outline_stroke,
+        );
+        self.draw_point_batch(
+            &controls.hyper_circles,
+            self.theme.point_hyper_inner,
+            self.theme.point_hyper_outer,
+            &outline_stroke,
+        );
+        self.draw_point_batch(
+            &controls.selected_circles,
+            self.theme.point_selected_inner,
+            self.theme.point_selected_outer,
+            &outline_stroke,
+        );
+        self.draw_point_batch(
+            &controls.selected_squares,
+            self.theme.point_selected_inner,
+            self.theme.point_selected_outer,
+            &outline_stroke,
+        );
+        for start_arrow in start_arrows {
+            self.draw_start_arrow(
+                start_arrow.center,
+                start_arrow.next,
+                start_arrow.selected,
+                point_scale,
+            );
+        }
+    }
+
+    fn build_edit_controls_geometry(
+        path: &Path,
+        view: Affine,
+        selection: &crate::editing::Selection,
+        point_scale: f64,
+    ) -> EditControlsGeometry {
+        let mut geometry = Self::build_point_geometry(path, view, selection, point_scale);
+        geometry.handle_lines = Self::build_handle_lines(path, view);
+        geometry
+    }
+
+    fn build_handle_lines(path: &Path, view: Affine) -> BezPath {
         let points = path.points().as_slice();
         if points.len() < 2 {
-            return;
+            return BezPath::new();
         }
         let closed = path_is_closed(path);
-        let stroke = Stroke::new(self.px(HANDLE_LINE_PX));
         let mut lines = BezPath::new();
         let n = points.len();
         for (i, pt) in points.iter().enumerate() {
@@ -1030,32 +1484,15 @@ impl Renderer {
                 lines.line_to(off);
             }
         }
-        if !lines.elements().is_empty() {
-            self.scene.stroke(
-                &stroke,
-                Affine::IDENTITY,
-                self.theme.handle_line,
-                None,
-                &lines,
-            );
-        }
+        lines
     }
 
-    /// Draw an outlined node at every PathPoint. Shape + color
-    /// depend on the point type, using the same mark palette as the glyph grid:
-    ///   - smooth on-curve  → green circle
-    ///   - corner on-curve  → orange square
-    ///   - off-curve        → purple circle
-    ///   - any selected     → yellow inner + orange outline
-    fn draw_points(
-        &mut self,
+    fn build_point_geometry(
         path: &Path,
         view: Affine,
         selection: &crate::editing::Selection,
-        zoom: f64,
-    ) {
-        let scale = self.point_scale(zoom);
-        let outline_stroke = Stroke::new(POINT_OUTLINE_PX * scale);
+        point_scale: f64,
+    ) -> EditControlsGeometry {
         let points = path.points().as_slice();
         let closed = path_is_closed(path);
         let start_index = closed
@@ -1077,7 +1514,7 @@ impl Renderer {
                     HYPER_POINT_SELECTED_RADIUS_PX
                 } else {
                     HYPER_POINT_RADIUS_PX
-                }) * scale;
+                }) * point_scale;
                 if selected {
                     append_circle_path(&mut selected_circles, center, radius);
                 } else {
@@ -1090,7 +1527,7 @@ impl Renderer {
                             SMOOTH_POINT_SELECTED_RADIUS_PX
                         } else {
                             SMOOTH_POINT_RADIUS_PX
-                        }) * scale;
+                        }) * point_scale;
                         if selected {
                             append_circle_path(&mut selected_circles, center, radius);
                         } else {
@@ -1102,7 +1539,7 @@ impl Renderer {
                             CORNER_POINT_SELECTED_HALF_PX
                         } else {
                             CORNER_POINT_HALF_PX
-                        }) * scale;
+                        }) * point_scale;
                         let target = if selected {
                             &mut selected_squares
                         } else {
@@ -1123,7 +1560,7 @@ impl Renderer {
                             OFFCURVE_POINT_SELECTED_RADIUS_PX
                         } else {
                             OFFCURVE_POINT_RADIUS_PX
-                        }) * scale;
+                        }) * point_scale;
                         if selected {
                             append_circle_path(&mut selected_circles, center, radius);
                         } else {
@@ -1134,47 +1571,22 @@ impl Renderer {
             }
             if start_index == Some(index) {
                 let next = next_point_pos(&points, index, closed);
-                start_arrow = Some((center, view * next, selected));
+                start_arrow = Some(StartArrowGeometry {
+                    center,
+                    next: view * next,
+                    selected,
+                });
             }
         }
-        self.draw_point_batch(
-            &smooth_circles,
-            self.theme.point_smooth_inner,
-            self.theme.point_smooth_outer,
-            &outline_stroke,
-        );
-        self.draw_point_batch(
-            &corner_squares,
-            self.theme.point_corner_inner,
-            self.theme.point_corner_outer,
-            &outline_stroke,
-        );
-        self.draw_point_batch(
-            &offcurve_circles,
-            self.theme.point_offcurve_inner,
-            self.theme.point_offcurve_outer,
-            &outline_stroke,
-        );
-        self.draw_point_batch(
-            &hyper_circles,
-            self.theme.point_hyper_inner,
-            self.theme.point_hyper_outer,
-            &outline_stroke,
-        );
-        self.draw_point_batch(
-            &selected_circles,
-            self.theme.point_selected_inner,
-            self.theme.point_selected_outer,
-            &outline_stroke,
-        );
-        self.draw_point_batch(
-            &selected_squares,
-            self.theme.point_selected_inner,
-            self.theme.point_selected_outer,
-            &outline_stroke,
-        );
-        if let Some((center, next, selected)) = start_arrow {
-            self.draw_start_arrow(center, next, selected, scale);
+        EditControlsGeometry {
+            handle_lines: BezPath::new(),
+            smooth_circles,
+            corner_squares,
+            offcurve_circles,
+            hyper_circles,
+            selected_circles,
+            selected_squares,
+            start_arrow,
         }
     }
 
@@ -1366,40 +1778,9 @@ impl Renderer {
     ) {
         let fine_stroke = Stroke::new(DESIGN_GRID_FINE_LINE_PX);
         let coarse_stroke = Stroke::new(DESIGN_GRID_COARSE_LINE_PX);
-        let mut fine_path = BezPath::new();
-        let mut coarse_path = BezPath::new();
-        let start_x = ((min_x - origin_x) / spacing).floor() as i64;
-        let end_x = ((max_x - origin_x) / spacing).ceil() as i64;
-        let start_y = ((min_y - origin_y) / spacing).floor() as i64;
-        let end_y = ((max_y - origin_y) / spacing).ceil() as i64;
-
-        for ix in start_x..=end_x {
-            let x = origin_x + ix as f64 * spacing;
-            let is_coarse = coarse_n > 0 && (ix.unsigned_abs() % coarse_n as u64 == 0);
-            let path = if is_coarse {
-                &mut coarse_path
-            } else {
-                &mut fine_path
-            };
-            let p0 = view * Point::new(x, min_y);
-            let p1 = view * Point::new(x, max_y);
-            path.move_to(p0);
-            path.line_to(p1);
-        }
-
-        for iy in start_y..=end_y {
-            let y = origin_y + iy as f64 * spacing;
-            let is_coarse = coarse_n > 0 && (iy.unsigned_abs() % coarse_n as u64 == 0);
-            let path = if is_coarse {
-                &mut coarse_path
-            } else {
-                &mut fine_path
-            };
-            let p0 = view * Point::new(min_x, y);
-            let p1 = view * Point::new(max_x, y);
-            path.move_to(p0);
-            path.line_to(p1);
-        }
+        let (fine_path, coarse_path) = self.design_grid_paths(
+            view, spacing, coarse_n, min_x, max_x, min_y, max_y, origin_x, origin_y,
+        );
 
         if !fine_path.elements().is_empty() {
             self.scene.stroke(
@@ -1407,7 +1788,7 @@ impl Renderer {
                 Affine::IDENTITY,
                 self.theme.design_grid_fine,
                 None,
-                &fine_path,
+                fine_path.as_ref(),
             );
         }
         if !coarse_path.elements().is_empty() {
@@ -1416,9 +1797,55 @@ impl Renderer {
                 Affine::IDENTITY,
                 self.theme.design_grid_coarse,
                 None,
-                &coarse_path,
+                coarse_path.as_ref(),
             );
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn design_grid_paths(
+        &mut self,
+        view: Affine,
+        spacing: f64,
+        coarse_n: u32,
+        min_x: f64,
+        max_x: f64,
+        min_y: f64,
+        max_y: f64,
+        origin_x: f64,
+        origin_y: f64,
+    ) -> (Rc<BezPath>, Rc<BezPath>) {
+        let key = DesignGridCacheKey::new(
+            spacing,
+            coarse_n,
+            self.width,
+            self.height,
+            view,
+            min_x,
+            max_x,
+            min_y,
+            max_y,
+            origin_x,
+            origin_y,
+        );
+        if let Some(entry) = self.design_grid_cache.iter().find(|entry| entry.key == key) {
+            return (Rc::clone(&entry.fine_path), Rc::clone(&entry.coarse_path));
+        }
+
+        let (fine_path, coarse_path) = build_grid_level_paths(
+            view, spacing, coarse_n, min_x, max_x, min_y, max_y, origin_x, origin_y,
+        );
+        let fine_path = Rc::new(fine_path);
+        let coarse_path = Rc::new(coarse_path);
+        self.design_grid_cache.push(DesignGridCacheEntry {
+            key,
+            fine_path: Rc::clone(&fine_path),
+            coarse_path: Rc::clone(&coarse_path),
+        });
+        if self.design_grid_cache.len() > 4 {
+            self.design_grid_cache.remove(0);
+        }
+        (fine_path, coarse_path)
     }
 
     fn draw_marquee(&mut self, rect: kurbo::Rect) {
@@ -1771,34 +2198,110 @@ fn next_point_pos(points: &[PathPoint], index: usize, closed: bool) -> Point {
     }
 }
 
-fn editable_outline_signature(state: &EditorState) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    hash = hash_outline_part(hash, state.paths.len() as u64);
-    for path in &state.paths {
-        let kind = match path {
-            Path::Cubic(_) => 1,
-            Path::Quadratic(_) => 2,
-            Path::Hyper(_) => 3,
-        };
-        let points = path.points().as_slice();
-        hash = hash_outline_part(hash, kind);
-        hash = hash_outline_part(hash, points.as_ptr() as usize as u64);
-        hash = hash_outline_part(hash, points.len() as u64);
-    }
-    hash
-}
-
 fn hash_outline_part(mut hash: u64, value: u64) -> u64 {
     hash ^= value;
     hash.wrapping_mul(0x100000001b3)
 }
 
-fn build_editable_outline_path(state: &EditorState) -> BezPath {
-    let mut combined = BezPath::new();
-    for path in &state.paths {
-        path.append_to_bezpath(&mut combined);
+fn path_id(path: &Path) -> EntityId {
+    match path {
+        Path::Cubic(path) => path.id,
+        Path::Quadratic(path) => path.id,
+        Path::Hyper(path) => path.id,
     }
-    combined
+}
+
+fn path_outline_signature(path: &Path) -> u64 {
+    let (kind, closed) = match path {
+        Path::Cubic(path) => (1, path.closed),
+        Path::Quadratic(path) => (2, path.closed),
+        Path::Hyper(path) => (3, path.closed),
+    };
+    let points = path.points().as_slice();
+    let mut hash = hash_outline_part(0xcbf29ce484222325u64, kind);
+    hash = hash_outline_part(hash, points.len() as u64);
+    hash = hash_outline_part(hash, u64::from(closed));
+    for point in points {
+        hash = hash_outline_part(hash, hash_entity_id(point.id));
+        hash = hash_outline_part(hash, point.point.x.to_bits());
+        hash = hash_outline_part(hash, point.point.y.to_bits());
+        hash = hash_outline_part(hash, point_type_signature(point.typ));
+    }
+    hash
+}
+
+fn path_selection_signature(path: &Path, selection: &crate::editing::Selection) -> u64 {
+    let points = path.points().as_slice();
+    let mut hash = hash_outline_part(0xcbf29ce484222325u64, points.len() as u64);
+    for point in points {
+        if selection.contains(&point.id) {
+            hash = hash_outline_part(hash, hash_entity_id(point.id));
+        }
+    }
+    hash
+}
+
+fn hash_entity_id(id: EntityId) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    id.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn point_type_signature(point_type: PointType) -> u64 {
+    match point_type {
+        PointType::OffCurve { auto } => u64::from(auto),
+        PointType::OnCurve { smooth } => 0x100 | u64::from(smooth),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_grid_level_paths(
+    view: Affine,
+    spacing: f64,
+    coarse_n: u32,
+    min_x: f64,
+    max_x: f64,
+    min_y: f64,
+    max_y: f64,
+    origin_x: f64,
+    origin_y: f64,
+) -> (BezPath, BezPath) {
+    let mut fine_path = BezPath::new();
+    let mut coarse_path = BezPath::new();
+    let start_x = ((min_x - origin_x) / spacing).floor() as i64;
+    let end_x = ((max_x - origin_x) / spacing).ceil() as i64;
+    let start_y = ((min_y - origin_y) / spacing).floor() as i64;
+    let end_y = ((max_y - origin_y) / spacing).ceil() as i64;
+
+    for ix in start_x..=end_x {
+        let x = origin_x + ix as f64 * spacing;
+        let is_coarse = coarse_n > 0 && (ix.unsigned_abs() % coarse_n as u64 == 0);
+        let path = if is_coarse {
+            &mut coarse_path
+        } else {
+            &mut fine_path
+        };
+        let p0 = view * Point::new(x, min_y);
+        let p1 = view * Point::new(x, max_y);
+        path.move_to(p0);
+        path.line_to(p1);
+    }
+
+    for iy in start_y..=end_y {
+        let y = origin_y + iy as f64 * spacing;
+        let is_coarse = coarse_n > 0 && (iy.unsigned_abs() % coarse_n as u64 == 0);
+        let path = if is_coarse {
+            &mut coarse_path
+        } else {
+            &mut fine_path
+        };
+        let p0 = view * Point::new(min_x, y);
+        let p1 = view * Point::new(max_x, y);
+        path.move_to(p0);
+        path.line_to(p1);
+    }
+
+    (fine_path, coarse_path)
 }
 
 fn append_rect_path(path: &mut BezPath, rect: Rect) {
@@ -1841,4 +2344,10 @@ fn append_circle_path(path: &mut BezPath, center: Point, radius: f64) {
         (center.x + radius, center.y),
     );
     path.close_path();
+}
+
+fn append_bezpath(target: &mut BezPath, source: &BezPath) {
+    for element in source.elements() {
+        target.push(*element);
+    }
 }
