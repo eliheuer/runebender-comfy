@@ -54,6 +54,47 @@ Runebender -> Compile Font -> Font Preview
   stay under your control. When the target is a linked source, the node
   writes through to the original disk source by default.
 
+`Local AI Glyph Tracing`
+: Planned workflow for generating candidate outlines from a placed
+  background image and green-marked reference glyphs. See
+  `docs/workflows/local-ai-glyph-tracing.md`.
+
+`Build Glyph Trace Request`
+: Stores the placed-image bytes, design-space transform, glyph/master
+  metadata, and metrics as a server-visible `GLYPH_TRACE_REQUEST`.
+
+`Trace To Candidate`
+: Runs the local tracing provider against a `GLYPH_TRACE_REQUEST`, forks
+  the `FONT`, writes an orange-marked candidate glyph, and returns the
+  candidate `FONT` plus report JSON.
+
+`Trace With QuiverAI`
+: Imports an exported Quiver Image-to-SVG result through the strict SVG
+  importer, writes an orange-marked candidate glyph, and returns the
+  candidate `FONT` plus report JSON. Use
+  `example_workflows/quiver-image-to-svg-manual-template.md` for the
+  Comfy Cloud side.
+
+`Trace With Comfy Cloud QuiverAI`
+: Optional automated version of the Quiver path. It uploads the
+  `GLYPH_TRACE_REQUEST` image to Comfy Cloud, submits an API-format
+  Quiver workflow with Partner Node auth in `extra_data`, downloads the
+  returned SVG, then imports it through the same strict SVG candidate
+  path. Requires an approved paid Cloud API key via `api_key` or
+  `COMFY_CLOUD_API_KEY`.
+
+`Trace Local Mask To Candidate`
+: Traces a local model's generated mask image through the local tracing
+  provider, writes an orange-marked candidate glyph, and returns the
+  candidate `FONT` plus report JSON. Use
+  `example_workflows/local-model-mask-to-trace-template.md` for the
+  local model side.
+
+`Score Candidate`
+: Reports bbox, point/contour counts, winding approximation, speckles,
+  sidebearings, and optional background-placement deltas for a candidate
+  glyph before promotion.
+
 `Specimen`
 : Renders a DrawBot-style specimen from a `FONT` wire and returns both
   `IMAGE` and `MASK` outputs. Use this when you want a scripted

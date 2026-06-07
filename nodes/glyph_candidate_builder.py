@@ -20,19 +20,10 @@ from .workspace import (
     resolve_slot,
     source_path,
 )
+from .mark_colors import MARK_COLORS, mark_color_matches, rgba_matches
 
 
 DEFAULT_DONOR = "/Users/eli/GH/repos/rubik/sources/designspace/Rubik.designspace"
-
-MARK_COLORS = {
-    "red": (1.0, 0.3, 0.3, 1.0),
-    "orange": (1.0, 0.6, 0.2, 1.0),
-    "yellow": (1.0, 0.9, 0.2, 1.0),
-    "green": (0.3, 0.7, 0.3, 1.0),
-    "blue": (0.1, 0.3, 0.8, 1.0),
-    "purple": (0.6, 0.3, 0.9, 1.0),
-    "pink": (0.9, 0.3, 0.7, 1.0),
-}
 
 DONOR_NAME_OVERRIDES = {
     "farsiYeh-ar": "yeh-farsi",
@@ -295,8 +286,7 @@ def parse_glyphs(raw: str, target: Path) -> list[str]:
 
 
 def marked_glyphs(target: Path, color_name: str) -> list[str]:
-    expected = MARK_COLORS.get(color_name)
-    if expected is None:
+    if color_name not in MARK_COLORS:
         known = ", ".join(sorted(MARK_COLORS))
         raise ValueError(f"Unknown mark color {color_name!r}; expected one of: {known}")
     glyphs: set[str] = set()
@@ -304,19 +294,9 @@ def marked_glyphs(target: Path, color_name: str) -> list[str]:
         font = open_ufo(source.path)
         for glyph in font:
             raw = glyph.lib.get("public.markColor")
-            if raw and rgba_matches(raw, expected):
+            if raw and mark_color_matches(raw, color_name):
                 glyphs.add(glyph.name)
     return sorted(glyphs)
-
-
-def rgba_matches(raw: str, expected: tuple[float, float, float, float], tolerance: float = 0.08) -> bool:
-    try:
-        values = tuple(float(part.strip()) for part in str(raw).split(","))
-    except ValueError:
-        return False
-    if len(values) != 4:
-        return False
-    return all(abs(value - target) <= tolerance for value, target in zip(values, expected, strict=True))
 
 
 def arabic_glyph_filter(glyphs: list[str]) -> list[str]:

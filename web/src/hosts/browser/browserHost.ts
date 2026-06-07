@@ -58,6 +58,20 @@ export const browserHost: RunebenderHost = {
     };
   },
 
+  async traceBackgroundGlyph() {
+    return {
+      response: unavailable(),
+      data: { error: "Background tracing requires the ComfyUI workspace host." },
+    };
+  },
+
+  async traceBackgroundCandidate() {
+    return {
+      response: unavailable(),
+      data: { error: "Background candidate tracing requires the ComfyUI workspace host." },
+    };
+  },
+
   async invalidateWorkspacePath() {
     // No compiled workspace cache exists in standalone browser builds.
   },

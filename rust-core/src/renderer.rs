@@ -23,7 +23,7 @@ use crate::editor::{
     EditorState, KnifePreview, MeasurePreview, PenPreview, SegmentHoverPreview, ShapePreview,
 };
 use crate::model::EntityId;
-use crate::path::{Path, PathPoint, PointType};
+use crate::path::{Path, PathPoint, PointType, Segment};
 use crate::text::TextLayout;
 
 // ============================================================================
@@ -38,7 +38,6 @@ const fn srgb(color: theme::ColorRgba) -> Srgb {
 
 const BG: Srgb = srgb(theme::app::BACKGROUND);
 const PATH_STROKE: Srgb = srgb(theme::path::STROKE);
-const PATH_EDIT_FILL: Srgb = AlphaColor::from_rgba8(0x60, 0x60, 0x60, 0x22);
 const PREVIEW_FILL: Srgb = srgb(theme::path::PREVIEW_FILL);
 const COMPONENT_FILL: Srgb = srgb(theme::component::FILL);
 const COMPONENT_SELECTED_FILL: Srgb = srgb(theme::component::SELECTED_FILL);
@@ -75,7 +74,6 @@ const TEXT_KERN_PREVIOUS: Srgb = srgb(theme::kerning::PREVIOUS_GLYPH);
 struct CanvasTheme {
     bg: Srgb,
     path_stroke: Srgb,
-    path_edit_fill: Srgb,
     preview_fill: Srgb,
     component_fill: Srgb,
     component_selected_fill: Srgb,
@@ -108,7 +106,6 @@ impl Default for CanvasTheme {
         Self {
             bg: BG,
             path_stroke: PATH_STROKE,
-            path_edit_fill: PATH_EDIT_FILL,
             preview_fill: PREVIEW_FILL,
             component_fill: COMPONENT_FILL,
             component_selected_fill: COMPONENT_SELECTED_FILL,
@@ -321,6 +318,7 @@ impl EditControlsCacheKey {
 
 #[derive(Clone, Default)]
 struct EditControlsGeometry {
+    outline: BezPath,
     handle_lines: BezPath,
     smooth_circles: BezPath,
     corner_squares: BezPath,
@@ -334,6 +332,7 @@ struct EditControlsGeometry {
 impl EditControlsGeometry {
     fn with_capacity(capacity: EditControlsGeometryCapacity) -> Self {
         Self {
+            outline: BezPath::with_capacity(capacity.outline),
             handle_lines: BezPath::with_capacity(capacity.handle_lines),
             smooth_circles: BezPath::with_capacity(capacity.smooth_circles),
             corner_squares: BezPath::with_capacity(capacity.corner_squares),
@@ -347,6 +346,7 @@ impl EditControlsGeometry {
 
     fn capacity(&self) -> EditControlsGeometryCapacity {
         EditControlsGeometryCapacity {
+            outline: self.outline.elements().len(),
             handle_lines: self.handle_lines.elements().len(),
             smooth_circles: self.smooth_circles.elements().len(),
             corner_squares: self.corner_squares.elements().len(),
@@ -358,6 +358,7 @@ impl EditControlsGeometry {
     }
 
     fn append(&mut self, other: &Self) {
+        append_bezpath(&mut self.outline, &other.outline);
         append_bezpath(&mut self.handle_lines, &other.handle_lines);
         append_bezpath(&mut self.smooth_circles, &other.smooth_circles);
         append_bezpath(&mut self.corner_squares, &other.corner_squares);
@@ -370,6 +371,7 @@ impl EditControlsGeometry {
 
 #[derive(Clone, Copy, Default)]
 struct EditControlsGeometryCapacity {
+    outline: usize,
     handle_lines: usize,
     smooth_circles: usize,
     corner_squares: usize,
@@ -381,6 +383,7 @@ struct EditControlsGeometryCapacity {
 
 impl EditControlsGeometryCapacity {
     fn add(&mut self, other: Self) {
+        self.outline += other.outline;
         self.handle_lines += other.handle_lines;
         self.smooth_circles += other.smooth_circles;
         self.corner_squares += other.corner_squares;
@@ -555,6 +558,12 @@ impl Renderer {
         self.theme.apply_input(input);
         self.design_grid_cache.clear();
         Ok(())
+    }
+
+    pub fn clear_glyph_geometry_caches(&mut self) {
+        self.editable_outline_cache = None;
+        self.path_outline_cache.clear();
+        self.edit_controls_cache.clear();
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -740,26 +749,6 @@ impl Renderer {
             }
             self.draw_text_buffer(state, view, true, text_mode_active, None);
             return;
-        }
-        if !outline.elements().is_empty() {
-            self.scene.fill(
-                Fill::NonZero,
-                glyph_view,
-                self.theme.path_edit_fill,
-                None,
-                outline.as_ref(),
-            );
-            // Edit mode: stroke the outline at a constant screen-pixel
-            // width. Transform the path into screen space first so the
-            // stroke width doesn't scale with zoom.
-            let screen_path = glyph_view * outline.as_ref();
-            self.scene.stroke(
-                &Stroke::new(self.px(PATH_STROKE_PX)),
-                Affine::IDENTITY,
-                self.theme.path_stroke,
-                None,
-                &screen_path,
-            );
         }
         for component in &state.component_previews {
             if component.transformed_path.elements().is_empty() {
@@ -980,25 +969,6 @@ impl Renderer {
             };
             let render_active_editable = !preview_mode && sort.active && !text_mode_active;
             if render_active_editable {
-                let active_outline = self.editable_outline_path(state);
-                if !active_outline.elements().is_empty() {
-                    let item_view = view * Affine::translate((item.x, item.y));
-                    self.scene.fill(
-                        Fill::NonZero,
-                        item_view,
-                        self.theme.path_edit_fill,
-                        None,
-                        active_outline.as_ref(),
-                    );
-                    let screen_path = item_view * active_outline.as_ref();
-                    self.scene.stroke(
-                        &Stroke::new(self.px(PATH_STROKE_PX)),
-                        Affine::IDENTITY,
-                        self.theme.path_stroke,
-                        None,
-                        &screen_path,
-                    );
-                }
                 for component in &state.component_previews {
                     if component.transformed_path.elements().is_empty() {
                         continue;
@@ -1371,6 +1341,15 @@ impl Renderer {
         start_arrows: &[StartArrowGeometry],
         point_scale: f64,
     ) {
+        if !controls.outline.elements().is_empty() {
+            self.scene.stroke(
+                &Stroke::new(self.px(PATH_STROKE_PX)),
+                Affine::IDENTITY,
+                self.theme.handle_line,
+                None,
+                &controls.outline,
+            );
+        }
         if !controls.handle_lines.elements().is_empty() {
             self.scene.stroke(
                 &Stroke::new(self.px(HANDLE_LINE_PX)),
@@ -1434,8 +1413,36 @@ impl Renderer {
         point_scale: f64,
     ) -> EditControlsGeometry {
         let mut geometry = Self::build_point_geometry(path, view, selection, point_scale);
+        geometry.outline = Self::build_flattened_outline(path, view);
         geometry.handle_lines = Self::build_handle_lines(path, view);
         geometry
+    }
+
+    fn build_flattened_outline(path: &Path, view: Affine) -> BezPath {
+        let segments: Vec<_> = match path {
+            Path::Cubic(cubic) => cubic.iter_segments().collect(),
+            Path::Quadratic(quadratic) => quadratic.iter_segments().collect(),
+            Path::Hyper(hyper) => hyper.iter_segments().collect(),
+        };
+        let mut outline = BezPath::new();
+        for (segment_index, segment_info) in segments.iter().enumerate() {
+            let steps = match segment_info.segment {
+                Segment::Line(_) => 1,
+                Segment::Quadratic(_) => 8,
+                Segment::Cubic(_) => 12,
+            };
+            let start = view * segment_info.segment.eval(0.0);
+            if segment_index == 0 {
+                outline.move_to(start);
+            } else {
+                outline.line_to(start);
+            }
+            for step in 1..=steps {
+                let t = step as f64 / steps as f64;
+                outline.line_to(view * segment_info.segment.eval(t));
+            }
+        }
+        outline
     }
 
     fn build_handle_lines(path: &Path, view: Affine) -> BezPath {
@@ -1579,6 +1586,7 @@ impl Renderer {
             }
         }
         EditControlsGeometry {
+            outline: BezPath::new(),
             handle_lines: BezPath::new(),
             smooth_circles,
             corner_squares,

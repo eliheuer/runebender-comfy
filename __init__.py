@@ -8,6 +8,12 @@ Nodes:
   FontPreview  — simple specimen renderer for a FONT reference
   GlyphCandidateBuilder — fork a workspace and replace marked glyphs
                  with donor-derived candidates
+  BuildGlyphTraceRequest — persist a background trace request artifact
+  TraceToCandidate — trace a request into a candidate FONT
+  TraceWithQuiverAI — import a QuiverAI SVG into a candidate FONT
+  TraceWithComfyCloudQuiverAI — run Comfy Cloud QuiverAI into a candidate
+  TraceLocalMaskToCandidate — trace a local model mask into a candidate
+  ScoreCandidate — report candidate outline review metrics
   ApplyGlyphCandidates — copy reviewed candidate glyphs back into a
                  target workspace/source
   DrawBot Skia — scriptable DrawBot renderer with IMAGE + MASK outputs
@@ -27,6 +33,14 @@ from .nodes.font_specimen import FontSpecimen
 from .nodes.fork_font import ForkFont
 from .nodes.apply_glyph_candidates import ApplyGlyphCandidates
 from .nodes.glyph_candidate_builder import GlyphCandidateBuilder
+from .nodes.glyph_trace import (
+    BuildGlyphTraceRequest,
+    ScoreCandidate,
+    TraceWithComfyCloudQuiverAI,
+    TraceLocalMaskToCandidate,
+    TraceToCandidate,
+    TraceWithQuiverAI,
+)
 from .nodes.runebender import Runebender
 from .nodes.designbot import DesignBot
 
@@ -45,6 +59,12 @@ NODE_CLASS_MAPPINGS = {
     "ForkFont": ForkFont,
     "ApplyGlyphCandidates": ApplyGlyphCandidates,
     "GlyphCandidateBuilder": GlyphCandidateBuilder,
+    "BuildGlyphTraceRequest": BuildGlyphTraceRequest,
+    "TraceToCandidate": TraceToCandidate,
+    "TraceWithQuiverAI": TraceWithQuiverAI,
+    "TraceWithComfyCloudQuiverAI": TraceWithComfyCloudQuiverAI,
+    "TraceLocalMaskToCandidate": TraceLocalMaskToCandidate,
+    "ScoreCandidate": ScoreCandidate,
     "Runebender": Runebender,
     "DesignBot": DesignBot,
 }
@@ -57,6 +77,12 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ForkFont": "Fork Font",
     "ApplyGlyphCandidates": "Apply Glyph Candidates",
     "GlyphCandidateBuilder": "Glyph Candidate Builder",
+    "BuildGlyphTraceRequest": "Build Glyph Trace Request",
+    "TraceToCandidate": "Trace To Candidate",
+    "TraceWithQuiverAI": "Trace With QuiverAI",
+    "TraceWithComfyCloudQuiverAI": "Trace With Comfy Cloud QuiverAI",
+    "TraceLocalMaskToCandidate": "Trace Local Mask To Candidate",
+    "ScoreCandidate": "Score Candidate",
     "Runebender": "Runebender",
     "DesignBot": "DesignBot",
 }

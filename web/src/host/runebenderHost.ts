@@ -53,6 +53,57 @@ export type RunebenderStatePayload = {
   glyphData: string;
 };
 
+export type TraceBackgroundGlyphArgs = {
+  slot: string;
+  master: string;
+  glyph: string;
+  image: File;
+  unicode?: string;
+  width: number;
+  targetHeight: number;
+  xOffset: number;
+  yOffset: number;
+  imageWidth?: number;
+  imageHeight?: number;
+  designX?: number;
+  designY?: number;
+  designScaleX?: number;
+  designScaleY?: number;
+  grid?: number;
+  accuracy?: number;
+  smooth?: number;
+  alphamax?: number;
+  invert?: boolean;
+  threshold?: number | null;
+};
+
+export type TraceBackgroundCandidateArgs = TraceBackgroundGlyphArgs & {
+  candidateName?: string;
+  unitsPerEm?: number;
+  ascender?: number;
+  descender?: number;
+};
+
+export type TraceBackgroundGlyphResult = {
+  success?: boolean;
+  glyph?: string;
+  glif?: string;
+  source_ufo?: string;
+  command?: string[];
+  error?: string;
+};
+
+export type TraceBackgroundCandidateResult = {
+  success?: boolean;
+  candidate_slot?: string;
+  trace_request?: string;
+  request_id?: string;
+  glyph?: string;
+  master?: string;
+  report?: Record<string, unknown>;
+  error?: string;
+};
+
 export type RunebenderHost = {
   log?(level: string, message: string): void;
   publishState(payload: RunebenderStatePayload): Promise<void>;
@@ -73,6 +124,14 @@ export type RunebenderHost = {
     destination: string;
     relink: boolean;
   }): Promise<{ response: Response; data: SaveWorkspaceAsResult }>;
+  traceBackgroundGlyph(args: TraceBackgroundGlyphArgs): Promise<{
+    response: Response;
+    data: TraceBackgroundGlyphResult;
+  }>;
+  traceBackgroundCandidate(args: TraceBackgroundCandidateArgs): Promise<{
+    response: Response;
+    data: TraceBackgroundCandidateResult;
+  }>;
   invalidateWorkspacePath(path: string): Promise<void>;
 };
 

@@ -102,6 +102,7 @@ struct GlyphBytesFingerprint {
 
 #[derive(Clone)]
 struct SourceGlyphCache {
+    name: String,
     fingerprint: Option<GlyphBytesFingerprint>,
     glyph: norad::Glyph,
 }
@@ -695,6 +696,23 @@ mod tests {
     }
 
     #[test]
+    fn unfingerprinted_source_cache_does_not_cross_glyph_names() {
+        let mut editor = GlyphEditor::new();
+        let one = norad::Glyph::parse_raw(
+            br#"<glyph name="one" format="2"><unicode hex="0031"/><advance width="300"/></glyph>"#,
+        )
+        .expect("one parses");
+        let number_sign_bytes = br#"<glyph name="numbersign" format="2"><unicode hex="0023"/><advance width="600"/></glyph>"#;
+
+        editor.cache_source_glyph(one, None);
+        let resolved = editor
+            .source_glyph_for_bytes(number_sign_bytes)
+            .expect("source glyph resolves");
+
+        assert_eq!(resolved.name.as_str(), "numbersign");
+    }
+
+    #[test]
     fn to_norad_anchor_round_trips_ufo_anchor_fields() {
         let mut state = EditorState::default();
         let glyph = norad::Glyph::parse_raw(
@@ -1035,6 +1053,7 @@ impl GlyphEditor {
         self.state.set_glyph_from_norad(glyph);
         self.state
             .set_component_previews(build_component_previews(glyph, &self.component_glyphs));
+        self.renderer.clear_glyph_geometry_caches();
     }
 
     fn set_glyph_from_norad_preserving_history_with_component_cache(
@@ -1044,6 +1063,7 @@ impl GlyphEditor {
         self.state.set_glyph_from_norad_preserving_history(glyph);
         self.state
             .set_component_previews(build_component_previews(glyph, &self.component_glyphs));
+        self.renderer.clear_glyph_geometry_caches();
     }
 
     fn cache_source_glyph(
@@ -1051,19 +1071,28 @@ impl GlyphEditor {
         glyph: norad::Glyph,
         fingerprint: Option<GlyphBytesFingerprint>,
     ) {
-        self.source_glyph = Some(SourceGlyphCache { fingerprint, glyph });
+        self.source_glyph = Some(SourceGlyphCache {
+            name: glyph.name().to_string(),
+            fingerprint,
+            glyph,
+        });
     }
 
     fn source_glyph_for_bytes(&mut self, original_bytes: &[u8]) -> Result<norad::Glyph, JsValue> {
         let fingerprint = glyph_bytes_fingerprint(original_bytes);
         if let Some(cache) = &self.source_glyph {
-            if cache.fingerprint.is_none() || cache.fingerprint == Some(fingerprint) {
+            if cache.fingerprint == Some(fingerprint) {
                 return Ok(cache.glyph.clone());
             }
         }
 
         let glyph = norad::Glyph::parse_raw(original_bytes)
             .map_err(|e| JsValue::from_str(&format!("parse .glif: {e}")))?;
+        if let Some(cache) = &self.source_glyph {
+            if cache.fingerprint.is_none() && cache.name == glyph.name().to_string() {
+                return Ok(cache.glyph.clone());
+            }
+        }
         self.cache_source_glyph(glyph.clone(), Some(fingerprint));
         Ok(glyph)
     }
@@ -1375,6 +1404,7 @@ impl GlyphEditor {
         let glyph = norad::Glyph::parse_raw(bytes)
             .map_err(|e| JsValue::from_str(&format!("parse .glif: {e}")))?;
         self.state.set_glyph_from_norad(&glyph);
+        self.renderer.clear_glyph_geometry_caches();
         self.cache_source_glyph(glyph, Some(glyph_bytes_fingerprint(bytes)));
         self.undo.clear();
         self.point_clipboard = None;
@@ -1399,6 +1429,7 @@ impl GlyphEditor {
         self.state.set_glyph_from_norad(&glyph);
         self.state
             .set_component_previews(build_component_previews(&glyph, &self.component_glyphs));
+        self.renderer.clear_glyph_geometry_caches();
         self.cache_source_glyph(glyph, Some(glyph_bytes_fingerprint(bytes)));
         self.undo.clear();
         self.point_clipboard = None;
@@ -1419,6 +1450,7 @@ impl GlyphEditor {
         self.state.set_glyph_from_norad_preserving_history(&glyph);
         self.state
             .set_component_previews(build_component_previews(&glyph, &self.component_glyphs));
+        self.renderer.clear_glyph_geometry_caches();
         self.cache_source_glyph(glyph, Some(glyph_bytes_fingerprint(bytes)));
         Ok(())
     }

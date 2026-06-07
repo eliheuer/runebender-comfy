@@ -8,7 +8,8 @@ import shutil
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
-from .glyph_candidate_builder import MARK_COLORS, master_pair, open_ufo, require_font_dependencies, rgba_matches
+from .glyph_candidate_builder import MARK_COLORS, master_pair, open_ufo, require_font_dependencies
+from .mark_colors import mark_color_matches
 from .workspace import (
     _read_manifest,
     _write_manifest,
@@ -144,8 +145,7 @@ def resolve_glyph_names(candidate_slot: str, glyphs_spec: str) -> list[str]:
 
 
 def marked_candidate_glyphs(candidate_slot: str, color_name: str) -> list[str]:
-    expected = MARK_COLORS.get(color_name)
-    if expected is None:
+    if color_name not in MARK_COLORS:
         known = ", ".join(sorted(MARK_COLORS))
         raise ValueError(f"Unknown mark color {color_name!r}; expected one of: {known}")
     candidate_source = source_path(candidate_slot)
@@ -154,7 +154,7 @@ def marked_candidate_glyphs(candidate_slot: str, color_name: str) -> list[str]:
         font = open_ufo(source.path)
         for glyph in font:
             raw = glyph.lib.get("public.markColor")
-            if raw and rgba_matches(raw, expected):
+            if raw and mark_color_matches(raw, color_name):
                 glyphs.add(glyph.name)
     report_names = candidate_report_candidate_glyphs(candidate_slot)
     if report_names:

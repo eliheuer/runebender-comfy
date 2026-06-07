@@ -4253,6 +4253,29 @@ mod tests {
     }
 
     #[test]
+    fn set_glyph_from_norad_builds_drawable_contours_for_real_glif() {
+        let bytes = include_bytes!("../../workspace/fonts/demo/VirtuaGrotesk-Regular.ufo/glyphs/two.glif");
+        let glyph = norad::Glyph::parse_raw(bytes).expect("demo two.glif parses");
+        let mut state = EditorState::default();
+
+        state.set_glyph_from_norad(&glyph);
+
+        assert!(!state.paths.is_empty());
+        let mut contour = BezPath::new();
+        for path in &state.paths {
+            path.append_to_bezpath(&mut contour);
+        }
+        assert!(
+            contour
+                .elements()
+                .iter()
+                .any(|element| matches!(element, PathEl::LineTo(_) | PathEl::CurveTo(_, _, _))),
+            "loaded glyph should produce drawable line or curve contour elements: {:?}",
+            contour.elements()
+        );
+    }
+
+    #[test]
     fn selected_anchor_can_move_transform_duplicate_and_delete() {
         let mut state = EditorState::default();
         let anchor = AnchorPoint {

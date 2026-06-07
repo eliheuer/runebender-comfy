@@ -7,13 +7,15 @@ import json
 import plistlib
 import subprocess
 import sys
+import tempfile
 import types
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-05-save-noop-editor-flush-fix-perf-nudge-render-cache-final"
+EXPECTED_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-06-trace-menu-polish"
 
 
 class WebBundleTests(unittest.TestCase):
@@ -61,6 +63,12 @@ class WebBundleTests(unittest.TestCase):
                 "ForkFont",
                 "ApplyGlyphCandidates",
                 "GlyphCandidateBuilder",
+                "BuildGlyphTraceRequest",
+                "TraceToCandidate",
+                "TraceWithQuiverAI",
+                "TraceWithComfyCloudQuiverAI",
+                "TraceLocalMaskToCandidate",
+                "ScoreCandidate",
                 "Runebender",
                 "DesignBot",
             },
@@ -72,6 +80,15 @@ class WebBundleTests(unittest.TestCase):
         self.assertEqual(module.NODE_DISPLAY_NAME_MAPPINGS["FontSpecimen"], "DrawBot Skia")
         self.assertEqual(module.NODE_DISPLAY_NAME_MAPPINGS["ApplyGlyphCandidates"], "Apply Glyph Candidates")
         self.assertEqual(module.NODE_DISPLAY_NAME_MAPPINGS["GlyphCandidateBuilder"], "Glyph Candidate Builder")
+        self.assertEqual(module.NODE_DISPLAY_NAME_MAPPINGS["BuildGlyphTraceRequest"], "Build Glyph Trace Request")
+        self.assertEqual(module.NODE_DISPLAY_NAME_MAPPINGS["TraceToCandidate"], "Trace To Candidate")
+        self.assertEqual(module.NODE_DISPLAY_NAME_MAPPINGS["TraceWithQuiverAI"], "Trace With QuiverAI")
+        self.assertEqual(
+            module.NODE_DISPLAY_NAME_MAPPINGS["TraceWithComfyCloudQuiverAI"],
+            "Trace With Comfy Cloud QuiverAI",
+        )
+        self.assertEqual(module.NODE_DISPLAY_NAME_MAPPINGS["TraceLocalMaskToCandidate"], "Trace Local Mask To Candidate")
+        self.assertEqual(module.NODE_DISPLAY_NAME_MAPPINGS["ScoreCandidate"], "Score Candidate")
         self.assertEqual(module.NODE_DISPLAY_NAME_MAPPINGS["ComfyFontDrawBot"], "DrawBot Skia (legacy)")
         self.assertTrue(module.NODE_CLASS_MAPPINGS["ComfyFontDrawBot"].DEPRECATED)
         self.assertTrue(all(cls.CATEGORY.startswith("Runebender") for cls in module.NODE_CLASS_MAPPINGS.values()))
@@ -103,10 +120,24 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn("registerExtension", bundle)
         self.assertIn("runebender-comfy.Runebender", bundle)
         self.assertIn("Clear Font Sources", bundle)
-        self.assertIn("candidate_name", bundle)
+        self.assertIn("Trace Image", bundle)
+        self.assertIn("/runebender/workspace/trace_background", bundle)
+        self.assertIn("green-reference-overlay", bundle)
+        self.assertIn("Green References", bundle)
         self.assertIn("/runebender/workspaces/clear", bundle)
         self.assertIn("All masters", bundle)
         self.assertIn(EXPECTED_BUNDLE_FINGERPRINT, bundle)
+
+        source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
+        self.assertIn("clearBackgroundImage();", source)
+        renderer = (ROOT / "rust-core" / "src" / "renderer.rs").read_text(encoding="utf-8")
+        self.assertNotIn("path_edit_fill", renderer)
+        self.assertIn("controls.outline", renderer)
+        self.assertIn("geometry.outline = Self::build_flattened_outline(path, view);", renderer)
+        self.assertIn("segment_info.segment.eval(t)", renderer)
+        self.assertIn("clear_glyph_geometry_caches", renderer)
+        wasm_api = (ROOT / "rust-core" / "src" / "wasm_api.rs").read_text(encoding="utf-8")
+        self.assertIn("self.renderer.clear_glyph_geometry_caches();", wasm_api)
 
         # The DrawBot script editor loads CodeMirror from vendored assets that
         # Vite copies from web/public/ into dist/vendor/.
@@ -223,6 +254,84 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn("tool.comfy.requires-comfyui", result.stdout)
         self.assertIn("PublisherId", result.stdout)
         self.assertIn("DrawBot exec", result.stdout)
+
+    def test_tracing_live_checker_helpers_cover_local_requirements(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "check_tracing_live_ready",
+            ROOT / "scripts" / "check_tracing_live_ready.py",
+        )
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["check_tracing_live_ready"] = module
+        spec.loader.exec_module(module)
+
+        local = module.resolve_local_trace_tool(
+            env={"RUNEBENDER_TRACE_TOOL": "future-tracer"},
+            home=Path("/missing-home"),
+            which=lambda command: "/opt/bin/future-tracer" if command == "future-tracer" else None,
+        )
+        self.assertEqual(local.status, "PASS")
+        self.assertIn("RUNEBENDER_TRACE_TOOL", local.detail)
+
+        cloud = module.check_cloud_key({})
+        self.assertEqual(cloud.status, "FAIL")
+        self.assertIn("COMFY_CLOUD_API_KEY", cloud.detail)
+
+        install = module.check_custom_node_install("", repo_root=ROOT)
+        self.assertEqual(install.status, "INFO")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            comfy_root = Path(tmp) / "ComfyUI"
+            custom_nodes = comfy_root / "custom_nodes"
+            custom_nodes.mkdir(parents=True)
+            (custom_nodes / "runebender-comfy").symlink_to(ROOT)
+            installed = module.check_custom_node_install(str(comfy_root), repo_root=ROOT)
+            self.assertEqual(installed.status, "PASS")
+            self.assertIn("points at this checkout", installed.detail)
+
+        mappings = module.check_local_node_mappings(repo_root=ROOT)
+        self.assertEqual(mappings.status, "PASS")
+        self.assertIn("TraceWithComfyCloudQuiverAI", mappings.detail)
+
+        missing = module.check_registered_nodes({"Runebender": {}})
+        self.assertEqual(missing.status, "FAIL")
+        self.assertIn("TraceWithComfyCloudQuiverAI", missing.detail)
+
+        registered = module.check_registered_nodes({node: {} for node in module.REQUIRED_TRACE_NODES})
+        self.assertEqual(registered.status, "PASS")
+
+    def test_tracing_live_checker_collects_host_failures_without_network(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "check_tracing_live_ready_collect",
+            ROOT / "scripts" / "check_tracing_live_ready.py",
+        )
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["check_tracing_live_ready_collect"] = module
+        spec.loader.exec_module(module)
+
+        with mock.patch.object(module, "resolve_local_trace_tool", return_value=module.LiveCheck("local tracer", "PASS", "ok")), \
+             mock.patch.object(module, "check_cloud_key", return_value=module.LiveCheck("Comfy Cloud API key", "FAIL", "missing")), \
+             mock.patch.object(module, "load_json_url", side_effect=OSError("offline")):
+            checks = module.collect_checks("http://127.0.0.1:8188", timeout_seconds=0.1)
+
+        self.assertEqual([check.status for check in checks], ["PASS", "FAIL", "INFO", "PASS", "FAIL", "FAIL"])
+        self.assertIn("ComfyUI host", checks[4].name)
+        self.assertIn("object_info", checks[5].detail)
+
+        with mock.patch.object(module, "resolve_local_trace_tool", return_value=module.LiveCheck("local tracer", "PASS", "ok")), \
+             mock.patch.object(module, "check_cloud_key", return_value=module.LiveCheck("Comfy Cloud API key", "FAIL", "missing")), \
+             mock.patch.object(module, "load_json_url", side_effect=OSError("offline")):
+            local_checks = module.collect_checks(
+                "http://127.0.0.1:8188",
+                timeout_seconds=0.1,
+                local_only=True,
+            )
+
+        self.assertNotIn("Comfy Cloud API key", [check.name for check in local_checks])
+        self.assertEqual([check.status for check in local_checks], ["PASS", "INFO", "PASS", "FAIL", "FAIL"])
 
     def test_requirements_use_runebender_drawbot_skia_fork(self) -> None:
         requirement_lines = [

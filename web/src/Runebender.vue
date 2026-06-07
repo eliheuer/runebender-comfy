@@ -41,6 +41,7 @@ import AnchorPanel, {
 import CoordinatePanel from "./components/CoordinatePanel.vue";
 import type { CoordinateQuadrant } from "./components/CoordinatePanel.vue";
 import EditModeToolbar from "./components/EditModeToolbar.vue";
+import GeneratedIcon from "./components/GeneratedIcon.vue";
 import { type ToolId } from "./components/toolIds";
 import ShapesToolbar from "./components/ShapesToolbar.vue";
 import type { ShapeKind } from "./components/ShapesToolbar.vue";
@@ -61,6 +62,7 @@ import WelcomePanel from "./components/WelcomePanel.vue";
 import WorkspaceToolbar from "./components/WorkspaceToolbar.vue";
 import { runebenderHostKey } from "./host/runebenderHost";
 import { browserHost } from "./hosts/browser/browserHost";
+import { THEME_MARK_COLORS } from "./themeTokens";
 
 const props = defineProps<{
   nodeId?: string;
@@ -74,6 +76,10 @@ const props = defineProps<{
 }>();
 
 const runebenderHost = inject(runebenderHostKey, browserHost);
+const GREEN_REFERENCE_MARKS = new Set([
+  THEME_MARK_COLORS.find((color) => color.name === "green")?.ufoRgba ?? "0.09,0.72,0.44,1",
+  "0.3,0.7,0.3,1",
+]);
 const currentFontPath = computed(() => props.fontPathRef?.value ?? "");
 const WELCOME_DEMO_GLIF = `<?xml version="1.0" encoding="UTF-8"?>
 <glyph name="R" format="2">
@@ -197,6 +203,12 @@ const backgroundImageFrame = ref<Record<string, string>>({});
 const backgroundImageDragStart = ref<{ x: number; y: number } | null>(null);
 const backgroundImageResize = ref<BackgroundImageResizeState | null>(null);
 const backgroundImageContextMenu = ref<BackgroundImageContextMenuState | null>(null);
+type GreenReferenceGlyph = {
+  name: string;
+  svg: string;
+  width: number | null;
+  contours: number | null;
+};
 const glyphImageFiles = ref<Map<string, File>>(new Map());
 const contourContextMenu = ref<ContourContextMenuState | null>(null);
 const compatErrors = ref<CompatError[]>([]);
@@ -258,6 +270,7 @@ type GlyphKerningGroups = {
 
 type BackgroundImageState = {
   url: string;
+  file: File;
   width: number;
   height: number;
   designX: number;
@@ -824,6 +837,26 @@ const activeGlyphPreviewSvg = computed(() => {
   } catch {
     return activeGlyphSvg.value;
   }
+});
+const greenReferenceGlyphs = computed<GreenReferenceGlyph[]>(() => {
+  const data = activeMasterData.value;
+  if (!data) return [];
+  const references: GreenReferenceGlyph[] = [];
+  for (const [name, mark] of data.glyphMarkColors.entries()) {
+    if (name === currentGlyph.value) continue;
+    if (!GREEN_REFERENCE_MARKS.has(mark.replace(/\s+/g, ""))) continue;
+    const svg = data.glyphSvgs.get(name);
+    if (!svg) continue;
+    const metadata = data.glyphMetadata.get(name);
+    references.push({
+      name,
+      svg,
+      width: metadata?.width ?? null,
+      contours: metadata?.contours ?? null,
+    });
+  }
+  references.sort((a, b) => a.name.localeCompare(b.name));
+  return references.slice(0, 6);
 });
 const activeGlyphUnicode = computed(() =>
   currentGlyph.value ? glyphUnicodes.value.get(currentGlyph.value) : undefined,
@@ -1986,6 +2019,7 @@ async function importBackgroundImage(file: File, options: { locked?: boolean } =
       : (editor.advanceWidth() - designWidth) / 2;
     backgroundImage.value = {
       url,
+      file,
       width,
       height,
       designX,
@@ -2376,20 +2410,149 @@ function nudgeSelectedBackgroundImage(dx: number, dy: number): boolean {
   return true;
 }
 
-function reportUnavailableBackgroundTrace(kind: "local" | "quiver", refit: boolean): boolean {
+function backgroundTraceArgs() {
+  if (!backgroundImage.value || !editor || !currentGlyph.value || !currentFontPath.value) {
+    return null;
+  }
+  const data = activeMasterData.value;
+  if (!data) {
+    return null;
+  }
+  const bg = backgroundImage.value;
+  const glyphName = currentGlyph.value;
+  const metadata = data.glyphMetadata.get(glyphName);
+  const width =
+    currentWidth.value > 0
+      ? currentWidth.value
+      : metadata?.width && metadata.width > 0
+        ? metadata.width
+        : editor.advanceWidth();
+  const unicode = metadata?.unicodes?.[0] ?? metadata?.unicode ?? "";
+  const targetHeight = Math.max(1, Math.abs(bg.height * bg.designScaleY));
+  const grid = 2;
+  const xOffset = Math.round(bg.designX / grid) * grid;
+  const yOffset = Math.round(bg.designY / grid) * grid;
+  const metrics = editor.metricBounds();
+  const ascender = metrics.length >= 2 ? metrics[0] : 800;
+  const descender = metrics.length >= 2 ? metrics[1] : -200;
+  return {
+    slot: currentFontPath.value,
+    master: activeMasterName.value,
+    glyph: glyphName,
+    image: bg.file,
+    unicode,
+    width,
+    targetHeight,
+    xOffset,
+    yOffset,
+    imageWidth: bg.width,
+    imageHeight: bg.height,
+    designX: bg.designX,
+    designY: bg.designY,
+    designScaleX: bg.designScaleX,
+    designScaleY: bg.designScaleY,
+    unitsPerEm: data.unitsPerEm,
+    ascender,
+    descender,
+    grid,
+    accuracy: 1,
+    smooth: 0,
+    alphamax: 0.8,
+    globalFit: true,
+  };
+}
+
+async function traceBackgroundImageToGlyph(refit = false): Promise<boolean> {
   if (!backgroundImage.value) {
-    status.value = kind === "quiver"
-      ? "no background image for Quiver trace"
-      : "no background image to trace";
+    status.value = "no background image to trace";
+    return false;
+  }
+  if (!editor || !currentGlyph.value) {
+    status.value = "open a glyph before tracing";
+    return false;
+  }
+  if (!currentFontPath.value) {
+    status.value = "background tracing requires a workspace font";
+    return false;
+  }
+  const data = activeMasterData.value;
+  if (!data) {
+    status.value = "no active master to trace into";
+    return false;
+  }
+  const originalBytes = data.glyphBytes.get(currentGlyph.value);
+  if (!originalBytes) {
+    status.value = "current glyph is not loaded";
+    return false;
+  }
+  if (refit) {
+    status.value = "trace refit is not wired yet; running a fresh trace";
+  } else {
+    status.value = `tracing ${currentGlyph.value} with img2bez`;
+  }
+  const glyphName = currentGlyph.value;
+  const args = backgroundTraceArgs();
+  if (!args) {
+    status.value = "background tracing is not ready";
+    return false;
+  }
+
+  try {
+    const { response, data: trace } = await runebenderHost.traceBackgroundGlyph(args);
+    if (!response.ok || !trace.glif) {
+      status.value = `trace failed: ${trace.error || response.statusText}`;
+      return false;
+    }
+    const bytes = new TextEncoder().encode(trace.glif);
+    const info = parseGlyphInfo(bytes);
+    setGlyphBytes(data, glyphName, bytes);
+    data.glyphMetadata.set(glyphName, {
+      name: glyphName,
+      width: info.width,
+      contours: info.contours,
+      unicode: info.unicode,
+      unicodes: info.unicodes,
+    });
+    if (info.unicode) {
+      data.glyphUnicodes.set(glyphName, info.unicode);
+    } else {
+      data.glyphUnicodes.delete(glyphName);
+    }
+    refreshGridGlyphSvg(data, glyphName, bytes);
+    ensureEditorComponentGlyphs(data);
+    editor.setGlyphGlifWithCachedComponentsPreserveHistory(bytes);
+    editorGlyphNeedsSync = false;
+    applyEditorPanelState(editor.editorPanelState());
+    updateCompatibilityErrors();
+    refreshSidebearingsFromEditor();
+    markGlyphDirty(glyphName);
+    masterDataMap.value = new Map(masterDataMap.value);
+    if (hasTextBufferSession.value) {
+      syncTextSortsForGlyph(glyphName, glyphName, data.glyphMetadata.get(glyphName)!);
+      syncTextKerningModelToEditor();
+      bumpTextPreviewRevision();
+    }
+    clearBackgroundImage();
+    requestRender();
+    queueComfyStateSync(true);
+    status.value = `traced ${glyphName} with img2bez`;
+    return true;
+  } catch (e) {
+    console.warn("background trace failed:", e);
+    status.value = `trace failed: ${e}`;
+    return false;
+  }
+}
+
+function reportUnavailableBackgroundTrace(kind: "quiver"): boolean {
+  if (!backgroundImage.value) {
+    status.value = "no background image for Quiver trace";
     return true;
   }
   if (kind === "quiver") {
     status.value = "Quiver trace is not available in the browser editor yet";
     return true;
   }
-  status.value = refit
-    ? "background image refit is not available in the browser editor yet"
-    : "background image trace is not available in the browser editor yet";
   return true;
 }
 
@@ -6545,15 +6708,14 @@ function onKeyDown(e: KeyboardEvent) {
       e.preventDefault();
     }
   } else if (meta && e.key.toLowerCase() === "t") {
-    if (reportUnavailableBackgroundTrace("local", e.shiftKey)) {
-      e.preventDefault();
-    }
+    e.preventDefault();
+    void traceBackgroundImageToGlyph(false);
   } else if (
     meta &&
     e.shiftKey &&
     e.key.toLowerCase() === "y"
   ) {
-    if (reportUnavailableBackgroundTrace("quiver", false)) {
+    if (reportUnavailableBackgroundTrace("quiver")) {
       e.preventDefault();
     }
   } else if (meta && !e.shiftKey && e.key.toLowerCase() === "s") {
@@ -6979,10 +7141,33 @@ onBeforeUnmount(() => {
         >
           <button
             type="button"
+            class="background-image-menu-item"
             role="menuitem"
             @click="applyBackgroundImageContextMenuAction"
           >
-            {{ backgroundImageContextMenu.locked ? "Unlock Image" : "Lock Image" }}
+            <span class="background-image-menu-icon" aria-hidden="true">
+              <GeneratedIcon name="select" :size="16" />
+            </span>
+            <span class="background-image-menu-copy">
+              <span>{{ backgroundImageContextMenu.locked ? "Unlock Image" : "Lock Image" }}</span>
+              <small>
+                {{ backgroundImageContextMenu.locked ? "Enable move and resize" : "Keep placement fixed" }}
+              </small>
+            </span>
+          </button>
+          <button
+            type="button"
+            class="background-image-menu-item primary"
+            role="menuitem"
+            @click="() => { dismissBackgroundImageContextMenu(); void traceBackgroundImageToGlyph(false); }"
+          >
+            <span class="background-image-menu-icon" aria-hidden="true">
+              <GeneratedIcon name="hyperpen" :size="16" />
+            </span>
+            <span class="background-image-menu-copy">
+              <span>Trace Image</span>
+              <small>Insert outline into this glyph</small>
+            </span>
           </button>
         </div>
 
@@ -7080,6 +7265,31 @@ onBeforeUnmount(() => {
             </span>
           </div>
         </template>
+
+        <div
+          v-if="viewMode === 'editor' && editorPanelsVisible && greenReferenceGlyphs.length"
+          class="green-reference-overlay"
+          aria-label="Green reference glyphs"
+        >
+          <strong>Green References</strong>
+          <div class="green-reference-list">
+            <span
+              v-for="reference in greenReferenceGlyphs"
+              :key="`green-reference-${reference.name}`"
+              class="green-reference-item"
+              :title="reference.name"
+            >
+              <span class="green-reference-shape" v-html="reference.svg" />
+              <span class="green-reference-meta">
+                {{ reference.name }}
+                <small>
+                  {{ reference.width ?? "?" }}w /
+                  {{ reference.contours ?? "?" }}c
+                </small>
+              </span>
+            </span>
+          </div>
+        </div>
 
         <div
           v-if="viewMode === 'editor' && editorPanelsVisible && currentGlyph && activeTool !== 'Text'"
@@ -7713,19 +7923,32 @@ onBeforeUnmount(() => {
 .context-menu {
   position: fixed;
   z-index: 20;
-  min-width: 140px;
   padding: 6px;
   background: var(--rb-panel-background, #1c1c1c);
   border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
   border-radius: 6px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
+
+.background-image-menu {
+  min-width: 230px;
+  padding: 7px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0)),
+    var(--rb-panel-background, #1c1c1c);
+  box-shadow:
+    0 14px 32px rgba(0, 0, 0, 0.46),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.context-menu {
+  min-width: 140px;
+}
+
 .background-image-menu button,
 .context-menu button {
   appearance: none;
   width: 100%;
-  height: 28px;
-  padding: 0 10px;
   color: var(--rb-overlay-text, #f0f0f0);
   background: transparent;
   border: 0;
@@ -7734,9 +7957,112 @@ onBeforeUnmount(() => {
   text-align: left;
   cursor: pointer;
 }
+
+.context-menu button {
+  height: 28px;
+  padding: 0 10px;
+}
+
+.background-image-menu button {
+  min-height: 48px;
+  padding: 7px 9px;
+}
+
+.background-image-menu button:focus,
+.context-menu button:focus {
+  outline: none;
+}
+
 .background-image-menu button:hover,
 .context-menu button:hover {
   background: var(--rb-control-background, #303030);
+}
+
+.background-image-menu button:focus-visible,
+.context-menu button:focus-visible {
+  outline: var(--rb-stroke-width, 1px) solid var(--rb-accent, #66ee88);
+  outline-offset: 1px;
+}
+
+.background-image-menu button:active,
+.context-menu button:active {
+  background: color-mix(in srgb, var(--rb-control-background, #303030) 76%, var(--rb-accent, #66ee88));
+}
+
+.background-image-menu-item {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  align-items: center;
+  gap: 9px;
+  transition:
+    background-color 80ms ease,
+    color 80ms ease,
+    border-color 80ms ease;
+}
+
+.background-image-menu-item + .background-image-menu-item {
+  margin-top: 3px;
+}
+
+.background-image-menu-item.primary {
+  color: var(--rb-accent, #66ee88);
+}
+
+.background-image-menu-item:hover {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--rb-accent, #66ee88) 14%, transparent), transparent 78%),
+    var(--rb-control-background, #303030);
+}
+
+.background-image-menu-item.primary:hover {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--rb-accent, #66ee88) 22%, transparent), transparent 78%),
+    var(--rb-control-background, #303030);
+}
+
+.background-image-menu-item:active {
+  transform: translateY(1px);
+}
+
+.background-image-menu-icon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  color: var(--rb-primary-text, #b0b0b0);
+  background: var(--rb-button-background, #181818);
+  border: var(--rb-stroke-width, 1px) solid var(--rb-panel-outline, #606060);
+  border-radius: 5px;
+}
+
+.background-image-menu-item.primary .background-image-menu-icon {
+  color: var(--rb-accent, #66ee88);
+  border-color: color-mix(in srgb, var(--rb-accent, #66ee88) 58%, var(--rb-panel-outline, #606060));
+  background: color-mix(in srgb, var(--rb-accent, #66ee88) 12%, var(--rb-button-background, #181818));
+}
+
+.background-image-menu-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.1;
+}
+
+.background-image-menu-copy span {
+  color: var(--rb-overlay-text, #f0f0f0);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.background-image-menu-item.primary .background-image-menu-copy span {
+  color: var(--rb-accent, #66ee88);
+}
+
+.background-image-menu-copy small {
+  color: var(--rb-primary-text, #909090);
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .compat-marker {
@@ -7778,6 +8104,74 @@ onBeforeUnmount(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.green-reference-overlay {
+  position: absolute;
+  left: var(--rb-editor-edge-inset, 8px);
+  bottom: calc(var(--rb-editor-edge-inset, 8px) + 96px);
+  z-index: 4;
+  width: 235px;
+  max-height: min(310px, calc(100% - 128px));
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--rb-panel-background, #1c1c1c) 94%, transparent);
+  border: var(--rb-stroke-width, 1px) solid var(--rb-accent, #18b86f);
+  border-radius: 6px;
+  color: var(--rb-overlay-text, #f0f0f0);
+  font: 12px ui-sans-serif, system-ui, sans-serif;
+  pointer-events: none;
+}
+.green-reference-overlay strong {
+  color: var(--rb-accent, #18b86f);
+  font-weight: 700;
+}
+.green-reference-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.green-reference-item {
+  min-width: 0;
+  height: 70px;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 3px;
+  padding: 5px;
+  border: var(--rb-stroke-width, 1px) solid color-mix(in srgb, var(--rb-accent, #18b86f) 55%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--rb-control-background, #303030) 42%, transparent);
+}
+.green-reference-shape {
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--rb-accent, #18b86f);
+}
+.green-reference-shape :deep(svg) {
+  width: auto;
+  height: 36px;
+  max-width: 88px;
+  display: block;
+}
+.green-reference-meta {
+  min-width: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  color: var(--rb-primary-text, #909090);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.green-reference-meta small {
+  color: var(--rb-secondary-text, #707070);
+  font: inherit;
 }
 
 .glyph-preview-overlay,

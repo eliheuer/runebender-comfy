@@ -3,14 +3,17 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import importlib.util
+import io
 import json
 import os
+import struct
 import shutil
 import subprocess
 import sys
 import tempfile
 import types
 import unittest
+import zlib
 from pathlib import Path
 from unittest import mock
 
@@ -36,13 +39,28 @@ sys.modules.setdefault(
     "aiohttp",
     types.SimpleNamespace(
         web=types.SimpleNamespace(
-            json_response=lambda payload: payload,
+            json_response=lambda payload, **_kwargs: payload,
             HTTPBadRequest=Exception,
         ),
     ),
 )
 
-from nodes.runebender import RUNEBENDER_STATE, Runebender
+from nodes.runebender import (
+    RUNEBENDER_STATE,
+    LocalTraceTool,
+    TraceBackgroundResult,
+    TraceImageTransform,
+    Runebender,
+    load_glyph_trace_request,
+    _resolve_img2bez_command,
+    _resolve_trace_tool,
+    _select_trace_source,
+    _translate_glif_x,
+    trace_background_candidate,
+    trace_background_image,
+    trace_background_with_img2bez,
+    write_glyph_trace_request,
+)
 from nodes.font import Font
 from nodes.compile_font import CompileFont
 from nodes import font_preview
@@ -50,7 +68,21 @@ from nodes.font_preview import FontPreview
 from nodes.font_specimen import FontSpecimen, load_presets
 from nodes.fork_font import ForkFont
 from nodes.apply_glyph_candidates import ApplyGlyphCandidates
+from nodes.glyph_trace import (
+    BuildGlyphTraceRequest,
+    ScoreCandidate,
+    TraceWithComfyCloudQuiverAI,
+    TraceLocalMaskToCandidate,
+    TraceToCandidate,
+    TraceWithQuiverAI,
+    run_comfy_cloud_quiver_svg,
+    score_candidate_glyph,
+    svg_to_glif,
+    trace_quiver_svg_to_candidate,
+    trace_request_to_candidate,
+)
 from nodes.glyph_candidate_builder import GlyphCandidateBuilder, arabic_glyph_filter, rgba_matches
+from nodes.mark_colors import MARK_COLORS, mark_color_matches
 from nodes.designbot import DesignBot, _script_for_render
 
 
@@ -102,6 +134,110 @@ class WorkspaceTests(unittest.TestCase):
         workspace._write_manifest(slot_dir, {"source_kind": "ufo/designspace"})  # type: ignore[attr-defined]
         return slot_dir
 
+    def _make_trace_slot(self, slot_name: str = "trace-demo") -> Path:
+        slot_dir = workspace.FONTS_DIR / slot_name
+        slot_dir.mkdir(parents=True, exist_ok=True)
+        (slot_dir / "Demo.designspace").write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<designspace format=\"5.0\">
+  <sources>
+    <source filename=\"Demo.ufo\" stylename=\"Regular\"/>
+  </sources>
+</designspace>
+""",
+            encoding="utf-8",
+        )
+        glyphs_dir = slot_dir / "Demo.ufo" / "glyphs"
+        glyphs_dir.mkdir(parents=True, exist_ok=True)
+        (slot_dir / "Demo.ufo" / "metainfo.plist").write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<plist version=\"1.0\">
+<dict>
+  <key>creator</key>
+  <string>runebender-comfy-tests</string>
+  <key>formatVersion</key>
+  <integer>3</integer>
+</dict>
+</plist>
+""",
+            encoding="utf-8",
+        )
+        (slot_dir / "Demo.ufo" / "fontinfo.plist").write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<plist version=\"1.0\">
+<dict>
+  <key>familyName</key>
+  <string>Trace Demo</string>
+  <key>styleName</key>
+  <string>Regular</string>
+  <key>unitsPerEm</key>
+  <integer>1000</integer>
+</dict>
+</plist>
+""",
+            encoding="utf-8",
+        )
+        (slot_dir / "Demo.ufo" / "layercontents.plist").write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<plist version=\"1.0\">
+<array>
+  <array>
+    <string>public.default</string>
+    <string>glyphs</string>
+  </array>
+</array>
+</plist>
+""",
+            encoding="utf-8",
+        )
+        (glyphs_dir / "contents.plist").write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<plist version=\"1.0\">
+<dict>
+  <key>A</key>
+  <string>A_.glif</string>
+</dict>
+</plist>
+""",
+            encoding="utf-8",
+        )
+        (glyphs_dir / "A_.glif").write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<glyph name=\"A\" format=\"2\">
+  <advance width=\"600\"/>
+</glyph>
+""",
+            encoding="utf-8",
+        )
+        workspace._write_manifest(slot_dir, {"source_kind": "ufo/designspace"})  # type: ignore[attr-defined]
+        return slot_dir
+
+    def _png_with_black_rect(self, width: int = 32, height: int = 32) -> bytes:
+        def chunk(kind: bytes, data: bytes) -> bytes:
+            return (
+                struct.pack(">I", len(data))
+                + kind
+                + data
+                + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+            )
+
+        rows = []
+        for y in range(height):
+            row = bytearray([0])
+            for x in range(width):
+                if 8 <= x < 24 and 6 <= y < 26:
+                    row.extend((0, 0, 0))
+                else:
+                    row.extend((255, 255, 255))
+            rows.append(bytes(row))
+        raw = b"".join(rows)
+        return (
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw))
+            + chunk(b"IEND", b"")
+        )
+
     def test_export_glyphspackage_writes_sources_tree_and_config(self) -> None:
         slot_dir = self._make_slot()
         slot_info = workspace.slot_from_name("demo")
@@ -123,6 +259,1157 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(manifest["source_slot"], "demo")
         self.assertEqual(manifest["sources_root"], "sources")
 
+    def test_trace_glif_translation_moves_x_coordinates(self) -> None:
+        glif = b"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<glyph name=\"A\" format=\"2\">
+  <outline>
+    <contour>
+      <point x=\"64\" y=\"0\" type=\"line\"/>
+      <point x=\"128.5\" y=\"10\" type=\"line\"/>
+    </contour>
+  </outline>
+</glyph>
+"""
+        translated = _translate_glif_x(glif, -10).decode("utf-8")
+        self.assertIn('x="54"', translated)
+        self.assertIn('x="118.5"', translated)
+        self.assertIn('y="10"', translated)
+
+    def test_trace_source_selection_matches_master_style(self) -> None:
+        root = Path(self.tmp.name)
+        regular = root / "Regular.ufo"
+        bold = root / "Bold.ufo"
+        regular.mkdir()
+        bold.mkdir()
+        designspace = root / "Demo.designspace"
+        designspace.write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<designspace format=\"5.0\">
+  <sources>
+    <source filename=\"Regular.ufo\" stylename=\"Regular\"/>
+    <source filename=\"Bold.ufo\" stylename=\"Bold\"/>
+  </sources>
+</designspace>
+""",
+            encoding="utf-8",
+        )
+
+        self.assertEqual(_select_trace_source(designspace, "Bold"), bold.resolve())
+        self.assertEqual(_select_trace_source(designspace, "Unknown"), regular.resolve())
+
+    def test_trace_image_transform_round_trips_baseline_points(self) -> None:
+        transform = TraceImageTransform(
+            pixel_width=100,
+            pixel_height=200,
+            design_x=0,
+            design_y=-200,
+            design_scale_x=3,
+            design_scale_y=5,
+        )
+
+        for design in [(0, -200), (300, -200), (0, 800), (150, 300)]:
+            pixel = transform.design_to_pixel(*design)
+            self.assertEqual(transform.pixel_to_design(*pixel), design)
+
+        self.assertEqual(transform.pixel_to_design(0, 0), (0, 800))
+        self.assertEqual(transform.pixel_to_design(100, 200), (300, -200))
+        self.assertEqual(transform.trace_target_height(), 1000)
+
+    def test_trace_image_transform_handles_nonzero_origin_and_scale(self) -> None:
+        transform = TraceImageTransform(
+            pixel_width=2048,
+            pixel_height=1024,
+            design_x=37,
+            design_y=-123,
+            design_scale_x=0.25,
+            design_scale_y=0.5,
+        )
+
+        design = (165, 133)
+        pixel = transform.design_to_pixel(*design)
+        self.assertAlmostEqual(pixel[0], 512)
+        self.assertAlmostEqual(pixel[1], 512)
+        round_trip = transform.pixel_to_design(*pixel)
+        self.assertAlmostEqual(round_trip[0], design[0])
+        self.assertAlmostEqual(round_trip[1], design[1])
+        self.assertEqual(transform.snapped_origin(8), (40, -120))
+
+    def test_trace_image_transform_target_height_uses_absolute_scale(self) -> None:
+        transform = TraceImageTransform(
+            pixel_width=100,
+            pixel_height=200,
+            design_x=0,
+            design_y=0,
+            design_scale_x=1,
+            design_scale_y=-2,
+        )
+
+        self.assertEqual(transform.design_height, -400)
+        self.assertEqual(transform.trace_target_height(), 400)
+
+    def test_write_glyph_trace_request_stores_image_and_json(self) -> None:
+        self._make_slot("trace-demo")
+        transform = TraceImageTransform(
+            pixel_width=2048,
+            pixel_height=1024,
+            design_x=37,
+            design_y=-123,
+            design_scale_x=0.25,
+            design_scale_y=0.5,
+        )
+
+        artifact = write_glyph_trace_request(
+            slot="trace-demo",
+            glyph="A.alt",
+            master="Regular",
+            image_bytes=b"png",
+            image_suffix=".png",
+            transform=transform,
+            advance_width=610,
+            units_per_em=1000,
+            ascender=800,
+            descender=-200,
+        )
+
+        self.assertTrue(artifact.request_path.exists())
+        self.assertTrue(artifact.image_path.exists())
+        self.assertEqual(artifact.image_path.read_bytes(), b"png")
+        payload = json.loads(artifact.request_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["version"], 1)
+        self.assertEqual(payload["slot"], "trace-demo")
+        self.assertEqual(payload["glyph"], "A.alt")
+        self.assertEqual(payload["master"], "Regular")
+        self.assertEqual(payload["image"]["path"], "trace-requests/Regular/A.alt/background.png")
+        self.assertEqual(payload["image"]["width"], 2048)
+        self.assertEqual(payload["image"]["height"], 1024)
+        self.assertEqual(payload["transform"]["designX"], 37)
+        self.assertEqual(payload["transform"]["designY"], -123)
+        self.assertEqual(payload["metrics"]["advanceWidth"], 610)
+        self.assertEqual(payload["metrics"]["unitsPerEm"], 1000)
+        self.assertEqual(artifact.payload, payload)
+
+        loaded = load_glyph_trace_request(artifact.request_path)
+        self.assertEqual(loaded.request_id, artifact.request_id)
+        self.assertEqual(loaded.request_path, artifact.request_path)
+        self.assertEqual(loaded.image_path, artifact.image_path)
+        self.assertEqual(loaded.payload, payload)
+
+    def test_write_glyph_trace_request_validates_required_fields(self) -> None:
+        self._make_slot("trace-demo")
+        transform = TraceImageTransform(
+            pixel_width=0,
+            pixel_height=1024,
+            design_x=0,
+            design_y=0,
+            design_scale_x=1,
+            design_scale_y=1,
+        )
+
+        with self.assertRaisesRegex(ValueError, "image dimensions"):
+            write_glyph_trace_request(
+                slot="trace-demo",
+                glyph="A",
+                master="Regular",
+                image_bytes=b"png",
+                image_suffix=".png",
+                transform=transform,
+                advance_width=610,
+                units_per_em=1000,
+                ascender=800,
+                descender=-200,
+            )
+
+        valid_transform = TraceImageTransform(
+            pixel_width=2048,
+            pixel_height=1024,
+            design_x=0,
+            design_y=0,
+            design_scale_x=1,
+            design_scale_y=1,
+        )
+        with self.assertRaisesRegex(ValueError, "glyph required"):
+            write_glyph_trace_request(
+                slot="trace-demo",
+                glyph="",
+                master="Regular",
+                image_bytes=b"png",
+                image_suffix=".png",
+                transform=valid_transform,
+                advance_width=610,
+                units_per_em=1000,
+                ascender=800,
+                descender=-200,
+            )
+
+    def test_trace_background_with_img2bez_invokes_tool_and_returns_glif(self) -> None:
+        slot_dir = workspace.FONTS_DIR / "trace-demo"
+        glyphs_dir = slot_dir / "Demo.ufo" / "glyphs"
+        glyphs_dir.mkdir(parents=True, exist_ok=True)
+        (slot_dir / "Demo.designspace").write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<designspace format=\"5.0\">
+  <sources>
+    <source filename=\"Demo.ufo\" stylename=\"Regular\"/>
+  </sources>
+</designspace>
+""",
+            encoding="utf-8",
+        )
+        (slot_dir / "Demo.ufo" / "metainfo.plist").write_text("<plist/>", encoding="utf-8")
+        (glyphs_dir / "contents.plist").write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<plist version=\"1.0\">
+<dict>
+  <key>A</key>
+  <string>A_.glif</string>
+</dict>
+</plist>
+""",
+            encoding="utf-8",
+        )
+        (glyphs_dir / "A_.glif").write_text("<glyph name=\"A\" format=\"2\"/>", encoding="utf-8")
+        workspace._write_manifest(slot_dir, {"source_kind": "ufo/designspace"})  # type: ignore[attr-defined]
+
+        def fake_run(cmd, check, cwd, capture_output, text):
+            self.assertFalse(check)
+            self.assertTrue(capture_output)
+            self.assertTrue(text)
+            self.assertEqual(cmd[0], "/usr/bin/img2bez")
+            self.assertEqual(cmd[cmd.index("--name") + 1], "A")
+            self.assertEqual(cmd[cmd.index("--width") + 1], "610")
+            self.assertEqual(cmd[cmd.index("--target-height") + 1], "700")
+            self.assertEqual(cmd[cmd.index("--y-offset") + 1], "-20")
+            self.assertEqual(cmd[cmd.index("--unicode") + 1], "0041")
+            output_ufo = Path(cmd[cmd.index("--output") + 1])
+            (output_ufo / "glyphs" / "A_.glif").write_text(
+                """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<glyph name=\"A\" format=\"2\">
+  <unicode hex=\"0041\"/>
+  <advance width=\"610\"/>
+  <outline>
+    <contour>
+      <point x=\"64\" y=\"0\" type=\"line\"/>
+    </contour>
+  </outline>
+</glyph>
+""",
+                encoding="utf-8",
+            )
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch(
+            "nodes.runebender._resolve_trace_tool",
+            return_value=LocalTraceTool("img2bez", ["/usr/bin/img2bez"]),
+        ), \
+             mock.patch("nodes.runebender.subprocess.run", side_effect=fake_run):
+            result = trace_background_with_img2bez(
+                slot="trace-demo",
+                master_name="Regular",
+                glyph_name="A",
+                image_bytes=b"png",
+                image_suffix=".png",
+                unicode_hex="0041",
+                width=610,
+                target_height=700,
+                y_offset=-20,
+                x_offset=100,
+            )
+
+        self.assertEqual(result.glyph, "A")
+        self.assertEqual(result.source_ufo.name, "Demo.ufo")
+        self.assertIn('unicode hex="0041"', result.glif)
+        self.assertIn('advance width="610"', result.glif)
+        self.assertIn('x="100"', result.glif)
+        self.assertEqual(result.trace_tool, "img2bez")
+
+    def test_trace_tool_env_override_supports_future_rust_cli(self) -> None:
+        with mock.patch.dict(os.environ, {"RUNEBENDER_TRACE_TOOL": "future-tracer"}, clear=False), \
+             mock.patch("nodes.runebender.shutil.which", return_value="/opt/bin/future-tracer"):
+            tool = _resolve_trace_tool()
+            compat_command = _resolve_img2bez_command()
+
+        self.assertEqual(tool.name, "RUNEBENDER_TRACE_TOOL")
+        self.assertEqual(tool.command, ["/opt/bin/future-tracer"])
+        self.assertEqual(compat_command, tool.command)
+
+    def test_trace_background_with_installed_img2bez_traces_fixture_image(self) -> None:
+        try:
+            _resolve_img2bez_command()
+        except FileNotFoundError as exc:
+            self.skipTest(str(exc))
+        self._make_trace_slot()
+
+        result = trace_background_with_img2bez(
+            slot="trace-demo",
+            master_name="Regular",
+            glyph_name="A",
+            image_bytes=self._png_with_black_rect(),
+            image_suffix=".png",
+            unicode_hex="0041",
+            width=610,
+            target_height=700,
+            y_offset=-20,
+            x_offset=100,
+            grid=2,
+            accuracy=2,
+            smooth=0,
+            alphamax=0.8,
+            threshold=128,
+        )
+
+        self.assertEqual(result.glyph, "A")
+        self.assertIn('<glyph name="A"', result.glif)
+        self.assertIn('<unicode hex="0041"', result.glif)
+        self.assertIn('<advance width="610"', result.glif)
+        self.assertIn("<outline>", result.glif)
+        self.assertIn("<contour>", result.glif)
+        self.assertIn("img2bez", " ".join(result.command))
+
+    def test_trace_background_route_forwards_form_data(self) -> None:
+        calls = []
+
+        async def post():
+            return {
+                "slot": "trace-demo",
+                "master": "Regular",
+                "glyph": "A",
+                "image": types.SimpleNamespace(file=io.BytesIO(b"png"), filename="A.png"),
+                "unicode": "0041",
+                "width": "610",
+                "target_height": "700",
+                "x_offset": "100",
+                "y_offset": "-20",
+                "image_width": "100",
+                "image_height": "200",
+                "design_x": "101",
+                "design_y": "-21",
+                "design_scale_x": "2",
+                "design_scale_y": "3",
+                "grid": "2",
+                "accuracy": "1",
+                "smooth": "0",
+                "alphamax": "0.8",
+                "globalFit": "true",
+            }
+
+        def fake_trace(**kwargs):
+            calls.append(kwargs)
+            return TraceBackgroundResult(
+                glyph="A",
+                glif="<glyph name=\"A\"/>",
+                source_ufo=Path("/tmp/Demo.ufo"),
+                command=["img2bez"],
+            )
+
+        request = types.SimpleNamespace(post=post)
+        with mock.patch("nodes.runebender.trace_background_with_img2bez", side_effect=fake_trace):
+            response = asyncio.run(trace_background_image(request))
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["glyph"], "A")
+        self.assertEqual(response["glif"], "<glyph name=\"A\"/>")
+        self.assertEqual(calls[0]["slot"], "trace-demo")
+        self.assertEqual(calls[0]["master_name"], "Regular")
+        self.assertEqual(calls[0]["glyph_name"], "A")
+        self.assertEqual(calls[0]["image_bytes"], b"png")
+        self.assertEqual(calls[0]["width"], 610)
+        self.assertEqual(calls[0]["target_height"], 600)
+        self.assertEqual(calls[0]["x_offset"], 100)
+        self.assertEqual(calls[0]["y_offset"], -20)
+        self.assertEqual(calls[0]["global_fit"], True)
+        self.assertEqual(calls[0]["threshold"], None)
+
+    def test_trace_background_route_reports_trace_errors(self) -> None:
+        async def post():
+            return {
+                "slot": "trace-demo",
+                "glyph": "A",
+                "image": types.SimpleNamespace(file=io.BytesIO(b"png"), filename="A.png"),
+            }
+
+        request = types.SimpleNamespace(post=post)
+        with mock.patch("nodes.runebender.trace_background_with_img2bez", side_effect=RuntimeError("boom")):
+            response = asyncio.run(trace_background_image(request))
+
+        self.assertFalse(response["success"])
+        self.assertEqual(response["error"], "boom")
+
+    def test_trace_background_candidate_route_builds_request_and_candidate(self) -> None:
+        self._make_trace_slot()
+        calls = []
+
+        async def post():
+            return {
+                "slot": "trace-demo",
+                "master": "Regular",
+                "glyph": "A",
+                "image": types.SimpleNamespace(file=io.BytesIO(self._png_with_black_rect()), filename="A.png"),
+                "width": "610",
+                "image_width": "32",
+                "image_height": "32",
+                "design_x": "80",
+                "design_y": "60",
+                "design_scale_x": "10",
+                "design_scale_y": "10",
+                "units_per_em": "1000",
+                "ascender": "800",
+                "descender": "-200",
+                "grid": "2",
+                "accuracy": "2",
+                "smooth": "0",
+                "alphamax": "0.8",
+                "candidate_name": "trace-demo-candidate",
+            }
+
+        def fake_candidate(font, trace_request, **kwargs):
+            calls.append((font, trace_request, kwargs))
+            artifact = load_glyph_trace_request(Path(trace_request))
+            return {
+                "success": True,
+                "candidate_slot": "trace-demo-candidate",
+                "provider": kwargs["provider"],
+                "trace_request": str(artifact.request_path),
+                "request_id": artifact.request_id,
+                "glyph": artifact.payload["glyph"],
+                "master": artifact.payload["master"],
+            }
+
+        request = types.SimpleNamespace(post=post)
+        with mock.patch("nodes.glyph_trace.trace_request_to_candidate", side_effect=fake_candidate):
+            response = asyncio.run(trace_background_candidate(request))
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["candidate_slot"], "trace-demo-candidate")
+        self.assertEqual(response["glyph"], "A")
+        self.assertEqual(response["report"]["provider"], "placed-background-img2bez")
+        self.assertEqual(len(calls), 1)
+        font, trace_request, kwargs = calls[0]
+        self.assertEqual(font, "trace-demo")
+        self.assertTrue(Path(trace_request).exists())
+        self.assertEqual(kwargs["candidate_name"], "trace-demo-candidate")
+        self.assertEqual(kwargs["grid"], 2)
+        self.assertEqual(kwargs["global_fit"], True)
+        self.assertEqual(kwargs["provider"], "placed-background-img2bez")
+        artifact = load_glyph_trace_request(Path(trace_request))
+        self.assertEqual(artifact.payload["transform"]["designX"], 80)
+        self.assertEqual(artifact.payload["transform"]["designScaleY"], 10)
+        self.assertEqual(artifact.payload["metrics"]["advanceWidth"], 610)
+
+    def test_trace_background_candidate_route_with_installed_img2bez_writes_candidate(self) -> None:
+        try:
+            _resolve_img2bez_command()
+        except FileNotFoundError as exc:
+            self.skipTest(str(exc))
+        self._make_trace_slot()
+
+        async def post():
+            return {
+                "slot": "trace-demo",
+                "master": "Regular",
+                "glyph": "A",
+                "image": types.SimpleNamespace(file=io.BytesIO(self._png_with_black_rect()), filename="A.png"),
+                "unicode": "0041",
+                "width": "610",
+                "image_width": "32",
+                "image_height": "32",
+                "design_x": "80",
+                "design_y": "60",
+                "design_scale_x": "10",
+                "design_scale_y": "10",
+                "units_per_em": "1000",
+                "ascender": "800",
+                "descender": "-200",
+                "grid": "2",
+                "accuracy": "2",
+                "smooth": "0",
+                "alphamax": "0.8",
+                "threshold": "128",
+                "candidate_name": "trace-demo-placed-candidate",
+            }
+
+        request = types.SimpleNamespace(post=post)
+        response = asyncio.run(trace_background_candidate(request))
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["candidate_slot"], "trace-demo-placed-candidate")
+        report = response["report"]
+        self.assertEqual(report["provider"], "placed-background-img2bez")
+        self.assertEqual(report["glyph"], "A")
+        self.assertTrue(Path(report["glif_path"]).exists())
+        self.assertIn("<outline>", Path(report["glif_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(report["score"]["glyph"], "A")
+        self.assertIn("foregroundComparison", report["score"])
+        self.assertTrue((workspace.FONTS_DIR / "trace-demo-placed-candidate" / "glyph-trace-report.json").exists())
+
+    def test_build_glyph_trace_request_node_declares_request_output(self) -> None:
+        self.assertEqual(BuildGlyphTraceRequest.CATEGORY, "Runebender / Font")
+        self.assertEqual(BuildGlyphTraceRequest.RETURN_TYPES, ("GLYPH_TRACE_REQUEST", "STRING"))
+        input_types = BuildGlyphTraceRequest.INPUT_TYPES()
+        self.assertIn("font", input_types["required"])
+        self.assertIn("image_path", input_types["required"])
+
+    def test_trace_to_candidate_node_declares_font_output_and_request_input(self) -> None:
+        self.assertEqual(TraceToCandidate.CATEGORY, "Runebender / Font")
+        self.assertEqual(TraceToCandidate.RETURN_TYPES, ("FONT", "STRING"))
+        input_types = TraceToCandidate.INPUT_TYPES()
+        self.assertIn("font", input_types["required"])
+        self.assertIn("trace_request", input_types["required"])
+
+    def test_trace_with_quiver_node_declares_font_output_and_svg_input(self) -> None:
+        self.assertEqual(TraceWithQuiverAI.CATEGORY, "Runebender / Font")
+        self.assertEqual(TraceWithQuiverAI.RETURN_TYPES, ("FONT", "STRING"))
+        input_types = TraceWithQuiverAI.INPUT_TYPES()
+        self.assertIn("font", input_types["required"])
+        self.assertIn("trace_request", input_types["required"])
+        self.assertIn("svg_path", input_types["required"])
+
+    def test_trace_with_comfy_cloud_quiver_node_declares_cloud_inputs(self) -> None:
+        self.assertEqual(TraceWithComfyCloudQuiverAI.CATEGORY, "Runebender / Font")
+        self.assertEqual(TraceWithComfyCloudQuiverAI.RETURN_TYPES, ("FONT", "STRING"))
+        input_types = TraceWithComfyCloudQuiverAI.INPUT_TYPES()
+        self.assertIn("font", input_types["required"])
+        self.assertIn("trace_request", input_types["required"])
+        self.assertIn("workflow_api_json", input_types["required"])
+        self.assertIn("image_node_id", input_types["required"])
+        self.assertIn("api_key", input_types["optional"])
+
+    def test_trace_local_mask_node_declares_font_output_and_mask_input(self) -> None:
+        self.assertEqual(TraceLocalMaskToCandidate.CATEGORY, "Runebender / Font")
+        self.assertEqual(TraceLocalMaskToCandidate.RETURN_TYPES, ("FONT", "STRING"))
+        input_types = TraceLocalMaskToCandidate.INPUT_TYPES()
+        self.assertIn("font", input_types["required"])
+        self.assertIn("trace_request", input_types["required"])
+        self.assertIn("mask_path", input_types["required"])
+
+    def test_score_candidate_node_declares_report_output(self) -> None:
+        self.assertEqual(ScoreCandidate.CATEGORY, "Runebender / Font")
+        self.assertEqual(ScoreCandidate.RETURN_TYPES, ("STRING",))
+        input_types = ScoreCandidate.INPUT_TYPES()
+        self.assertIn("candidate_font", input_types["required"])
+        self.assertIn("glyph", input_types["required"])
+
+    def test_build_glyph_trace_request_node_writes_artifact(self) -> None:
+        self._make_trace_slot()
+        image = Path(self.tmp.name) / "A.png"
+        image.write_bytes(b"png")
+
+        trace_request, report_json = BuildGlyphTraceRequest().run(
+            font="trace-demo",
+            glyph="A",
+            master="Regular",
+            image_path=str(image),
+            image_width=100,
+            image_height=200,
+            design_x=10,
+            design_y=-20,
+            design_scale_x=2,
+            design_scale_y=3,
+            advance_width=610,
+            units_per_em=1000,
+            ascender=800,
+            descender=-200,
+        )
+
+        report = json.loads(report_json)
+        self.assertTrue(Path(trace_request).exists())
+        self.assertEqual(report["glyph"], "A")
+        self.assertEqual(report["master"], "Regular")
+        payload = json.loads(Path(trace_request).read_text(encoding="utf-8"))
+        self.assertEqual(payload["image"]["path"], "trace-requests/Regular/A/background.png")
+        self.assertEqual(payload["transform"]["designScaleY"], 3)
+        self.assertEqual((workspace.FONTS_DIR / "trace-demo" / payload["image"]["path"]).read_bytes(), b"png")
+
+    def test_trace_request_to_candidate_forks_and_writes_orange_candidate(self) -> None:
+        self._make_trace_slot()
+        transform = TraceImageTransform(
+            pixel_width=100,
+            pixel_height=200,
+            design_x=10,
+            design_y=-20,
+            design_scale_x=2,
+            design_scale_y=3,
+        )
+        artifact = write_glyph_trace_request(
+            slot="trace-demo",
+            glyph="A",
+            master="Regular",
+            image_bytes=b"png",
+            image_suffix=".png",
+            transform=transform,
+            advance_width=610,
+            units_per_em=1000,
+            ascender=800,
+            descender=-200,
+        )
+        traced_glif = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<glyph name=\"A\" format=\"2\">
+  <advance width=\"610\"/>
+  <outline>
+    <contour>
+      <point x=\"10\" y=\"20\" type=\"line\"/>
+    </contour>
+  </outline>
+</glyph>
+"""
+
+        with mock.patch(
+            "nodes.glyph_trace.trace_background_with_img2bez",
+            return_value=TraceBackgroundResult(
+                glyph="A",
+                glif=traced_glif,
+                source_ufo=workspace.FONTS_DIR / "trace-demo-candidate" / "Demo.ufo",
+                command=["img2bez"],
+            ),
+        ) as trace:
+            report = trace_request_to_candidate(
+                "trace-demo",
+                str(artifact.request_path),
+                candidate_name="trace-demo-candidate",
+            )
+
+        self.assertEqual(report["candidate_slot"], "trace-demo-candidate")
+        self.assertEqual(report["provider"], "img2bez")
+        self.assertEqual(report["trace_tool"], "img2bez")
+        self.assertEqual(report["score"]["advanceWidth"], 610)
+        self.assertEqual(report["score"]["contours"], 1)
+        self.assertEqual(report["score"]["points"], 1)
+        trace_kwargs = trace.call_args.kwargs
+        self.assertEqual(trace_kwargs["slot"], "trace-demo-candidate")
+        self.assertEqual(trace_kwargs["glyph_name"], "A")
+        self.assertEqual(trace_kwargs["width"], 610)
+        self.assertEqual(trace_kwargs["target_height"], 600)
+        self.assertEqual(trace_kwargs["global_fit"], True)
+        candidate_glif = (
+            workspace.FONTS_DIR / "trace-demo-candidate" / "Demo.ufo" / "glyphs" / "A_.glif"
+        ).read_text(encoding="utf-8")
+        self.assertIn("public.markColor", candidate_glif)
+        self.assertIn("1.0,0.6,0.06,1.0", candidate_glif)
+        self.assertIn('advance width="610"', candidate_glif)
+        original_glif = (workspace.FONTS_DIR / "trace-demo" / "Demo.ufo" / "glyphs" / "A_.glif").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('advance width="600"', original_glif)
+        self.assertTrue((workspace.FONTS_DIR / "trace-demo-candidate" / "glyph-trace-report.json").exists())
+
+    def test_trace_local_mask_to_candidate_uses_mask_image(self) -> None:
+        self._make_trace_slot()
+        transform = TraceImageTransform(
+            pixel_width=100,
+            pixel_height=200,
+            design_x=10,
+            design_y=-20,
+            design_scale_x=2,
+            design_scale_y=3,
+        )
+        artifact = write_glyph_trace_request(
+            slot="trace-demo",
+            glyph="A",
+            master="Regular",
+            image_bytes=b"original",
+            image_suffix=".png",
+            transform=transform,
+            advance_width=610,
+            units_per_em=1000,
+            ascender=800,
+            descender=-200,
+        )
+        mask = Path(self.tmp.name) / "mask.png"
+        mask.write_bytes(b"mask")
+        traced_glif = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<glyph name=\"A\" format=\"2\"><advance width=\"610\"/></glyph>
+"""
+
+        with mock.patch(
+            "nodes.glyph_trace.trace_background_with_img2bez",
+            return_value=TraceBackgroundResult(
+                glyph="A",
+                glif=traced_glif,
+                source_ufo=workspace.FONTS_DIR / "mask-candidate" / "Demo.ufo",
+                command=["img2bez"],
+            ),
+        ) as trace:
+            candidate, report_json = TraceLocalMaskToCandidate().run(
+                "trace-demo",
+                str(artifact.request_path),
+                str(mask),
+                candidate_name="mask-candidate",
+            )
+
+        self.assertEqual(candidate, "mask-candidate")
+        report = json.loads(report_json)
+        self.assertEqual(report["provider"], "local-model-mask-img2bez")
+        self.assertEqual(report["trace_image_path"], str(mask))
+        self.assertEqual(report["settings"]["grid"], 2)
+        self.assertEqual(report["settings"]["global_fit"], True)
+        self.assertEqual(report["settings"]["threshold"], None)
+        self.assertEqual(report["score"]["advanceWidth"], 610)
+        self.assertEqual(trace.call_args.kwargs["image_bytes"], b"mask")
+        self.assertTrue((workspace.FONTS_DIR / "mask-candidate" / "glyph-trace-report.json").exists())
+
+    def test_svg_to_glif_accepts_simple_filled_paths(self) -> None:
+        transform = TraceImageTransform(
+            pixel_width=100,
+            pixel_height=100,
+            design_x=10,
+            design_y=-20,
+            design_scale_x=2,
+            design_scale_y=3,
+        )
+        svg = """<svg viewBox=\"0 0 100 100\" xmlns=\"http://www.w3.org/2000/svg\">
+  <path fill=\"#000\" d=\"M 0 100 L 50 0 C 60 10 70 20 100 100 Z\"/>
+</svg>"""
+
+        glif = svg_to_glif(svg, glyph_name="A", transform=transform, width=610, unicode_hex="0041")
+
+        self.assertIn('<glyph name="A" format="2">', glif)
+        self.assertIn('<unicode hex="0041"', glif)
+        self.assertIn('<advance width="610"', glif)
+        self.assertIn('x="10" y="-20" type="line"', glif)
+        self.assertIn('x="110" y="280" type="line"', glif)
+        self.assertIn('type="curve"', glif)
+        self.assertIn("public.markColor", glif)
+
+    def test_svg_to_glif_rejects_unsupported_svg_constructs(self) -> None:
+        transform = TraceImageTransform(
+            pixel_width=100,
+            pixel_height=100,
+            design_x=0,
+            design_y=0,
+            design_scale_x=1,
+            design_scale_y=1,
+        )
+
+        with self.assertRaisesRegex(ValueError, "stroke"):
+            svg_to_glif(
+                '<svg><path stroke="#000" fill="none" d="M0 0 L10 10"/></svg>',
+                glyph_name="A",
+                transform=transform,
+                width=600,
+            )
+
+        with self.assertRaisesRegex(ValueError, "Unsupported SVG transform"):
+            svg_to_glif(
+                '<svg><path transform="scale(2)" fill="#000" d="M0 0 L10 10"/></svg>',
+                glyph_name="A",
+                transform=transform,
+                width=600,
+            )
+
+    def test_trace_quiver_svg_to_candidate_imports_svg_into_fork(self) -> None:
+        self._make_trace_slot()
+        transform = TraceImageTransform(
+            pixel_width=100,
+            pixel_height=100,
+            design_x=0,
+            design_y=0,
+            design_scale_x=1,
+            design_scale_y=1,
+        )
+        artifact = write_glyph_trace_request(
+            slot="trace-demo",
+            glyph="A",
+            master="Regular",
+            image_bytes=b"png",
+            image_suffix=".png",
+            transform=transform,
+            advance_width=610,
+            units_per_em=1000,
+            ascender=800,
+            descender=-200,
+        )
+        svg = Path(self.tmp.name) / "quiver.svg"
+        svg.write_text(
+            '<svg viewBox="0 0 100 100"><path fill="#000" d="M0 100 L100 100 L100 0 L0 0 Z"/></svg>',
+            encoding="utf-8",
+        )
+
+        report = trace_quiver_svg_to_candidate(
+            "trace-demo",
+            str(artifact.request_path),
+            svg_path=str(svg),
+            candidate_name="quiver-candidate",
+        )
+
+        self.assertEqual(report["provider"], "quiver-ai-manual-svg")
+        self.assertEqual(report["candidate_slot"], "quiver-candidate")
+        self.assertEqual(report["score"]["contours"], 1)
+        self.assertEqual(report["score"]["advanceWidth"], 610)
+        candidate_glif = (
+            workspace.FONTS_DIR / "quiver-candidate" / "Demo.ufo" / "glyphs" / "A_.glif"
+        ).read_text(encoding="utf-8")
+        self.assertIn("public.markColor", candidate_glif)
+        self.assertIn('advance width="610"', candidate_glif)
+        self.assertIn('x="0" y="0" type="line"', candidate_glif)
+        self.assertIn('x="100" y="100" type="line"', candidate_glif)
+        self.assertTrue((workspace.FONTS_DIR / "quiver-candidate" / "glyph-trace-report.json").exists())
+
+    def test_comfy_cloud_quiver_requires_api_key_before_network(self) -> None:
+        self._make_trace_slot()
+        artifact = write_glyph_trace_request(
+            slot="trace-demo",
+            glyph="A",
+            master="Regular",
+            image_bytes=b"png",
+            image_suffix=".png",
+            transform=TraceImageTransform(100, 100, 0, 0, 1, 1),
+            advance_width=610,
+            units_per_em=1000,
+            ascender=800,
+            descender=-200,
+        )
+        with mock.patch.dict(os.environ, {"COMFY_CLOUD_API_KEY": ""}, clear=False), \
+             mock.patch("nodes.glyph_trace._comfy_cloud_request") as request:
+            with self.assertRaisesRegex(ValueError, "API key required"):
+                run_comfy_cloud_quiver_svg(
+                    trace_request=str(artifact.request_path),
+                    workflow_api_json='{"1":{"class_type":"LoadImage","inputs":{}}}',
+                    image_node_id="1",
+                    image_input_name="image",
+                )
+        request.assert_not_called()
+
+    def test_comfy_cloud_quiver_uploads_submits_and_downloads_svg(self) -> None:
+        self._make_trace_slot()
+        artifact = write_glyph_trace_request(
+            slot="trace-demo",
+            glyph="A",
+            master="Regular",
+            image_bytes=self._png_with_black_rect(),
+            image_suffix=".png",
+            transform=TraceImageTransform(100, 100, 0, 0, 1, 1),
+            advance_width=610,
+            units_per_em=1000,
+            ascender=800,
+            descender=-200,
+        )
+        calls = []
+
+        def fake_request(method, url, *, api_key, body=None, content_type=None, timeout=60):
+            calls.append({
+                "method": method,
+                "url": url,
+                "api_key": api_key,
+                "body": body,
+                "content_type": content_type,
+            })
+            if url.endswith("/api/upload/image"):
+                self.assertIn(b'name="image"; filename="background.png"', body)
+                return json.dumps({"name": "uploaded-background.png", "type": "input"}).encode("utf-8")
+            if url.endswith("/api/prompt"):
+                payload = json.loads(body.decode("utf-8"))
+                self.assertEqual(payload["prompt"]["1"]["inputs"]["image"], "uploaded-background.png")
+                self.assertEqual(payload["extra_data"]["api_key_comfy_org"], "secret")
+                self.assertEqual(payload["extra_data"]["runebender_trace_request"], artifact.request_id)
+                return json.dumps({"prompt_id": "prompt-1", "node_errors": {}}).encode("utf-8")
+            if url.endswith("/api/job/prompt-1/status"):
+                return json.dumps({"status": "completed"}).encode("utf-8")
+            if url.endswith("/api/history_v2/prompt-1"):
+                return json.dumps({
+                    "prompt-1": {
+                        "outputs": {
+                            "9": {
+                                "files": [
+                                    {"filename": "quiver.svg", "subfolder": "", "type": "output"}
+                                ]
+                            }
+                        }
+                    }
+                }).encode("utf-8")
+            if "/api/view?" in url:
+                self.assertIn("filename=quiver.svg", url)
+                return b'<svg viewBox="0 0 100 100"><path fill="#000" d="M0 100 L100 100 L100 0 L0 0 Z"/></svg>'
+            raise AssertionError(f"unexpected request: {method} {url}")
+
+        with mock.patch("nodes.glyph_trace._comfy_cloud_request", side_effect=fake_request):
+            svg_path, report = run_comfy_cloud_quiver_svg(
+                trace_request=str(artifact.request_path),
+                workflow_api_json='{"1":{"class_type":"LoadImage","inputs":{}}}',
+                image_node_id="1",
+                image_input_name="image",
+                svg_output_node_id="9",
+                api_key="secret",
+                base_url="https://cloud.comfy.org",
+                timeout_seconds=5,
+                poll_interval_seconds=0.1,
+            )
+
+        self.assertEqual(report["prompt_id"], "prompt-1")
+        self.assertEqual(report["upload"]["filename"], "uploaded-background.png")
+        self.assertTrue(Path(svg_path).exists())
+        self.assertIn("<svg", Path(svg_path).read_text(encoding="utf-8"))
+        self.assertEqual([call["method"] for call in calls], ["POST", "POST", "GET", "GET", "GET"])
+
+    def test_trace_with_comfy_cloud_quiver_node_imports_cloud_svg_candidate(self) -> None:
+        self._make_trace_slot()
+        artifact = write_glyph_trace_request(
+            slot="trace-demo",
+            glyph="A",
+            master="Regular",
+            image_bytes=b"png",
+            image_suffix=".png",
+            transform=TraceImageTransform(100, 100, 0, 0, 1, 1),
+            advance_width=610,
+            units_per_em=1000,
+            ascender=800,
+            descender=-200,
+        )
+        svg = Path(self.tmp.name) / "cloud-quiver.svg"
+        svg.write_text(
+            '<svg viewBox="0 0 100 100"><path fill="#000" d="M0 100 L100 100 L100 0 L0 0 Z"/></svg>',
+            encoding="utf-8",
+        )
+        with mock.patch(
+            "nodes.glyph_trace.run_comfy_cloud_quiver_svg",
+            return_value=(str(svg), {"prompt_id": "prompt-1", "svg_path": str(svg)}),
+        ) as run_cloud:
+            candidate, report_json = TraceWithComfyCloudQuiverAI().run(
+                "trace-demo",
+                str(artifact.request_path),
+                '{"1":{"class_type":"LoadImage","inputs":{}}}',
+                "1",
+                "image",
+                candidate_name="cloud-quiver-candidate",
+                svg_output_node_id="9",
+                api_key="secret",
+                timeout_seconds=5,
+                poll_interval_seconds=0.1,
+            )
+
+        self.assertEqual(candidate, "cloud-quiver-candidate")
+        report = json.loads(report_json)
+        self.assertEqual(report["provider"], "comfy-cloud-quiverai")
+        self.assertEqual(report["provider_report"]["prompt_id"], "prompt-1")
+        self.assertEqual(report["score"]["advanceWidth"], 610)
+        self.assertTrue((workspace.FONTS_DIR / "cloud-quiver-candidate" / "glyph-trace-report.json").exists())
+        self.assertEqual(run_cloud.call_args.kwargs["svg_output_node_id"], "9")
+
+    def test_score_candidate_glyph_reports_review_metrics(self) -> None:
+        self._make_trace_slot("candidate")
+        glif_path = workspace.FONTS_DIR / "candidate" / "Demo.ufo" / "glyphs" / "A_.glif"
+        contents_path = workspace.FONTS_DIR / "candidate" / "Demo.ufo" / "glyphs" / "contents.plist"
+        contents_path.write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<plist version=\"1.0\">
+<dict>
+  <key>A</key>
+  <string>A_.glif</string>
+  <key>B</key>
+  <string>B_.glif</string>
+</dict>
+</plist>
+""",
+            encoding="utf-8",
+        )
+        glif_path.write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<glyph name=\"A\" format=\"2\">
+  <advance width=\"600\"/>
+  <outline>
+    <contour>
+      <point x=\"10\" y=\"0\" type=\"line\"/>
+      <point x=\"110\" y=\"0\" type=\"line\"/>
+      <point x=\"110\" y=\"200\" type=\"line\"/>
+      <point x=\"10\" y=\"200\" type=\"line\"/>
+    </contour>
+    <contour>
+      <point x=\"1\" y=\"1\" type=\"line\"/>
+      <point x=\"2\" y=\"1\" type=\"line\"/>
+      <point x=\"2\" y=\"2\" type=\"line\"/>
+    </contour>
+  </outline>
+</glyph>
+""",
+            encoding="utf-8",
+        )
+        (workspace.FONTS_DIR / "candidate" / "Demo.ufo" / "glyphs" / "B_.glif").write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<glyph name=\"B\" format=\"2\">
+  <advance width=\"600\"/>
+  <outline>
+    <contour>
+      <point x=\"20\" y=\"0\" type=\"line\"/>
+      <point x=\"100\" y=\"0\" type=\"line\"/>
+      <point x=\"100\" y=\"200\" type=\"line\"/>
+      <point x=\"20\" y=\"200\" type=\"line\"/>
+    </contour>
+  </outline>
+  <lib>
+    <dict>
+      <key>public.markColor</key>
+      <string>0.09,0.72,0.44,1.0</string>
+    </dict>
+  </lib>
+</glyph>
+""",
+            encoding="utf-8",
+        )
+        transform = TraceImageTransform(
+            pixel_width=100,
+            pixel_height=200,
+            design_x=10,
+            design_y=0,
+            design_scale_x=1,
+            design_scale_y=1,
+        )
+        artifact = write_glyph_trace_request(
+            slot="candidate",
+            glyph="A",
+            master="Regular",
+            image_bytes=b"png",
+            image_suffix=".png",
+            transform=transform,
+            advance_width=600,
+            units_per_em=1000,
+            ascender=800,
+            descender=-200,
+        )
+
+        report = score_candidate_glyph(
+            "candidate",
+            glyph="A",
+            master="Regular",
+            trace_request=str(artifact.request_path),
+            speckle_area=16,
+        )
+
+        self.assertTrue(report["success"])
+        self.assertEqual(report["contours"], 2)
+        self.assertEqual(report["points"], 7)
+        self.assertEqual(report["speckles"], 1)
+        self.assertEqual(report["bbox"]["xMin"], 1)
+        self.assertEqual(report["bbox"]["yMax"], 200)
+        self.assertEqual(report["sidebearings"]["left"], 1)
+        self.assertEqual(report["sidebearings"]["right"], 490)
+        self.assertEqual(report["stemWidth"], 100)
+        self.assertEqual(report["stemComparison"]["referenceCount"], 1)
+        self.assertEqual(report["stemComparison"]["referenceAverageStemWidth"], 80)
+        self.assertEqual(report["stemComparison"]["delta"], 20)
+        self.assertIn("backgroundComparison", report)
+        self.assertEqual(report["backgroundComparison"]["expectedBBox"]["xMin"], 10)
+
+    def test_score_candidate_glyph_reports_png_foreground_comparison(self) -> None:
+        self._make_trace_slot("candidate")
+        glif_path = workspace.FONTS_DIR / "candidate" / "Demo.ufo" / "glyphs" / "A_.glif"
+        glif_path.write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<glyph name=\"A\" format=\"2\">
+  <advance width=\"600\"/>
+  <outline>
+    <contour>
+      <point x=\"80\" y=\"60\" type=\"line\"/>
+      <point x=\"240\" y=\"60\" type=\"line\"/>
+      <point x=\"240\" y=\"260\" type=\"line\"/>
+      <point x=\"80\" y=\"260\" type=\"line\"/>
+    </contour>
+  </outline>
+</glyph>
+""",
+            encoding="utf-8",
+        )
+        transform = TraceImageTransform(
+            pixel_width=32,
+            pixel_height=32,
+            design_x=0,
+            design_y=0,
+            design_scale_x=10,
+            design_scale_y=10,
+        )
+        artifact = write_glyph_trace_request(
+            slot="candidate",
+            glyph="A",
+            master="Regular",
+            image_bytes=self._png_with_black_rect(),
+            image_suffix=".png",
+            transform=transform,
+            advance_width=600,
+            units_per_em=1000,
+            ascender=800,
+            descender=-200,
+        )
+
+        report = score_candidate_glyph(
+            "candidate",
+            glyph="A",
+            master="Regular",
+            trace_request=str(artifact.request_path),
+        )
+
+        foreground = report["foregroundComparison"]
+        self.assertEqual(foreground["foregroundBBoxPixels"]["xMin"], 8)
+        self.assertEqual(foreground["foregroundBBoxPixels"]["yMax"], 26)
+        self.assertEqual(foreground["expectedBBox"]["xMin"], 80)
+        self.assertEqual(foreground["expectedBBox"]["yMin"], 60)
+        self.assertEqual(foreground["bboxDelta"]["xMin"], 0)
+        self.assertEqual(foreground["bboxDelta"]["yMax"], 0)
+        self.assertEqual(foreground["areaRatio"], 1)
+        overlay = report["rasterOverlayDiff"]
+        self.assertEqual(overlay["falsePositive"], 0)
+        self.assertEqual(overlay["falseNegative"], 0)
+        self.assertEqual(overlay["intersectionOverUnion"], 1)
+        self.assertEqual(overlay["precision"], 1)
+        self.assertEqual(overlay["recall"], 1)
+
+    def test_score_candidate_glyph_reports_raster_overlay_mismatch(self) -> None:
+        self._make_trace_slot("candidate")
+        glif_path = workspace.FONTS_DIR / "candidate" / "Demo.ufo" / "glyphs" / "A_.glif"
+        glif_path.write_text(
+            """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<glyph name=\"A\" format=\"2\">
+  <advance width=\"600\"/>
+  <outline>
+    <contour>
+      <point x=\"120\" y=\"100\" type=\"line\"/>
+      <point x=\"280\" y=\"100\" type=\"line\"/>
+      <point x=\"280\" y=\"300\" type=\"line\"/>
+      <point x=\"120\" y=\"300\" type=\"line\"/>
+    </contour>
+  </outline>
+</glyph>
+""",
+            encoding="utf-8",
+        )
+        artifact = write_glyph_trace_request(
+            slot="candidate",
+            glyph="A",
+            master="Regular",
+            image_bytes=self._png_with_black_rect(),
+            image_suffix=".png",
+            transform=TraceImageTransform(
+                pixel_width=32,
+                pixel_height=32,
+                design_x=0,
+                design_y=0,
+                design_scale_x=10,
+                design_scale_y=10,
+            ),
+            advance_width=600,
+            units_per_em=1000,
+            ascender=800,
+            descender=-200,
+        )
+
+        report = score_candidate_glyph(
+            "candidate",
+            glyph="A",
+            master="Regular",
+            trace_request=str(artifact.request_path),
+        )
+
+        overlay = report["rasterOverlayDiff"]
+        self.assertGreater(overlay["falsePositive"], 0)
+        self.assertGreater(overlay["falseNegative"], 0)
+        self.assertLess(overlay["intersectionOverUnion"], 1)
+
+    def test_score_candidate_node_returns_json_report(self) -> None:
+        self._make_trace_slot("candidate")
+
+        (report_json,) = ScoreCandidate().run("candidate", glyph="A", master="Regular")
+
+        report = json.loads(report_json)
+        self.assertEqual(report["candidate_font"], "candidate")
+        self.assertEqual(report["glyph"], "A")
+        self.assertEqual(report["advanceWidth"], 600)
+
     def test_glyph_candidate_builder_declares_font_output_and_report(self) -> None:
         self.assertEqual(GlyphCandidateBuilder.CATEGORY, "Runebender / Font")
         self.assertEqual(GlyphCandidateBuilder.RETURN_TYPES, ("FONT", "STRING"))
@@ -142,8 +1429,12 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIn("write_linked_source", input_types["optional"])
 
     def test_glyph_candidate_builder_color_and_arabic_filters(self) -> None:
-        self.assertTrue(rgba_matches("1,0.251,0.251,1", (1.0, 0.3, 0.3, 1.0)))
-        self.assertFalse(rgba_matches("0.267,0.733,0.267,1", (1.0, 0.3, 0.3, 1.0)))
+        self.assertEqual(MARK_COLORS["green"], (0.09, 0.72, 0.44, 1.0))
+        self.assertTrue(rgba_matches("1,0.251,0.251,1", MARK_COLORS["red"]))
+        self.assertFalse(rgba_matches("0.267,0.733,0.267,1", MARK_COLORS["red"]))
+        self.assertTrue(mark_color_matches("0.09,0.72,0.44,1", "green"))
+        self.assertTrue(mark_color_matches("0.3,0.7,0.3,1", "green"))
+        self.assertFalse(mark_color_matches("1,0.29,0.24,1", "green"))
         self.assertEqual(
             arabic_glyph_filter(["A", "seen-ar", "dottedCircle", "zeroFarsi-ar"]),
             ["seen-ar", "dottedCircle", "zeroFarsi-ar"],

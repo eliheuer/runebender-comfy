@@ -9,8 +9,8 @@ to regenerate the toolbar. This script refuses to overwrite an existing
 UFO so it can never clobber later edits.
 
 The toolbar consumes SVG (Y-down); UFOs are Y-up. We store the icons
-Y-up here (flip dy=800 so they sit baseline→ascender for comfortable
-editing) and build_toolbar_icons.py flips back when generating SVG.
+Y-up here on the same powers-of-two drawing grid as Virtua Grotesk and
+build_toolbar_icons.py flips back when generating SVG.
 
 Run with an interpreter that has fontTools + ufoLib2, e.g. the ComfyUI
 venv:
@@ -29,11 +29,13 @@ from fontTools.pens.boundsPen import BoundsPen
 from fontTools.pens.transformPen import TransformPen
 from fontTools.svgLib.path import parse_path
 
-UPM = 1000
-ASCENDER = 800
-DESCENDER = -200
+UPM = 1024
+ASCENDER = 832
+DESCENDER = -256
+CAP_HEIGHT = 768
+X_HEIGHT = 576
 # Flip screen-space (Y-down) icon paths up into UFO space (Y-up), placing
-# them baseline→ascender. y_ufo = 800 - y_screen.
+# them baseline→ascender. y_ufo = ASCENDER - y_screen.
 SCREEN_TO_UFO = (1, 0, 0, -1, 0, ASCENDER)
 
 # Glyph name -> screen-space SVG path. These are the outlines the toolbar
@@ -78,8 +80,8 @@ def main() -> None:
     font.info.unitsPerEm = UPM
     font.info.ascender = ASCENDER
     font.info.descender = DESCENDER
-    font.info.capHeight = 700
-    font.info.xHeight = 500
+    font.info.capHeight = CAP_HEIGHT
+    font.info.xHeight = X_HEIGHT
 
     for name in ORDER:
         d = ICONS[name]

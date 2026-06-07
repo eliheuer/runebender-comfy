@@ -279,6 +279,9 @@ The toolbar icons live in `assets/runebender-icons.ufo`. The app reads
 them by glyph name after `scripts/build_toolbar_icons.py` exports SVG
 geometry, but the UFO also assigns stable Unicode Private Use Area
 values so the icons can be used in DrawBot specimens and text previews.
+The icon source uses the same powers-of-two drawing grid as Virtua
+Grotesk: 1024 UPM, 832 ascender, -256 descender, 768 cap height, and
+576 x-height.
 
 The PUA contract is tracked in
 `assets/runebender-icons.codepoints.json`. Current icons use `U+E000`

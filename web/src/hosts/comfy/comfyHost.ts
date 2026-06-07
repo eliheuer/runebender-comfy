@@ -4,6 +4,8 @@ import type {
   LinkSourceResult,
   RunebenderHost,
   SaveWorkspaceAsResult,
+  TraceBackgroundCandidateResult,
+  TraceBackgroundGlyphResult,
   WorkspaceSlotPayload,
 } from "../../host/runebenderHost";
 
@@ -116,6 +118,76 @@ export const comfyHost: RunebenderHost = {
       body,
     });
     const data = (await response.json().catch(() => ({}))) as SaveWorkspaceAsResult;
+    return { response, data };
+  },
+
+  async traceBackgroundGlyph(args) {
+    const body = new FormData();
+    body.append("slot", args.slot);
+    body.append("master", args.master);
+    body.append("glyph", args.glyph);
+    body.append("image", args.image);
+    if (args.unicode) body.append("unicode", args.unicode);
+    body.append("width", String(args.width));
+    body.append("target_height", String(args.targetHeight));
+    body.append("x_offset", String(args.xOffset));
+    body.append("y_offset", String(args.yOffset));
+    if (args.imageWidth !== undefined) body.append("image_width", String(args.imageWidth));
+    if (args.imageHeight !== undefined) body.append("image_height", String(args.imageHeight));
+    if (args.designX !== undefined) body.append("design_x", String(args.designX));
+    if (args.designY !== undefined) body.append("design_y", String(args.designY));
+    if (args.designScaleX !== undefined) body.append("design_scale_x", String(args.designScaleX));
+    if (args.designScaleY !== undefined) body.append("design_scale_y", String(args.designScaleY));
+    body.append("grid", String(args.grid ?? 2));
+    body.append("accuracy", String(args.accuracy ?? 4));
+    body.append("smooth", String(args.smooth ?? 1));
+    body.append("alphamax", String(args.alphamax ?? 0.8));
+    if (args.invert) body.append("invert", "true");
+    if (args.threshold !== undefined && args.threshold !== null) {
+      body.append("threshold", String(args.threshold));
+    }
+    const response = await fetch("/runebender/workspace/trace_background", {
+      method: "POST",
+      body,
+    });
+    const data = (await response.json().catch(() => ({}))) as TraceBackgroundGlyphResult;
+    return { response, data };
+  },
+
+  async traceBackgroundCandidate(args) {
+    const body = new FormData();
+    body.append("slot", args.slot);
+    body.append("master", args.master);
+    body.append("glyph", args.glyph);
+    body.append("image", args.image);
+    if (args.candidateName) body.append("candidate_name", args.candidateName);
+    if (args.unicode) body.append("unicode", args.unicode);
+    body.append("width", String(args.width));
+    body.append("target_height", String(args.targetHeight));
+    body.append("x_offset", String(args.xOffset));
+    body.append("y_offset", String(args.yOffset));
+    if (args.imageWidth !== undefined) body.append("image_width", String(args.imageWidth));
+    if (args.imageHeight !== undefined) body.append("image_height", String(args.imageHeight));
+    if (args.designX !== undefined) body.append("design_x", String(args.designX));
+    if (args.designY !== undefined) body.append("design_y", String(args.designY));
+    if (args.designScaleX !== undefined) body.append("design_scale_x", String(args.designScaleX));
+    if (args.designScaleY !== undefined) body.append("design_scale_y", String(args.designScaleY));
+    if (args.unitsPerEm !== undefined) body.append("units_per_em", String(args.unitsPerEm));
+    if (args.ascender !== undefined) body.append("ascender", String(args.ascender));
+    if (args.descender !== undefined) body.append("descender", String(args.descender));
+    body.append("grid", String(args.grid ?? 2));
+    body.append("accuracy", String(args.accuracy ?? 4));
+    body.append("smooth", String(args.smooth ?? 1));
+    body.append("alphamax", String(args.alphamax ?? 0.8));
+    if (args.invert) body.append("invert", "true");
+    if (args.threshold !== undefined && args.threshold !== null) {
+      body.append("threshold", String(args.threshold));
+    }
+    const response = await fetch("/runebender/workspace/trace_background_candidate", {
+      method: "POST",
+      body,
+    });
+    const data = (await response.json().catch(() => ({}))) as TraceBackgroundCandidateResult;
     return { response, data };
   },
 
