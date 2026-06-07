@@ -2435,8 +2435,9 @@ function backgroundTraceArgs() {
   const metrics = editor.metricBounds();
   const ascender = metrics.length >= 2 ? metrics[0] : 800;
   const descender = metrics.length >= 2 ? metrics[1] : -200;
-  const emBoxHeight = Math.max(1, ascender - descender);
-  const visualFitAccuracy = Math.max(0.5, Math.min(1, targetHeight / emBoxHeight));
+  // img2bez global fitting gets noisy at sub-unit accuracy; 4 keeps the
+  // silhouette recognizable while producing far fewer editable points.
+  const traceFitAccuracy = 4;
   return {
     slot: currentFontPath.value,
     master: activeMasterName.value,
@@ -2457,7 +2458,7 @@ function backgroundTraceArgs() {
     ascender,
     descender,
     grid,
-    accuracy: visualFitAccuracy,
+    accuracy: traceFitAccuracy,
     smooth: 0,
     alphamax: 0.8,
     globalFit: true,
