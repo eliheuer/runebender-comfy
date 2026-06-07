@@ -2462,7 +2462,7 @@ function backgroundTraceArgs() {
     accuracy: traceFitAccuracy,
     smooth: 0,
     alphamax: 0.8,
-    globalFit: true,
+    globalFit: false,
   };
 }
 
