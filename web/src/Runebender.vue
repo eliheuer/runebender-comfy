@@ -2435,6 +2435,8 @@ function backgroundTraceArgs() {
   const metrics = editor.metricBounds();
   const ascender = metrics.length >= 2 ? metrics[0] : 800;
   const descender = metrics.length >= 2 ? metrics[1] : -200;
+  const emBoxHeight = Math.max(1, ascender - descender);
+  const visualFitAccuracy = Math.max(0.5, Math.min(1, targetHeight / emBoxHeight));
   return {
     slot: currentFontPath.value,
     master: activeMasterName.value,
@@ -2455,7 +2457,7 @@ function backgroundTraceArgs() {
     ascender,
     descender,
     grid,
-    accuracy: 1,
+    accuracy: visualFitAccuracy,
     smooth: 0,
     alphamax: 0.8,
     globalFit: true,
@@ -2502,6 +2504,9 @@ async function traceBackgroundImageToGlyph(refit = false): Promise<boolean> {
     if (!response.ok || !trace.glif) {
       status.value = `trace failed: ${trace.error || response.statusText}`;
       return false;
+    }
+    if (trace.command?.length) {
+      console.info("[runebender] trace command:", trace.command.join(" "));
     }
     const bytes = new TextEncoder().encode(trace.glif);
     const info = parseGlyphInfo(bytes);

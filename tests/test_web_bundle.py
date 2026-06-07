@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-06-trace-menu-polish"
+EXPECTED_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-06-trace-global-fit-formdata"
 
 
 class WebBundleTests(unittest.TestCase):
@@ -130,6 +130,8 @@ class WebBundleTests(unittest.TestCase):
 
         source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
         self.assertIn("clearBackgroundImage();", source)
+        host = (ROOT / "web" / "src" / "hosts" / "comfy" / "comfyHost.ts").read_text(encoding="utf-8")
+        self.assertIn('body.append("globalFit", "true")', host)
         renderer = (ROOT / "rust-core" / "src" / "renderer.rs").read_text(encoding="utf-8")
         self.assertNotIn("path_edit_fill", renderer)
         self.assertIn("controls.outline", renderer)

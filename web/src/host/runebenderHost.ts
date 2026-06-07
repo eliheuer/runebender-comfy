@@ -73,6 +73,7 @@ export type TraceBackgroundGlyphArgs = {
   accuracy?: number;
   smooth?: number;
   alphamax?: number;
+  globalFit?: boolean;
   invert?: boolean;
   threshold?: number | null;
 };
