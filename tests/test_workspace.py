@@ -470,10 +470,11 @@ class WorkspaceTests(unittest.TestCase):
         (glyphs_dir / "A_.glif").write_text("<glyph name=\"A\" format=\"2\"/>", encoding="utf-8")
         workspace._write_manifest(slot_dir, {"source_kind": "ufo/designspace"})  # type: ignore[attr-defined]
 
-        def fake_run(cmd, check, cwd, capture_output, text):
+        def fake_run(cmd, check, cwd, capture_output, text, timeout):
             self.assertFalse(check)
             self.assertTrue(capture_output)
             self.assertTrue(text)
+            self.assertEqual(timeout, 30)
             self.assertEqual(cmd[0], "/usr/bin/img2bez")
             self.assertEqual(cmd[cmd.index("--name") + 1], "A")
             self.assertEqual(cmd[cmd.index("--width") + 1], "610")
@@ -531,6 +532,17 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(tool.name, "RUNEBENDER_TRACE_TOOL")
         self.assertEqual(tool.command, ["/opt/bin/future-tracer"])
         self.assertEqual(compat_command, tool.command)
+
+    def test_trace_tool_prefers_sibling_img2bez_release(self) -> None:
+        sibling_release = Path.home() / "GH" / "repos" / "img2bez" / "target" / "release" / "img2bez"
+        with mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch("nodes.runebender.shutil.which", return_value="/Users/eli/.cargo/bin/img2bez"), \
+             mock.patch("nodes.runebender.Path.exists", lambda path: path == sibling_release):
+            tool = _resolve_trace_tool()
+
+        self.assertEqual(tool.name, "img2bez")
+        self.assertEqual(tool.command, [str(sibling_release)])
+        self.assertEqual(tool.cwd, sibling_release.parents[2])
 
     def test_trace_background_with_installed_img2bez_traces_fixture_image(self) -> None:
         try:

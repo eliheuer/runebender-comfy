@@ -2507,8 +2507,13 @@ async function traceBackgroundImageToGlyph(refit = false): Promise<boolean> {
       `[runebender] trace request glyph=${glyphName} slot=${args.slot} master=${args.master} image=${args.image.name} accuracy=${args.accuracy}`,
     );
     const { response, data: trace } = await runebenderHost.traceBackgroundGlyph(args);
+    runebenderHost.log?.(
+      "info",
+      `[runebender] trace response status=${response.status} ok=${response.ok} glif_bytes=${trace.glif?.length ?? 0} error=${trace.error ?? ""}`,
+    );
     if (!response.ok || !trace.glif) {
       status.value = `trace failed: ${trace.error || response.statusText}`;
+      runebenderHost.log?.("error", `[runebender] trace response rejected: ${status.value}`);
       return false;
     }
     if (trace.command?.length) {
@@ -2516,6 +2521,10 @@ async function traceBackgroundImageToGlyph(refit = false): Promise<boolean> {
     }
     const bytes = new TextEncoder().encode(trace.glif);
     const info = parseGlyphInfo(bytes);
+    runebenderHost.log?.(
+      "info",
+      `[runebender] trace parse ok glyph=${glyphName} bytes=${bytes.length} contours=${info.contours} width=${info.width}`,
+    );
     setGlyphBytes(data, glyphName, bytes);
     data.glyphMetadata.set(glyphName, {
       name: glyphName,
@@ -2531,7 +2540,9 @@ async function traceBackgroundImageToGlyph(refit = false): Promise<boolean> {
     }
     refreshGridGlyphSvg(data, glyphName, bytes);
     ensureEditorComponentGlyphs(data);
+    runebenderHost.log?.("info", `[runebender] trace applying glif to editor glyph=${glyphName}`);
     editor.setGlyphGlifWithCachedComponentsPreserveHistory(bytes);
+    runebenderHost.log?.("info", `[runebender] trace editor apply ok glyph=${glyphName}`);
     editorGlyphNeedsSync = false;
     applyEditorPanelState(editor.editorPanelState());
     updateCompatibilityErrors();
@@ -2551,6 +2562,7 @@ async function traceBackgroundImageToGlyph(refit = false): Promise<boolean> {
   } catch (e) {
     console.warn("background trace failed:", e);
     status.value = `trace failed: ${e}`;
+    runebenderHost.log?.("error", `[runebender] trace frontend failed: ${e}`);
     return false;
   }
 }

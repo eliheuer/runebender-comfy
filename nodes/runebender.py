@@ -271,12 +271,6 @@ def _resolve_trace_tool() -> LocalTraceTool:
     if configured is not None:
         return configured
 
-    explicit = shutil.which(str(Path.home() / ".cargo" / "bin" / "img2bez"))
-    env_path = shutil.which("img2bez")
-    if env_path:
-        return LocalTraceTool("img2bez", [env_path])
-    if explicit:
-        return LocalTraceTool("img2bez", [explicit])
     sibling = Path.home() / "GH" / "repos" / "img2bez"
     release_bin = sibling / "target" / "release" / "img2bez"
     if release_bin.exists():
@@ -288,6 +282,12 @@ def _resolve_trace_tool() -> LocalTraceTool:
             ["cargo", "run", "--quiet", "--manifest-path", str(manifest), "--"],
             cwd=sibling,
         )
+    explicit = shutil.which(str(Path.home() / ".cargo" / "bin" / "img2bez"))
+    env_path = shutil.which("img2bez")
+    if env_path:
+        return LocalTraceTool("img2bez", [env_path])
+    if explicit:
+        return LocalTraceTool("img2bez", [explicit])
     raise FileNotFoundError(
         "No local trace tool was found. Set RUNEBENDER_TRACE_TOOL to an "
         "img2bez-compatible Rust tracer, set RUNEBENDER_IMG2BEZ, build "
@@ -419,12 +419,24 @@ def trace_background_with_img2bez(
             args.extend(["--threshold", str(threshold)])
 
         command = trace_tool.command + args
+        print(
+            f"[runebender] trace subprocess start tool={trace_tool.name!r} "
+            f"cwd={str(trace_tool.cwd) if trace_tool.cwd is not None else None!r} "
+            f"command={' '.join(command)}",
+            flush=True,
+        )
         completed = subprocess.run(
             command,
             cwd=str(trace_tool.cwd) if trace_tool.cwd is not None else None,
             check=False,
             capture_output=True,
             text=True,
+            timeout=30,
+        )
+        print(
+            f"[runebender] trace subprocess done returncode={completed.returncode} "
+            f"stdout_bytes={len(completed.stdout)} stderr_bytes={len(completed.stderr)}",
+            flush=True,
         )
         if completed.returncode != 0:
             stderr = completed.stderr.strip() or completed.stdout.strip()
@@ -437,6 +449,10 @@ def trace_background_with_img2bez(
             glif_path.read_bytes(),
             round(x_offset / max(grid, 1)) * max(grid, 1) - IMG2BEZ_DEFAULT_LSB,
         ).decode("utf-8")
+        print(
+            f"[runebender] trace glif ready glyph={glyph_name!r} bytes={len(glif.encode('utf-8'))}",
+            flush=True,
+        )
         return TraceBackgroundResult(
             glyph=glyph_name,
             glif=glif,
@@ -655,7 +671,13 @@ async def trace_background_image(request):
             threshold=threshold if 0 <= threshold <= 255 else None,
         )
     except Exception as exc:
+        print(f"[runebender] trace_background failed: {exc}", flush=True)
         return web.json_response({"success": False, "error": str(exc)}, status=400)
+    print(
+        f"[runebender] trace_background success glyph={result.glyph!r} "
+        f"glif_bytes={len(result.glif.encode('utf-8'))}",
+        flush=True,
+    )
     return web.json_response({
         "success": True,
         "glyph": result.glyph,
