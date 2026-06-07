@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-06-trace-global-fit-formdata"
+EXPECTED_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-07-bento-error-badge"
 
 
 class WebBundleTests(unittest.TestCase):
@@ -135,8 +135,9 @@ class WebBundleTests(unittest.TestCase):
         renderer = (ROOT / "rust-core" / "src" / "renderer.rs").read_text(encoding="utf-8")
         self.assertNotIn("path_edit_fill", renderer)
         self.assertIn("controls.outline", renderer)
-        self.assertIn("geometry.outline = Self::build_flattened_outline(path, view);", renderer)
-        self.assertIn("segment_info.segment.eval(t)", renderer)
+        self.assertIn("geometry.outline = Self::build_outline(path, view);", renderer)
+        self.assertIn("path.append_to_bezpath(&mut outline);", renderer)
+        self.assertIn("outline.apply_affine(view);", renderer)
         self.assertIn("clear_glyph_geometry_caches", renderer)
         wasm_api = (ROOT / "rust-core" / "src" / "wasm_api.rs").read_text(encoding="utf-8")
         self.assertIn("self.renderer.clear_glyph_geometry_caches();", wasm_api)

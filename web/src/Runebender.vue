@@ -7054,6 +7054,26 @@ onBeforeUnmount(() => {
               :active="activeTool"
               @select="onToolSelect"
             />
+            <div
+              v-if="compatErrors.length"
+              class="compat-badge"
+              role="status"
+              aria-live="polite"
+            >
+              <strong>
+                {{ compatErrors.length }} interpolation
+                {{ compatErrors.length === 1 ? "error" : "errors" }}
+              </strong>
+              <span
+                v-for="(error, index) in compatErrors.slice(0, 4)"
+                :key="`compat-error-${index}-${error.masterName}`"
+              >
+                {{ error.message }}
+              </span>
+              <span v-if="compatErrors.length > 4">
+                and {{ compatErrors.length - 4 }} more
+              </span>
+            </div>
             <ShapesToolbar
               v-if="activeTool === 'Shapes'"
               :active="activeShape"
@@ -7254,21 +7274,6 @@ onBeforeUnmount(() => {
             :title="marker.message"
             aria-hidden="true"
           />
-          <div class="compat-badge" role="status" aria-live="polite">
-            <strong>
-              {{ compatErrors.length }} interpolation
-              {{ compatErrors.length === 1 ? "error" : "errors" }}
-            </strong>
-            <span
-              v-for="(error, index) in compatErrors.slice(0, 4)"
-              :key="`compat-error-${index}-${error.masterName}`"
-            >
-              {{ error.message }}
-            </span>
-            <span v-if="compatErrors.length > 4">
-              and {{ compatErrors.length - 4 }} more
-            </span>
-          </div>
         </template>
 
         <div
@@ -7349,72 +7354,76 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="metrics-strip">
-            <label class="metric-field group-field">
-              <span>Left Group</span>
-              <input
-                type="text"
-                :value="activeGlyphKerningGroups?.left ?? ''"
-                aria-label="Left kerning group"
-                placeholder="None"
-                @change="updateGlyphKerningGroup('left', ($event.target as HTMLInputElement).value)"
-                @keydown.enter.prevent="updateGlyphKerningGroup('left', ($event.target as HTMLInputElement).value)"
-              />
-            </label>
-            <label class="metric-field metric-compact">
-              <span>LSB</span>
-              <input
-                type="number"
-                :value="Math.round(currentLeftSidebearing)"
-                aria-label="Left sidebearing"
-                @change="onActiveGlyphSidebearingChange('left', $event)"
-                @keydown.enter.prevent="onActiveGlyphSidebearingChange('left', $event)"
-              />
-            </label>
-            <label class="metric-field kern-field">
-              <span>Left Kern</span>
-              <input
-                type="number"
-                :value="activeLeftKern ?? ''"
-                aria-label="Left kern"
-                placeholder="Auto"
-                :disabled="!canEditActiveLeftKern"
-                @change="updateActiveTextKern('left', ($event.target as HTMLInputElement).value)"
-                @keydown.enter.prevent="updateActiveTextKern('left', ($event.target as HTMLInputElement).value)"
-              />
-            </label>
-            <label class="metric-field kern-field">
-              <span>Right Kern</span>
-              <input
-                type="number"
-                :value="activeRightKern ?? ''"
-                aria-label="Right kern"
-                placeholder="Auto"
-                :disabled="!canEditActiveRightKern"
-                @change="updateActiveTextKern('right', ($event.target as HTMLInputElement).value)"
-                @keydown.enter.prevent="updateActiveTextKern('right', ($event.target as HTMLInputElement).value)"
-              />
-            </label>
-            <label class="metric-field metric-compact">
-              <span>RSB</span>
-              <input
-                type="number"
-                :value="Math.round(currentRightSidebearing)"
-                aria-label="Right sidebearing"
-                @change="onActiveGlyphSidebearingChange('right', $event)"
-                @keydown.enter.prevent="onActiveGlyphSidebearingChange('right', $event)"
-              />
-            </label>
-            <label class="metric-field group-field">
-              <span>Right Group</span>
-              <input
-                type="text"
-                :value="activeGlyphKerningGroups?.right ?? ''"
-                aria-label="Right kerning group"
-                placeholder="None"
-                @change="updateGlyphKerningGroup('right', ($event.target as HTMLInputElement).value)"
-                @keydown.enter.prevent="updateGlyphKerningGroup('right', ($event.target as HTMLInputElement).value)"
-              />
-            </label>
+            <div class="metrics-half">
+              <label class="metric-field group-field">
+                <span>Left Group</span>
+                <input
+                  type="text"
+                  :value="activeGlyphKerningGroups?.left ?? ''"
+                  aria-label="Left kerning group"
+                  placeholder="None"
+                  @change="updateGlyphKerningGroup('left', ($event.target as HTMLInputElement).value)"
+                  @keydown.enter.prevent="updateGlyphKerningGroup('left', ($event.target as HTMLInputElement).value)"
+                />
+              </label>
+              <label class="metric-field metric-compact">
+                <span>LSB</span>
+                <input
+                  type="number"
+                  :value="Math.round(currentLeftSidebearing)"
+                  aria-label="Left sidebearing"
+                  @change="onActiveGlyphSidebearingChange('left', $event)"
+                  @keydown.enter.prevent="onActiveGlyphSidebearingChange('left', $event)"
+                />
+              </label>
+              <label class="metric-field kern-field">
+                <span>Left Kern</span>
+                <input
+                  type="number"
+                  :value="activeLeftKern ?? ''"
+                  aria-label="Left kern"
+                  placeholder="Auto"
+                  :disabled="!canEditActiveLeftKern"
+                  @change="updateActiveTextKern('left', ($event.target as HTMLInputElement).value)"
+                  @keydown.enter.prevent="updateActiveTextKern('left', ($event.target as HTMLInputElement).value)"
+                />
+              </label>
+            </div>
+            <div class="metrics-half">
+              <label class="metric-field kern-field">
+                <span>Right Kern</span>
+                <input
+                  type="number"
+                  :value="activeRightKern ?? ''"
+                  aria-label="Right kern"
+                  placeholder="Auto"
+                  :disabled="!canEditActiveRightKern"
+                  @change="updateActiveTextKern('right', ($event.target as HTMLInputElement).value)"
+                  @keydown.enter.prevent="updateActiveTextKern('right', ($event.target as HTMLInputElement).value)"
+                />
+              </label>
+              <label class="metric-field metric-compact">
+                <span>RSB</span>
+                <input
+                  type="number"
+                  :value="Math.round(currentRightSidebearing)"
+                  aria-label="Right sidebearing"
+                  @change="onActiveGlyphSidebearingChange('right', $event)"
+                  @keydown.enter.prevent="onActiveGlyphSidebearingChange('right', $event)"
+                />
+              </label>
+              <label class="metric-field group-field">
+                <span>Right Group</span>
+                <input
+                  type="text"
+                  :value="activeGlyphKerningGroups?.right ?? ''"
+                  aria-label="Right kerning group"
+                  placeholder="None"
+                  @change="updateGlyphKerningGroup('right', ($event.target as HTMLInputElement).value)"
+                  @keydown.enter.prevent="updateGlyphKerningGroup('right', ($event.target as HTMLInputElement).value)"
+                />
+              </label>
+            </div>
           </div>
         </div>
 
@@ -7824,9 +7833,11 @@ onBeforeUnmount(() => {
 .editor-tools-cluster {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 6px;
   flex: 0 0 auto;
+  width: 440px;
+  max-width: calc(100vw - 16px);
 }
 
 .editor-status-topbar {
@@ -8083,11 +8094,8 @@ onBeforeUnmount(() => {
 }
 
 .compat-badge {
-  position: absolute;
-  left: var(--rb-editor-edge-inset, 8px);
-  top: var(--rb-editor-edge-inset, 8px);
-  z-index: 5;
-  width: min(360px, calc(100% - 24px));
+  box-sizing: border-box;
+  width: 100%;
   max-height: 160px;
   overflow: hidden;
   display: flex;
@@ -8096,7 +8104,7 @@ onBeforeUnmount(() => {
   padding: 8px 10px;
   background: color-mix(in srgb, var(--rb-panel-background, #1c1c1c) 94%, transparent);
   border: var(--rb-stroke-width, 1px) solid var(--rb-danger, #ff4a3d);
-  border-radius: 6px;
+  border-radius: var(--rb-panel-radius, 12px);
   color: var(--rb-overlay-text, #f0f0f0);
   font: 12px ui-sans-serif, system-ui, sans-serif;
   pointer-events: none;
@@ -8242,20 +8250,21 @@ onBeforeUnmount(() => {
 }
 
 .metrics-strip {
-  grid-template-columns:
-    minmax(0, 1.25fr)
-    minmax(0, 0.72fr)
-    minmax(0, 1fr)
-    minmax(0, 1fr)
-    minmax(0, 0.72fr)
-    minmax(0, 1.25fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.metrics-half {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
 }
 
 .metric-field {
   box-sizing: border-box;
   min-width: 0;
   display: grid;
-  grid-template-columns: 88px minmax(0, 1fr);
+  grid-template-columns: 70px minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   height: 30px;
@@ -8299,18 +8308,6 @@ onBeforeUnmount(() => {
 .metric-field input::-webkit-inner-spin-button {
   appearance: none;
   margin: 0;
-}
-
-.metric-compact {
-  grid-template-columns: 32px minmax(0, 1fr);
-}
-
-.group-field {
-  grid-template-columns: 70px minmax(0, 1fr);
-}
-
-.kern-field {
-  grid-template-columns: 70px minmax(0, 1fr);
 }
 
 .glyph-name-field input {

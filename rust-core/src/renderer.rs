@@ -23,7 +23,7 @@ use crate::editor::{
     EditorState, KnifePreview, MeasurePreview, PenPreview, SegmentHoverPreview, ShapePreview,
 };
 use crate::model::EntityId;
-use crate::path::{Path, PathPoint, PointType, Segment};
+use crate::path::{Path, PathPoint, PointType};
 use crate::text::TextLayout;
 
 // ============================================================================
@@ -222,7 +222,7 @@ const START_NODE_OFFSET_PX: f64 = 8.0;
 const POINT_OUTLINE_PX: f64 = 1.25 * STROKE_SCALE;
 const PATH_STROKE_PX: f64 = 1.0 * STROKE_SCALE;
 const COMPONENT_SELECTION_STROKE_PX: f64 = 2.0;
-const HANDLE_LINE_PX: f64 = 1.25 * STROKE_SCALE;
+const HANDLE_LINE_PX: f64 = 0.75 * STROKE_SCALE;
 const MARQUEE_STROKE_PX: f64 = 1.0 * STROKE_SCALE;
 const METRIC_LINE_PX: f64 = 1.0 * STROKE_SCALE;
 const TOOL_PREVIEW_LINE_PX: f64 = 1.0 * STROKE_SCALE;
@@ -1341,15 +1341,6 @@ impl Renderer {
         start_arrows: &[StartArrowGeometry],
         point_scale: f64,
     ) {
-        if !controls.outline.elements().is_empty() {
-            self.scene.stroke(
-                &Stroke::new(self.px(PATH_STROKE_PX)),
-                Affine::IDENTITY,
-                self.theme.handle_line,
-                None,
-                &controls.outline,
-            );
-        }
         if !controls.handle_lines.elements().is_empty() {
             self.scene.stroke(
                 &Stroke::new(self.px(HANDLE_LINE_PX)),
@@ -1357,6 +1348,15 @@ impl Renderer {
                 self.theme.handle_line,
                 None,
                 &controls.handle_lines,
+            );
+        }
+        if !controls.outline.elements().is_empty() {
+            self.scene.stroke(
+                &Stroke::new(self.px(PATH_STROKE_PX)),
+                Affine::IDENTITY,
+                self.theme.path_stroke,
+                None,
+                &controls.outline,
             );
         }
         let outline_stroke = Stroke::new(POINT_OUTLINE_PX * point_scale);
@@ -1413,35 +1413,15 @@ impl Renderer {
         point_scale: f64,
     ) -> EditControlsGeometry {
         let mut geometry = Self::build_point_geometry(path, view, selection, point_scale);
-        geometry.outline = Self::build_flattened_outline(path, view);
+        geometry.outline = Self::build_outline(path, view);
         geometry.handle_lines = Self::build_handle_lines(path, view);
         geometry
     }
 
-    fn build_flattened_outline(path: &Path, view: Affine) -> BezPath {
-        let segments: Vec<_> = match path {
-            Path::Cubic(cubic) => cubic.iter_segments().collect(),
-            Path::Quadratic(quadratic) => quadratic.iter_segments().collect(),
-            Path::Hyper(hyper) => hyper.iter_segments().collect(),
-        };
+    fn build_outline(path: &Path, view: Affine) -> BezPath {
         let mut outline = BezPath::new();
-        for (segment_index, segment_info) in segments.iter().enumerate() {
-            let steps = match segment_info.segment {
-                Segment::Line(_) => 1,
-                Segment::Quadratic(_) => 8,
-                Segment::Cubic(_) => 12,
-            };
-            let start = view * segment_info.segment.eval(0.0);
-            if segment_index == 0 {
-                outline.move_to(start);
-            } else {
-                outline.line_to(start);
-            }
-            for step in 1..=steps {
-                let t = step as f64 / steps as f64;
-                outline.line_to(view * segment_info.segment.eval(t));
-            }
-        }
+        path.append_to_bezpath(&mut outline);
+        outline.apply_affine(view);
         outline
     }
 
