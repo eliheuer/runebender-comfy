@@ -194,6 +194,7 @@ const textCursor = ref<number>(0);
 const activeTextSortIndex = ref<number | null>(null);
 const temporaryPreviewReturnTool = ref<ToolId | null>(null);
 let selectIdleHoverActive = false;
+let traceMenuLastPointerUpAt = 0;
 const coordinateQuadrant = ref<CoordinateQuadrant>("cc");
 const editorPanelsVisible = ref<boolean>(true);
 const editorBottomPreviewHeight = ref<number>(124);
@@ -2501,6 +2502,10 @@ async function traceBackgroundImageToGlyph(refit = false): Promise<boolean> {
       status.value = "background tracing is not ready";
       return false;
     }
+    runebenderHost.log?.(
+      "info",
+      `[runebender] trace request glyph=${glyphName} slot=${args.slot} master=${args.master} image=${args.image.name} accuracy=${args.accuracy}`,
+    );
     const { response, data: trace } = await runebenderHost.traceBackgroundGlyph(args);
     if (!response.ok || !trace.glif) {
       status.value = `trace failed: ${trace.error || response.statusText}`;
@@ -2550,7 +2555,16 @@ async function traceBackgroundImageToGlyph(refit = false): Promise<boolean> {
   }
 }
 
-async function traceBackgroundImageFromMenu() {
+async function traceBackgroundImageFromMenu(source: "click" | "pointer" = "click") {
+  const now = Date.now();
+  if (source === "click" && now - traceMenuLastPointerUpAt < 500) {
+    return;
+  }
+  if (source === "pointer") {
+    traceMenuLastPointerUpAt = now;
+  }
+  status.value = "trace image command received";
+  runebenderHost.log?.("info", `[runebender] trace image menu ${source}`);
   dismissBackgroundImageContextMenu();
   try {
     await traceBackgroundImageToGlyph(false);
@@ -7196,7 +7210,8 @@ onBeforeUnmount(() => {
             class="background-image-menu-item primary"
             role="menuitem"
             @pointerdown.stop
-            @click.prevent.stop="traceBackgroundImageFromMenu"
+            @pointerup.prevent.stop="traceBackgroundImageFromMenu('pointer')"
+            @click.prevent.stop="traceBackgroundImageFromMenu('click')"
           >
             <span class="background-image-menu-icon" aria-hidden="true">
               <GeneratedIcon name="hyperpen" :size="16" />

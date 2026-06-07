@@ -610,6 +610,11 @@ async def trace_background_image(request):
     image_file.seek(0)
     image_bytes = image_file.read()
     filename = str(getattr(image_field, "filename", "") or "")
+    print(
+        f"[runebender] trace_background route hit slot={slot!r} master={master!r} "
+        f"glyph={glyph!r} image={filename!r} bytes={len(image_bytes)}",
+        flush=True,
+    )
     suffix = Path(filename).suffix
     threshold_raw = str(data.get("threshold", "")).strip()
     threshold = _parse_int(threshold_raw, -1) if threshold_raw else -1
