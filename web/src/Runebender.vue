@@ -7195,7 +7195,7 @@ onBeforeUnmount(() => {
             type="button"
             class="background-image-menu-item primary"
             role="menuitem"
-            @pointerdown.prevent.stop
+            @pointerdown.stop
             @click.prevent.stop="traceBackgroundImageFromMenu"
           >
             <span class="background-image-menu-icon" aria-hidden="true">
