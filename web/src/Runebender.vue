@@ -2494,13 +2494,13 @@ async function traceBackgroundImageToGlyph(refit = false): Promise<boolean> {
     status.value = `tracing ${currentGlyph.value} with img2bez`;
   }
   const glyphName = currentGlyph.value;
-  const args = backgroundTraceArgs();
-  if (!args) {
-    status.value = "background tracing is not ready";
-    return false;
-  }
 
   try {
+    const args = backgroundTraceArgs();
+    if (!args) {
+      status.value = "background tracing is not ready";
+      return false;
+    }
     const { response, data: trace } = await runebenderHost.traceBackgroundGlyph(args);
     if (!response.ok || !trace.glif) {
       status.value = `trace failed: ${trace.error || response.statusText}`;
@@ -2547,6 +2547,16 @@ async function traceBackgroundImageToGlyph(refit = false): Promise<boolean> {
     console.warn("background trace failed:", e);
     status.value = `trace failed: ${e}`;
     return false;
+  }
+}
+
+async function traceBackgroundImageFromMenu() {
+  dismissBackgroundImageContextMenu();
+  try {
+    await traceBackgroundImageToGlyph(false);
+  } catch (e) {
+    console.warn("background trace click failed:", e);
+    status.value = `trace failed: ${e}`;
   }
 }
 
@@ -7185,7 +7195,8 @@ onBeforeUnmount(() => {
             type="button"
             class="background-image-menu-item primary"
             role="menuitem"
-            @click="() => { dismissBackgroundImageContextMenu(); void traceBackgroundImageToGlyph(false); }"
+            @pointerdown.prevent.stop
+            @click.prevent.stop="traceBackgroundImageFromMenu"
           >
             <span class="background-image-menu-icon" aria-hidden="true">
               <GeneratedIcon name="hyperpen" :size="16" />
