@@ -141,7 +141,7 @@ export const comfyHost: RunebenderHost = {
     body.append("grid", String(args.grid ?? 2));
     body.append("accuracy", String(args.accuracy ?? 4));
     body.append("smooth", String(args.smooth ?? 1));
-    body.append("alphamax", String(args.alphamax ?? 0.8));
+    body.append("alphamax", String(args.alphamax ?? 0.35));
     if (args.globalFit) body.append("globalFit", "true");
     if (args.invert) body.append("invert", "true");
     if (args.threshold !== undefined && args.threshold !== null) {
@@ -179,7 +179,7 @@ export const comfyHost: RunebenderHost = {
     body.append("grid", String(args.grid ?? 2));
     body.append("accuracy", String(args.accuracy ?? 4));
     body.append("smooth", String(args.smooth ?? 1));
-    body.append("alphamax", String(args.alphamax ?? 0.8));
+    body.append("alphamax", String(args.alphamax ?? 0.35));
     if (args.globalFit) body.append("globalFit", "true");
     if (args.invert) body.append("invert", "true");
     if (args.threshold !== undefined && args.threshold !== null) {

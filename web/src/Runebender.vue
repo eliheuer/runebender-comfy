@@ -2436,9 +2436,10 @@ function backgroundTraceArgs() {
   const metrics = editor.metricBounds();
   const ascender = metrics.length >= 2 ? metrics[0] : 800;
   const descender = metrics.length >= 2 ? metrics[1] : -200;
-  // img2bez global fitting gets noisy at sub-unit accuracy; 4 keeps the
-  // silhouette recognizable while producing far fewer editable points.
+  // img2bez global fitting can hang or overfit on high-resolution glyph
+  // images. A lower alpha threshold preserves more structural corners.
   const traceFitAccuracy = 4;
+  const traceAlphaMax = 0.35;
   return {
     slot: currentFontPath.value,
     master: activeMasterName.value,
@@ -2461,7 +2462,7 @@ function backgroundTraceArgs() {
     grid,
     accuracy: traceFitAccuracy,
     smooth: 0,
-    alphamax: 0.8,
+    alphamax: traceAlphaMax,
     globalFit: false,
   };
 }
