@@ -223,6 +223,16 @@ the active glyph; candidate slots are only advanced graph/review plumbing.
 - [x] Live ComfyUI-host editor verification with an actual placed ampersand
   image confirms better point placement in the app. Current result is an
   improved checkpoint, but still has major structural mistakes to address next.
+- [x] Folded OH no Type's vector drawing rule into the img2bez autoresearch
+  target: minimal points, smooth points at extrema, inflections where curves
+  change direction, H/V handles by default, and clustered/diagonal handles only
+  for true corners or terminals.
+- [x] Tested broader false-corner suppression thresholds. `1.10` helped `s` but
+  regressed `ampersand`, `a`, `e`, `S`, and `n`; `1.00` passed the old baseline
+  gate but was still worse than the `transition050` checkpoint.
+- [x] Added a tracked `transition050` structural baseline in `img2bez` and
+  changed `run_structural_gate.sh` into a regression gate against that current
+  known-good checkpoint.
 - [ ] Live Quiver Cloud run is pending user confirmation of credentials and
   budget.
 - [ ] Keep the checklist updated as implementation work lands.
