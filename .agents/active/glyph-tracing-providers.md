@@ -233,6 +233,13 @@ the active glyph; candidate slots are only advanced graph/review plumbing.
 - [x] Added a tracked `transition050` structural baseline in `img2bez` and
   changed `run_structural_gate.sh` into a regression gate against that current
   known-good checkpoint.
+- [x] Accepted a targeted contour-complexity tracing improvement: contours with
+  at least 100 polygon vertices use a stricter curvature-transition threshold
+  (`0.55` instead of `0.50`). Focused structural score improves from `0.893` to
+  `0.896`; `S` improves from `0.850` to `0.878`; the rest of the focused set is
+  unchanged against the previous checkpoint.
+- [x] Updated the tracked `img2bez` current structural baseline to
+  `complex-transition055`.
 - [ ] Live Quiver Cloud run is pending user confirmation of credentials and
   budget.
 - [ ] Keep the checklist updated as implementation work lands.
