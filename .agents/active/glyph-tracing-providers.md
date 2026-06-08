@@ -4,7 +4,7 @@ agent: Codex (eli@desktop)
 branch: main
 worktree: /Users/eli/GH/repos/runebender-comfy
 started: 2026-06-06
-last_touched: 2026-06-06 18:47 PDT
+last_touched: 2026-06-07 21:24 PDT
 touches:
   - docs/workflows/local-ai-glyph-tracing.md
   - docs/workflows/local-ai-glyph-tracing-rethink.md
@@ -19,9 +19,27 @@ touches:
   - tests/test_workspace.py
   - tests/test_web_bundle.py
   - web/src/Runebender.vue
+  - web/src/hosts/comfy/comfyHost.ts
   - web/src/host/runebenderHost.ts
   - web/src/hosts/browser/browserHost.ts
   - web/src/hosts/comfy/comfyHost.ts
+  - rust-core/Cargo.toml
+  - rust-core/src/image_trace.rs
+  - rust-core/src/wasm_api.rs
+  - ../img2bez/Cargo.toml
+  - ../img2bez/src/bitmap.rs
+  - ../img2bez/src/glif.rs
+  - ../img2bez/src/lib.rs
+  - ../img2bez/src/vectorize/curve.rs
+  - ../img2bez/src/vectorize/mod.rs
+  - ../img2bez/autoresearch/focused_glyphs.txt
+  - ../img2bez/autoresearch/check_structural_gate.py
+  - ../img2bez/autoresearch/compare_structural_runs.py
+  - ../img2bez/autoresearch/inspect_glyph.sh
+  - ../img2bez/autoresearch/run_structural_gate.sh
+  - ../img2bez/autoresearch/run_structural_loop.sh
+  - ../img2bez/autoresearch/structural-loop.md
+  - ../img2bez/autoresearch/structural_report.py
 ---
 
 ## Goal
@@ -133,8 +151,78 @@ the active glyph; candidate slots are only advanced graph/review plumbing.
 - [x] Ran `python3 -m unittest tests.test_workspace tests.test_web_bundle`
   successfully after adding the checker: 116 tests.
 - [x] Ran `git diff --check` successfully after adding the checker.
-- [ ] Live ComfyUI-host editor verification with an actual placed image is
-  still pending.
+- [x] Added browser-safe `img2bez` byte-input and GLIF-output APIs that
+  build with `default-features = false`.
+- [x] Added `img2bez` as a local path dependency of `rust-core` with
+  default features off.
+- [x] Added the `traceImageToGlif` WASM export and a single
+  `rust-core/src/image_trace.rs` adapter for future `img2bez` updates.
+- [x] Updated editor `Trace Image` to prefer local WASM tracing, with the
+  existing Python/backend route as fallback.
+- [x] Rebuilt WASM and `web/dist`; bundle fingerprint is now
+  `rb-bundle-2026-06-07-trace-wasm-img2bez`.
+- [x] Verified `img2bez` slim mode with `cargo test --no-default-features`.
+- [x] Verified `runebender-comfy` with `cargo check --target
+  wasm32-unknown-unknown`, `cargo test`, `pnpm build`, `python3 -m
+  unittest tests.test_workspace tests.test_web_bundle`, and `git diff
+  --check`.
+- [x] Started a structural tracing improvement goal for `img2bez` using
+  Virtua Grotesk Regular reference glyphs `ampersand a e s R O S n`.
+- [x] Added a focused structural autoresearch loop with per-glyph SVG
+  overlays and GLIF structure scoring against the reference UFO.
+- [x] Baseline focused loop: mean IoU `93.77%`, mean vector score `0.824`,
+  mean structural score `0.859`.
+- [x] First parameter experiment `--smooth 1 --alphamax 1.0`: mean IoU
+  `92.60%`, mean vector score `0.811`, mean structural score `0.867`;
+  archived for visual inspection, not adopted as default yet.
+- [x] Added a one-glyph inspection loop that writes the source PNG, traced
+  UFO, split-debug log, structural report, raster diff, and SVG overlay for
+  individual glyphs.
+- [x] Verified one-glyph inspection for `s` and `n` in a clean temp copy.
+  `s` baseline is `0.754`; `s --alphamax 0.94` is `0.778`. `n` baseline is
+  `0.906`; `n --alphamax 0.94` is `0.917`.
+- [x] Added a structural run comparison helper. Comparing `baseline` to
+  `alphamax094` shows mean focused score delta `+0.006`: useful local
+  evidence, but not enough for a global default because `a` regresses.
+- [x] Applied the first structural tracer improvement: raised
+  `CURVATURE_TRANSITION_THRESHOLD` from `0.37` to `0.50`.
+- [x] Archived `transition050`: mean IoU `94.70%`, mean vector score
+  `0.859`, mean structural score `0.893`; structural delta versus baseline is
+  `+0.033` with 5 glyphs improved, 1 worsened, and `n` unchanged.
+- [x] Verified `img2bez` with `cargo test` and
+  `cargo test --no-default-features` after the transition threshold change.
+- [x] Checked the app's actual trace setting: `alphamax 0.35` produced a weak
+  focused structural score (`0.755`) with many extra points, so the editor
+  trace path now uses `alphamax 0.8`.
+- [x] Rebuilt Runebender WASM against sibling `img2bez`; `wasm-pack` compiled
+  `img2bez` from `/Users/eli/GH/repos/img2bez`.
+- [x] Rebuilt the ComfyUI web bundle with fingerprint
+  `rb-bundle-2026-06-08-trace-transition050-app-test`.
+- [x] Aligned Comfy host backend fallback to `alphamax 0.8`, matching the WASM
+  trace path.
+- [x] Added `alphamax` to the editor trace request log so manual app testing can
+  confirm `accuracy=4 alphamax=0.8` before judging outline quality.
+- [x] Added `autoresearch/check_structural_gate.py`; it passes
+  `transition050` with required ampersand/`s` improvement and protected `n`/`O`,
+  and it fails the bad `app-alpha035` run.
+- [x] Added `autoresearch/run_structural_gate.sh` so the current checkout can
+  run the focused loop, archive the result, and gate that exact archive in one
+  command.
+- [x] Ran `RUN_LABEL=current-transition050 ./autoresearch/run_structural_gate.sh`
+  in `img2bez`: focused structural gate passed with mean score delta `+0.033`.
+- [x] Ran `python3 -m unittest tests.test_workspace tests.test_web_bundle`:
+  117 tests pass.
+- [x] Ran `git diff --check` in `runebender-comfy` and `img2bez`: both pass.
+- [x] Live readiness checker passes outside the sandbox against
+  `http://127.0.0.1:8188`; ComfyUI is running, this checkout is symlinked, and
+  tracing nodes are registered.
+- [x] In-app browser verification loaded ComfyUI and captured the runtime
+  extension log from
+  `/extensions/runebender-comfy/runebender-comfy.js`:
+  `rb-bundle-2026-06-08-trace-transition050-app-test`.
+- [x] Live ComfyUI-host editor verification with an actual placed ampersand
+  image confirms better point placement in the app. Current result is an
+  improved checkpoint, but still has major structural mistakes to address next.
 - [ ] Live Quiver Cloud run is pending user confirmation of credentials and
   budget.
 - [ ] Keep the checklist updated as implementation work lands.

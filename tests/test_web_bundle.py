@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-07-trace-alphamax035"
+EXPECTED_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-08-trace-transition050-app-test"
 
 
 class WebBundleTests(unittest.TestCase):
@@ -130,10 +130,12 @@ class WebBundleTests(unittest.TestCase):
 
         source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
         self.assertIn("clearBackgroundImage();", source)
-        self.assertIn("const traceAlphaMax = 0.35;", source)
+        self.assertIn("const traceAlphaMax = 0.8;", source)
+        self.assertIn("traceImageToGlif", source)
+        self.assertIn("trace wasm failed, falling back to backend", source)
         self.assertIn("globalFit: false", source)
         host = (ROOT / "web" / "src" / "hosts" / "comfy" / "comfyHost.ts").read_text(encoding="utf-8")
-        self.assertIn('body.append("alphamax", String(args.alphamax ?? 0.35))', host)
+        self.assertIn('body.append("alphamax", String(args.alphamax ?? 0.8))', host)
         self.assertIn('if (args.globalFit) body.append("globalFit", "true")', host)
         renderer = (ROOT / "rust-core" / "src" / "renderer.rs").read_text(encoding="utf-8")
         self.assertNotIn("path_edit_fill", renderer)

@@ -708,6 +708,45 @@ Remaining live checks, 2026-06-06:
   `COMFY_CLOUD_API_KEY`, confirming budget, and running the manual or
   automated Quiver path.
 
+### 12. WASM `img2bez` Integration
+
+Status, 2026-06-07: direct editor `Trace Image` no longer depends on a
+system-installed `img2bez` binary for the primary path. The Vue editor
+first calls the `traceImageToGlif` WASM export from `rust-core`; the
+Rust adapter in `rust-core/src/image_trace.rs` converts the browser image
+bytes plus JSON trace config into `img2bez::TracingConfig`, then calls
+`img2bez::trace_image_bytes_to_glif`.
+
+The existing Python `/runebender/workspace/trace_background` route remains
+as a fallback and for graph/candidate workflows that need workspace/source
+side effects. The browser console / Comfy terminal should show either:
+
+- `trace wasm ok` for the primary local WASM path.
+- `trace wasm failed, falling back to backend` if the older backend route
+  is used.
+
+Update loop while iterating on `img2bez`:
+
+1. Edit `/Users/eli/GH/repos/img2bez`.
+2. Run `cargo test --no-default-features` in `img2bez` to verify the
+   browser-safe library surface.
+3. Run `COREPACK_ENABLE_AUTO_PIN=0 pnpm wasm` from
+   `/Users/eli/GH/repos/runebender-comfy/web`.
+4. Run `COREPACK_ENABLE_AUTO_PIN=0 pnpm build` from the same directory.
+5. Update the bundle fingerprint in `web/src/extension.ts` and
+   `tests/test_web_bundle.py` whenever bundle behavior changes.
+6. Run `python3 -m unittest tests.test_web_bundle tests.test_workspace`
+   from `runebender-comfy`.
+
+Dependency contract:
+
+- `runebender-comfy/rust-core` depends on
+  `img2bez = { path = "../../img2bez", default-features = false }`.
+- `img2bez` must keep byte input and GLIF output available without the
+  `cli`, `ufo`, `parallel`, or `render` features.
+- The CLI can keep UFO writing, evaluation, rendering, and parallelism
+  behind default features; those should not be required for Comfy WASM.
+
 ## Stop Points
 
 Stop and ask before:

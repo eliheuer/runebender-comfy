@@ -47,6 +47,7 @@
 
 pub mod editing;
 pub mod editor;
+pub mod image_trace;
 pub mod model;
 pub mod path;
 pub mod text;

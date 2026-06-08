@@ -29,6 +29,12 @@ use crate::tool::{ActiveTool, ShapeKind};
 type GlifXmlMap = HashMap<String, String>;
 type CompatMasterGlyphMap = HashMap<String, Option<String>>;
 
+#[wasm_bindgen(js_name = traceImageToGlif)]
+pub fn trace_image_to_glif(image_bytes: &[u8], config_json: &str) -> Result<String, JsValue> {
+    crate::image_trace::trace_image_to_glif(image_bytes, config_json)
+        .map_err(|e| JsValue::from_str(&e))
+}
+
 fn text_codepoint_from_wasm(codepoint: u32) -> Option<char> {
     if codepoint == 0 {
         None

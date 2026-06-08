@@ -21,6 +21,7 @@ import init, {
   glifWithOutlinesFrom,
   glifWithUnicode,
   glyphCategoryForCodepoint,
+  traceImageToGlif,
 } from "../wasm/runebender_comfy_core.js";
 import CategorySidebar, {
   type Category,
@@ -2436,10 +2437,10 @@ function backgroundTraceArgs() {
   const metrics = editor.metricBounds();
   const ascender = metrics.length >= 2 ? metrics[0] : 800;
   const descender = metrics.length >= 2 ? metrics[1] : -200;
-  // img2bez global fitting can hang or overfit on high-resolution glyph
-  // images. A lower alpha threshold preserves more structural corners.
+  // Use img2bez's current structural default. Lower values preserve too many
+  // bitmap stair-step corners and produce noisy point structure.
   const traceFitAccuracy = 4;
-  const traceAlphaMax = 0.35;
+  const traceAlphaMax = 0.8;
   return {
     slot: currentFontPath.value,
     master: activeMasterName.value,
@@ -2464,6 +2465,24 @@ function backgroundTraceArgs() {
     smooth: 0,
     alphamax: traceAlphaMax,
     globalFit: false,
+  };
+}
+
+function wasmTraceConfig(args: NonNullable<ReturnType<typeof backgroundTraceArgs>>) {
+  return {
+    glyph: args.glyph,
+    unicode: args.unicode,
+    width: args.width,
+    targetHeight: args.targetHeight,
+    xOffset: args.xOffset,
+    yOffset: args.yOffset,
+    grid: args.grid,
+    accuracy: args.accuracy,
+    smooth: args.smooth,
+    alphamax: args.alphamax,
+    globalFit: args.globalFit,
+    invert: args.invert,
+    threshold: args.threshold,
   };
 }
 
@@ -2505,17 +2524,33 @@ async function traceBackgroundImageToGlyph(refit = false): Promise<boolean> {
     }
     runebenderHost.log?.(
       "info",
-      `[runebender] trace request glyph=${glyphName} slot=${args.slot} master=${args.master} image=${args.image.name} accuracy=${args.accuracy}`,
+      `[runebender] trace request glyph=${glyphName} slot=${args.slot} master=${args.master} image=${args.image.name} accuracy=${args.accuracy} alphamax=${args.alphamax}`,
     );
-    const { response, data: trace } = await runebenderHost.traceBackgroundGlyph(args);
-    runebenderHost.log?.(
-      "info",
-      `[runebender] trace response status=${response.status} ok=${response.ok} glif_bytes=${trace.glif?.length ?? 0} error=${trace.error ?? ""}`,
-    );
-    if (!response.ok || !trace.glif) {
-      status.value = `trace failed: ${trace.error || response.statusText}`;
-      runebenderHost.log?.("error", `[runebender] trace response rejected: ${status.value}`);
-      return false;
+    let trace;
+    try {
+      const imageBytes = new Uint8Array(await args.image.arrayBuffer());
+      const glif = traceImageToGlif(imageBytes, JSON.stringify(wasmTraceConfig(args)));
+      trace = { success: true, glyph: glyphName, glif };
+      runebenderHost.log?.(
+        "info",
+        `[runebender] trace wasm ok glyph=${glyphName} glif_bytes=${glif.length}`,
+      );
+    } catch (wasmError) {
+      runebenderHost.log?.(
+        "warn",
+        `[runebender] trace wasm failed, falling back to backend: ${wasmError}`,
+      );
+      const { response, data } = await runebenderHost.traceBackgroundGlyph(args);
+      trace = data;
+      runebenderHost.log?.(
+        "info",
+        `[runebender] trace response status=${response.status} ok=${response.ok} glif_bytes=${trace.glif?.length ?? 0} error=${trace.error ?? ""}`,
+      );
+      if (!response.ok || !trace.glif) {
+        status.value = `trace failed: ${trace.error || response.statusText}`;
+        runebenderHost.log?.("error", `[runebender] trace response rejected: ${status.value}`);
+        return false;
+      }
     }
     if (trace.command?.length) {
       console.info("[runebender] trace command:", trace.command.join(" "));
