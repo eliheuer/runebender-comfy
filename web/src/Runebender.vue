@@ -281,6 +281,8 @@ type BackgroundImageState = {
   designScaleY: number;
   locked: boolean;
   selected: boolean;
+  traceXOffset?: number;
+  traceYOffset?: number;
 };
 
 type BackgroundImageResizeHandle = "tl" | "tr" | "bl" | "br" | "top" | "bottom" | "left" | "right";
@@ -298,6 +300,15 @@ type BackgroundImageContextMenuState = {
   x: number;
   y: number;
   locked: boolean;
+};
+
+type ForegroundPixelBounds = {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  width: number;
+  height: number;
 };
 
 type ContourContextMenuState = {
@@ -1945,6 +1956,117 @@ function imageDimensions(url: string): Promise<{ width: number; height: number }
   });
 }
 
+function imageDataForFile(file: File): Promise<ImageData> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, img.naturalWidth);
+        canvas.height = Math.max(1, img.naturalHeight);
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          reject(new Error("image canvas unavailable"));
+          return;
+        }
+        ctx.drawImage(img, 0, 0);
+        resolve(ctx.getImageData(0, 0, canvas.width, canvas.height));
+      } catch (error) {
+        reject(error);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("image decode failed"));
+    };
+    img.src = url;
+  });
+}
+
+function compositedLuma(data: Uint8ClampedArray, offset: number): number {
+  const alpha = data[offset + 3] / 255;
+  const luma = data[offset] * 0.299 + data[offset + 1] * 0.587 + data[offset + 2] * 0.114;
+  return Math.round(luma * alpha + 255 * (1 - alpha));
+}
+
+function otsuThresholdFromImageData(imageData: ImageData): number {
+  const histogram = new Array<number>(256).fill(0);
+  const data = imageData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    histogram[compositedLuma(data, i)] += 1;
+  }
+  const total = imageData.width * imageData.height;
+  let sum = 0;
+  for (let i = 0; i < histogram.length; i++) {
+    sum += i * histogram[i];
+  }
+  let sumBackground = 0;
+  let weightBackground = 0;
+  let bestVariance = -1;
+  let threshold = 128;
+  for (let i = 0; i < histogram.length; i++) {
+    weightBackground += histogram[i];
+    if (weightBackground === 0) continue;
+    const weightForeground = total - weightBackground;
+    if (weightForeground === 0) break;
+    sumBackground += i * histogram[i];
+    const meanBackground = sumBackground / weightBackground;
+    const meanForeground = (sum - sumBackground) / weightForeground;
+    const variance =
+      weightBackground *
+      weightForeground *
+      (meanBackground - meanForeground) *
+      (meanBackground - meanForeground);
+    if (variance > bestVariance) {
+      bestVariance = variance;
+      threshold = i;
+    }
+  }
+  return threshold;
+}
+
+async function foregroundPixelBoundsForTrace(
+  file: File,
+  threshold?: number,
+  invert = false,
+): Promise<ForegroundPixelBounds | null> {
+  const imageData = await imageDataForFile(file);
+  const resolvedThreshold =
+    typeof threshold === "number" && Number.isFinite(threshold)
+      ? threshold
+      : otsuThresholdFromImageData(imageData);
+  const data = imageData.data;
+  let minX = imageData.width;
+  let minY = imageData.height;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < imageData.height; y++) {
+    for (let x = 0; x < imageData.width; x++) {
+      const offset = (y * imageData.width + x) * 4;
+      if (data[offset + 3] < 8) continue;
+      const isDark = compositedLuma(data, offset) <= resolvedThreshold;
+      if (invert ? !isDark : isDark) {
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+    }
+  }
+  if (maxX < minX || maxY < minY) return null;
+  return {
+    minX,
+    minY,
+    maxX,
+    maxY,
+    width: imageData.width,
+    height: imageData.height,
+  };
+}
+
 function isBackgroundImageFile(file: File): boolean {
   return /\.(png|jpe?g)$/i.test(file.name);
 }
@@ -2249,6 +2371,14 @@ function onBackgroundPointerMove(e: PointerEvent) {
     ...backgroundImage.value,
     designX: backgroundImage.value.designX + dx,
     designY: backgroundImage.value.designY + dy,
+    traceXOffset:
+      backgroundImage.value.traceXOffset === undefined
+        ? undefined
+        : backgroundImage.value.traceXOffset + dx,
+    traceYOffset:
+      backgroundImage.value.traceYOffset === undefined
+        ? undefined
+        : backgroundImage.value.traceYOffset + dy,
   };
   backgroundImageDragStart.value = { x: design[0], y: design[1] };
   refreshBackgroundImageFrame();
@@ -2343,7 +2473,13 @@ function onBackgroundResizePointerMove(e: PointerEvent) {
   }
   const nextWidth = bg.width * designScaleX;
   const nextHeight = bg.height * designScaleY;
-  const next = { ...bg, designScaleX, designScaleY };
+  const next: BackgroundImageState = {
+    ...bg,
+    designScaleX,
+    designScaleY,
+    traceXOffset: undefined,
+    traceYOffset: undefined,
+  };
   switch (resize.handle) {
     case "tl":
       next.designX = resize.anchorX - nextWidth;
@@ -2405,6 +2541,8 @@ function nudgeSelectedBackgroundImage(dx: number, dy: number): boolean {
     ...bg,
     designX: bg.designX + dx,
     designY: bg.designY + dy,
+    traceXOffset: bg.traceXOffset === undefined ? undefined : bg.traceXOffset + dx,
+    traceYOffset: bg.traceYOffset === undefined ? undefined : bg.traceYOffset + dy,
   };
   status.value = "background image moved";
   refreshBackgroundImageFrame();
@@ -2432,8 +2570,14 @@ function backgroundTraceArgs() {
   const unicode = metadata?.unicodes?.[0] ?? metadata?.unicode ?? "";
   const targetHeight = Math.max(1, Math.abs(bg.height * bg.designScaleY));
   const grid = 2;
-  const xOffset = Math.round(bg.designX / grid) * grid;
-  const yOffset = Math.round(bg.designY / grid) * grid;
+  const xOffset =
+    bg.traceXOffset === undefined
+      ? Math.round(bg.designX / grid) * grid
+      : Math.round(bg.traceXOffset / grid) * grid;
+  const yOffset =
+    bg.traceYOffset === undefined
+      ? Math.round(bg.designY / grid) * grid
+      : Math.round(bg.traceYOffset / grid) * grid;
   const metrics = editor.metricBounds();
   const ascender = metrics.length >= 2 ? metrics[0] : 800;
   const descender = metrics.length >= 2 ? metrics[1] : -200;
@@ -2465,7 +2609,40 @@ function backgroundTraceArgs() {
     smooth: 0,
     alphamax: traceAlphaMax,
     globalFit: false,
+    invert: false,
+    threshold: undefined as number | undefined,
   };
+}
+
+function snapTraceValue(value: number, grid: number): number {
+  return grid > 0 ? Math.round(value / grid) * grid : value;
+}
+
+async function alignBackgroundImageToTrace(
+  args: NonNullable<ReturnType<typeof backgroundTraceArgs>>,
+) {
+  const bg = backgroundImage.value;
+  if (!bg || bg.file !== args.image) return;
+  const bounds = await foregroundPixelBoundsForTrace(args.image, args.threshold, args.invert);
+  if (!bounds || !backgroundImage.value || backgroundImage.value.file !== args.image) return;
+
+  const scale = args.targetHeight / Math.max(1, args.imageHeight);
+  const designX = snapTraceValue(args.xOffset - bounds.minX * scale, args.grid);
+  const designY = snapTraceValue(args.yOffset, args.grid);
+  backgroundImage.value = {
+    ...backgroundImage.value,
+    designX,
+    designY,
+    designScaleX: scale,
+    designScaleY: scale,
+    traceXOffset: args.xOffset,
+    traceYOffset: args.yOffset,
+  };
+  runebenderHost.log?.(
+    "info",
+    `[runebender] trace aligned image x=${designX.toFixed(2)} y=${designY.toFixed(2)} fg=(${bounds.minX},${bounds.minY})-(${bounds.maxX},${bounds.maxY}) scale=${scale.toFixed(4)}`,
+  );
+  refreshBackgroundImageFrame();
 }
 
 function wasmTraceConfig(args: NonNullable<ReturnType<typeof backgroundTraceArgs>>) {
@@ -2579,6 +2756,14 @@ async function traceBackgroundImageToGlyph(refit = false): Promise<boolean> {
     runebenderHost.log?.("info", `[runebender] trace applying glif to editor glyph=${glyphName}`);
     editor.setGlyphGlifWithCachedComponentsPreserveHistory(bytes);
     runebenderHost.log?.("info", `[runebender] trace editor apply ok glyph=${glyphName}`);
+    try {
+      await alignBackgroundImageToTrace(args);
+    } catch (alignError) {
+      runebenderHost.log?.(
+        "warn",
+        `[runebender] trace image alignment skipped: ${alignError}`,
+      );
+    }
     editorGlyphNeedsSync = false;
     applyEditorPanelState(editor.editorPanelState());
     updateCompatibilityErrors();
@@ -2590,7 +2775,6 @@ async function traceBackgroundImageToGlyph(refit = false): Promise<boolean> {
       syncTextKerningModelToEditor();
       bumpTextPreviewRevision();
     }
-    clearBackgroundImage();
     requestRender();
     queueComfyStateSync(true);
     status.value = `traced ${glyphName} with img2bez`;
