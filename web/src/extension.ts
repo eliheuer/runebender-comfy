@@ -11,7 +11,7 @@ import { runebenderHostKey, type WorkspaceChoice } from "./host/runebenderHost";
 import { comfyHost } from "./hosts/comfy/comfyHost";
 import Runebender from "./Runebender.vue";
 
-const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-08-extrema-deviation-guard";
+const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-08-diagonal-clean-escape";
 
 // Mirror our own console output to the ComfyUI terminal through the
 // injected Comfy host. Filters to messages prefixed with
