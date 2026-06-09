@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-08-final-divergence-diagnostic"
+EXPECTED_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-08-img2bez-current-n-guard"
 
 
 class WebBundleTests(unittest.TestCase):
