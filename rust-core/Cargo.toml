@@ -82,6 +82,11 @@ opt-level = 3
 codegen-units = 1
 lto = true
 
+[package.metadata.wasm-pack.profile.release]
+# Default is ["-O"], which is wasm-opt level 1. Bump to -O3 to match
+# the Rust-side opt-level 3 and squeeze more out of the wasm binary.
+wasm-opt = ["-O3"]
+
 # Linebender canonical lint set (https://linebender.org/wiki/canonical-lints/).
 # Heavy lints (missing_docs, unreachable_pub, …) are warned here and deferred
 # via #![allow(...)] in lib.rs until the crate-wide cleanup lands.

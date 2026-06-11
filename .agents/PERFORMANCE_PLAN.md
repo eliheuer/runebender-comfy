@@ -60,10 +60,11 @@ profiler says is already cheap.
       "z" hurts.
       *Done 2026-06-11: wasm 2.4MB → 2.7MB, dist 3.7MB → 4.2MB,
       well under 8MB cap. User confirmed good performance.*
-- [ ] **Tune wasm-opt for speed.** wasm-pack runs `wasm-opt -O` by
+- [x] **Tune wasm-opt for speed.** wasm-pack runs `wasm-opt -O` by
       default; pin it explicitly in `rust-core/Cargo.toml`:
       `[package.metadata.wasm-pack.profile.release] wasm-opt =
       ["-O3"]` (try `-O4`).
+      *Done 2026-06-11: wasm 2.7MB → 2.8MB, dist stays 4.2MB.*
 - [ ] **Stop base64-inlining the wasm in the dist bundle.** Vite lib
       mode inlines all assets — `web/dist/runebender-comfy.js` is
       17MB because the 12MB wasm rides inside as base64. This kills
