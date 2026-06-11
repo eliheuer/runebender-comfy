@@ -52,12 +52,14 @@ profiler says is already cheap.
       (`web/package.json:12-13`)
       *Done 2026-06-10: `pnpm wasm` now builds release; `wasm:debug`
       added; AGENTS.md build docs updated.*
-- [ ] **Switch the release profile to speed.** In
+- [x] **Switch the release profile to speed.** In
       `rust-core/Cargo.toml`: `opt-level = "z"` → `opt-level = 3`
       (try `"s"` if binary size regresses unacceptably), add
       `codegen-units = 1`. Keep `lto = true`. Vello's scene encoding
       and kurbo flattening are exactly the kind of hot CPU loops
       "z" hurts.
+      *Done 2026-06-11: wasm 2.4MB → 2.7MB, dist 3.7MB → 4.2MB,
+      well under 8MB cap. User confirmed good performance.*
 - [ ] **Tune wasm-opt for speed.** wasm-pack runs `wasm-opt -O` by
       default; pin it explicitly in `rust-core/Cargo.toml`:
       `[package.metadata.wasm-pack.profile.release] wasm-opt =

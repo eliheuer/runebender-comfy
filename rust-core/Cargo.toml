@@ -75,7 +75,11 @@ features = [
 ]
 
 [profile.release]
-opt-level = "z"
+# Speed over size: Vello scene encoding and kurbo path math are hot
+# CPU loops at 60fps. Binary growth vs "z" is bounded by the dist
+# bundle size cap in tests/test_web_bundle.py.
+opt-level = 3
+codegen-units = 1
 lto = true
 
 # Linebender canonical lint set (https://linebender.org/wiki/canonical-lints/).
