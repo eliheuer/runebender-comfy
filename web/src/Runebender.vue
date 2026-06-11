@@ -4314,7 +4314,7 @@ function kerningGroupsForGlyph(glyphName: string, hint?: string): string[] {
   return groupNames;
 }
 
-function lookupKerningValue(left: string, right: string): number {
+function lookupKerningValue(left: string, right: string): number | null {
   const leftGroups = kerningGroupsForGlyph(left, glyphKerningGroups.value.get(left)?.right);
   const rightGroups = kerningGroupsForGlyph(right, glyphKerningGroups.value.get(right)?.left);
   const pairs = kerning.value.get(left);
@@ -4336,7 +4336,8 @@ function lookupKerningValue(left: string, right: string): number {
       if (value !== undefined) return value;
     }
   }
-  return 0;
+  // null = no explicit pair; distinguishes from an explicit pair of 0.
+  return null;
 }
 
 function activeTextKernPair(side: "left" | "right"): [string, string] | null {
@@ -4354,8 +4355,9 @@ function activeTextKernPair(side: "left" | "right"): [string, string] | null {
 function activeTextKernValue(side: "left" | "right"): number | null {
   const pair = activeTextKernPair(side);
   if (!pair) return null;
-  const value = lookupKerningValue(pair[0], pair[1]);
-  return value === 0 ? null : value;
+  // lookupKerningValue returns null when no explicit pair exists (not the
+  // same as an explicit pair of 0, which should display as 0, not "Auto").
+  return lookupKerningValue(pair[0], pair[1]);
 }
 
 function updateActiveTextKern(side: "left" | "right", value: string) {
