@@ -4,7 +4,7 @@ agent: Codex (eli@desktop)
 branch: main
 worktree: /Users/eli/GH/repos/runebender-comfy
 started: 2026-06-06
-last_touched: 2026-06-07 21:24 PDT
+last_touched: 2026-06-09 01:35 PDT
 touches:
   - docs/workflows/local-ai-glyph-tracing.md
   - docs/workflows/local-ai-glyph-tracing-rethink.md

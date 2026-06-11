@@ -21,7 +21,7 @@ import init, {
   glifWithOutlinesFrom,
   glifWithUnicode,
   glyphCategoryForCodepoint,
-  traceImageToGlif,
+  traceImageToGlifReport,
 } from "../wasm/runebender_comfy_core.js";
 import CategorySidebar, {
   type Category,
@@ -63,7 +63,6 @@ import WelcomePanel from "./components/WelcomePanel.vue";
 import WorkspaceToolbar from "./components/WorkspaceToolbar.vue";
 import { runebenderHostKey } from "./host/runebenderHost";
 import { browserHost } from "./hosts/browser/browserHost";
-import { THEME_MARK_COLORS } from "./themeTokens";
 
 const props = defineProps<{
   nodeId?: string;
@@ -77,10 +76,6 @@ const props = defineProps<{
 }>();
 
 const runebenderHost = inject(runebenderHostKey, browserHost);
-const GREEN_REFERENCE_MARKS = new Set([
-  THEME_MARK_COLORS.find((color) => color.name === "green")?.ufoRgba ?? "0.09,0.72,0.44,1",
-  "0.3,0.7,0.3,1",
-]);
 const currentFontPath = computed(() => props.fontPathRef?.value ?? "");
 const WELCOME_DEMO_GLIF = `<?xml version="1.0" encoding="UTF-8"?>
 <glyph name="R" format="2">
@@ -159,7 +154,6 @@ const designspaceFileHandle = ref<FileSystemFileHandle | null>(null);
 const designspaceDirty = ref<boolean>(false);
 const selectionCount = ref<number>(0);
 const selectedContourCount = ref<number>(0);
-const dragHover = ref<boolean>(false);
 const currentGlyph = ref<string>("");
 const fontLabel = ref<string>("");
 const viewMode = ref<"grid" | "editor">("grid");
@@ -205,12 +199,6 @@ const backgroundImageFrame = ref<Record<string, string>>({});
 const backgroundImageDragStart = ref<{ x: number; y: number } | null>(null);
 const backgroundImageResize = ref<BackgroundImageResizeState | null>(null);
 const backgroundImageContextMenu = ref<BackgroundImageContextMenuState | null>(null);
-type GreenReferenceGlyph = {
-  name: string;
-  svg: string;
-  width: number | null;
-  contours: number | null;
-};
 const glyphImageFiles = ref<Map<string, File>>(new Map());
 const contourContextMenu = ref<ContourContextMenuState | null>(null);
 const compatErrors = ref<CompatError[]>([]);
@@ -309,6 +297,29 @@ type ForegroundPixelBounds = {
   maxY: number;
   width: number;
   height: number;
+};
+
+type WasmTraceReport = {
+  glif: string;
+  contours: number;
+  curves: number;
+  lines: number;
+  onCurves: number;
+  offCurves: number;
+  advanceWidth: number;
+  repositionShiftX: number;
+  repositionShiftY: number;
+  diagnostics: {
+    missedExtremaFixed: number;
+    highDeviationSplits: number;
+    strongTangentOverrides: number;
+    cleanTangentOverrides: number;
+    visibleTangentOverrides: number;
+    rejectedTangentNearMisses: number;
+    oversegmentedSplitsRemoved: number;
+    finalOutlineDivergences: number;
+    finalOutlineRepairs: number;
+  };
 };
 
 type ContourContextMenuState = {
@@ -850,26 +861,6 @@ const activeGlyphPreviewSvg = computed(() => {
   } catch {
     return activeGlyphSvg.value;
   }
-});
-const greenReferenceGlyphs = computed<GreenReferenceGlyph[]>(() => {
-  const data = activeMasterData.value;
-  if (!data) return [];
-  const references: GreenReferenceGlyph[] = [];
-  for (const [name, mark] of data.glyphMarkColors.entries()) {
-    if (name === currentGlyph.value) continue;
-    if (!GREEN_REFERENCE_MARKS.has(mark.replace(/\s+/g, ""))) continue;
-    const svg = data.glyphSvgs.get(name);
-    if (!svg) continue;
-    const metadata = data.glyphMetadata.get(name);
-    references.push({
-      name,
-      svg,
-      width: metadata?.width ?? null,
-      contours: metadata?.contours ?? null,
-    });
-  }
-  references.sort((a, b) => a.name.localeCompare(b.name));
-  return references.slice(0, 6);
 });
 const activeGlyphUnicode = computed(() =>
   currentGlyph.value ? glyphUnicodes.value.get(currentGlyph.value) : undefined,
@@ -2028,6 +2019,29 @@ function otsuThresholdFromImageData(imageData: ImageData): number {
   return threshold;
 }
 
+function highContrastTraceThresholdFromImageData(imageData: ImageData): number {
+  const otsu = otsuThresholdFromImageData(imageData);
+  const data = imageData.data;
+  const total = Math.max(1, imageData.width * imageData.height);
+  let darkPixels = 0;
+  let lightPixels = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const luma = compositedLuma(data, i);
+    if (luma <= 32) darkPixels += 1;
+    if (luma >= 240) lightPixels += 1;
+  }
+  const darkRatio = darkPixels / total;
+  const lightRatio = lightPixels / total;
+  if (darkRatio >= 0.005 && lightRatio >= 0.55) {
+    return Math.max(otsu, 192);
+  }
+  return otsu;
+}
+
+async function thresholdForBackgroundTrace(file: File): Promise<number> {
+  return highContrastTraceThresholdFromImageData(await imageDataForFile(file));
+}
+
 async function foregroundPixelBoundsForTrace(
   file: File,
   threshold?: number,
@@ -2699,25 +2713,35 @@ async function traceBackgroundImageToGlyph(refit = false): Promise<boolean> {
       status.value = "background tracing is not ready";
       return false;
     }
+    const traceThreshold =
+      args.threshold === undefined ? await thresholdForBackgroundTrace(args.image) : args.threshold;
+    const traceArgs = { ...args, threshold: traceThreshold };
     runebenderHost.log?.(
       "info",
-      `[runebender] trace request glyph=${glyphName} slot=${args.slot} master=${args.master} image=${args.image.name} accuracy=${args.accuracy} alphamax=${args.alphamax}`,
+      `[runebender] trace request glyph=${glyphName} slot=${traceArgs.slot} master=${traceArgs.master} image=${traceArgs.image.name} accuracy=${traceArgs.accuracy} alphamax=${traceArgs.alphamax} threshold=${traceArgs.threshold}`,
     );
     let trace;
     try {
-      const imageBytes = new Uint8Array(await args.image.arrayBuffer());
-      const glif = traceImageToGlif(imageBytes, JSON.stringify(wasmTraceConfig(args)));
-      trace = { success: true, glyph: glyphName, glif };
+      const imageBytes = new Uint8Array(await traceArgs.image.arrayBuffer());
+      const report = JSON.parse(
+        traceImageToGlifReport(imageBytes, JSON.stringify(wasmTraceConfig(traceArgs))),
+      ) as WasmTraceReport;
+      const glif = report.glif;
+      trace = { success: true, glyph: glyphName, glif, wasmReport: report };
       runebenderHost.log?.(
         "info",
-        `[runebender] trace wasm ok glyph=${glyphName} glif_bytes=${glif.length}`,
+        `[runebender] trace wasm ok glyph=${glyphName} glif_bytes=${glif.length} contours=${report.contours} curves=${report.curves} lines=${report.lines} on=${report.onCurves} off=${report.offCurves} width=${report.advanceWidth.toFixed(1)} shift=(${report.repositionShiftX.toFixed(1)},${report.repositionShiftY.toFixed(1)})`,
+      );
+      runebenderHost.log?.(
+        "info",
+        `[runebender] trace wasm diagnostics extrema=${report.diagnostics.missedExtremaFixed} deviation_splits=${report.diagnostics.highDeviationSplits} tangent_overrides=${report.diagnostics.strongTangentOverrides}/${report.diagnostics.cleanTangentOverrides}/${report.diagnostics.visibleTangentOverrides} tangent_rejects=${report.diagnostics.rejectedTangentNearMisses} oversegment_removed=${report.diagnostics.oversegmentedSplitsRemoved} final_divergences=${report.diagnostics.finalOutlineDivergences} final_repairs=${report.diagnostics.finalOutlineRepairs}`,
       );
     } catch (wasmError) {
       runebenderHost.log?.(
         "warn",
         `[runebender] trace wasm failed, falling back to backend: ${wasmError}`,
       );
-      const { response, data } = await runebenderHost.traceBackgroundGlyph(args);
+      const { response, data } = await runebenderHost.traceBackgroundGlyph(traceArgs);
       trace = data;
       runebenderHost.log?.(
         "info",
@@ -2757,7 +2781,7 @@ async function traceBackgroundImageToGlyph(refit = false): Promise<boolean> {
     editor.setGlyphGlifWithCachedComponentsPreserveHistory(bytes);
     runebenderHost.log?.("info", `[runebender] trace editor apply ok glyph=${glyphName}`);
     try {
-      await alignBackgroundImageToTrace(args);
+      await alignBackgroundImageToTrace(traceArgs);
     } catch (alignError) {
       runebenderHost.log?.(
         "warn",
@@ -2777,7 +2801,23 @@ async function traceBackgroundImageToGlyph(refit = false): Promise<boolean> {
     }
     requestRender();
     queueComfyStateSync(true);
-    status.value = `traced ${glyphName} with img2bez`;
+    const wasmReport = "wasmReport" in trace ? (trace.wasmReport as WasmTraceReport) : undefined;
+    const unrepairedFinalDivergences = wasmReport
+      ? Math.max(
+          0,
+          wasmReport.diagnostics.finalOutlineDivergences -
+            wasmReport.diagnostics.finalOutlineRepairs,
+        )
+      : 0;
+    if (unrepairedFinalDivergences > 0) {
+      status.value = `traced ${glyphName}; ${unrepairedFinalDivergences} outline divergence${unrepairedFinalDivergences === 1 ? "" : "s"} need review`;
+      runebenderHost.log?.(
+        "warn",
+        `[runebender] trace applied with ${unrepairedFinalDivergences} unrepaired final outline divergence${unrepairedFinalDivergences === 1 ? "" : "s"}`,
+      );
+    } else {
+      status.value = `traced ${glyphName} with img2bez`;
+    }
     return true;
   } catch (e) {
     console.warn("background trace failed:", e);
@@ -6722,17 +6762,11 @@ async function readEntry(entry: FsEntry): Promise<File[]> {
 function onDragOver(e: DragEvent) {
   e.preventDefault();
   e.stopPropagation();
-  dragHover.value = true;
-}
-
-function onDragLeave() {
-  dragHover.value = false;
 }
 
 async function onDrop(e: DragEvent) {
   e.preventDefault();
   e.stopPropagation();
-  dragHover.value = false;
   const items = e.dataTransfer?.items;
   if (!items) return;
 
@@ -6816,7 +6850,6 @@ function onWindowDragOver(e: DragEvent) {
     if (e.dataTransfer) {
       e.dataTransfer.dropEffect = "copy";
     }
-    dragHover.value = true;
   }
 }
 
@@ -7265,7 +7298,6 @@ onBeforeUnmount(() => {
           ref="canvas"
           class="runebender-canvas"
           :class="{
-            'drag-hover': dragHover,
             'is-hidden': viewMode !== 'editor' && glyphNames.length > 0,
             'text-buffer-visible': viewMode === 'editor' && textBufferPreviewVisible,
           }"
@@ -7277,7 +7309,6 @@ onBeforeUnmount(() => {
           @wheel.prevent="onWheel"
           @contextmenu.prevent="onCanvasContextMenu"
           @dragover="onDragOver"
-          @dragleave="onDragLeave"
           @drop="onDrop"
         />
 
@@ -7287,7 +7318,6 @@ onBeforeUnmount(() => {
           class="grid-view"
           :style="gridStyle"
           @dragover="onDragOver"
-          @dragleave="onDragLeave"
           @drop="onDrop"
         >
           <GlyphCell
@@ -7534,31 +7564,6 @@ onBeforeUnmount(() => {
             aria-hidden="true"
           />
         </template>
-
-        <div
-          v-if="viewMode === 'editor' && editorPanelsVisible && greenReferenceGlyphs.length"
-          class="green-reference-overlay"
-          aria-label="Green reference glyphs"
-        >
-          <strong>Green References</strong>
-          <div class="green-reference-list">
-            <span
-              v-for="reference in greenReferenceGlyphs"
-              :key="`green-reference-${reference.name}`"
-              class="green-reference-item"
-              :title="reference.name"
-            >
-              <span class="green-reference-shape" v-html="reference.svg" />
-              <span class="green-reference-meta">
-                {{ reference.name }}
-                <small>
-                  {{ reference.width ?? "?" }}w /
-                  {{ reference.contours ?? "?" }}c
-                </small>
-              </span>
-            </span>
-          </div>
-        </div>
 
         <div
           v-if="viewMode === 'editor' && editorPanelsVisible && currentGlyph && activeTool !== 'Text'"
@@ -8378,74 +8383,6 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.green-reference-overlay {
-  position: absolute;
-  left: var(--rb-editor-edge-inset, 8px);
-  bottom: calc(var(--rb-editor-edge-inset, 8px) + 96px);
-  z-index: 4;
-  width: 235px;
-  max-height: min(310px, calc(100% - 128px));
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px;
-  overflow: hidden;
-  background: color-mix(in srgb, var(--rb-panel-background, #1c1c1c) 94%, transparent);
-  border: var(--rb-stroke-width, 1px) solid var(--rb-accent, #18b86f);
-  border-radius: 6px;
-  color: var(--rb-overlay-text, #f0f0f0);
-  font: 12px ui-sans-serif, system-ui, sans-serif;
-  pointer-events: none;
-}
-.green-reference-overlay strong {
-  color: var(--rb-accent, #18b86f);
-  font-weight: 700;
-}
-.green-reference-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-}
-.green-reference-item {
-  min-width: 0;
-  height: 70px;
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
-  gap: 3px;
-  padding: 5px;
-  border: var(--rb-stroke-width, 1px) solid color-mix(in srgb, var(--rb-accent, #18b86f) 55%, transparent);
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--rb-control-background, #303030) 42%, transparent);
-}
-.green-reference-shape {
-  min-height: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--rb-accent, #18b86f);
-}
-.green-reference-shape :deep(svg) {
-  width: auto;
-  height: 36px;
-  max-width: 88px;
-  display: block;
-}
-.green-reference-meta {
-  min-width: 0;
-  display: flex;
-  justify-content: space-between;
-  gap: 4px;
-  color: var(--rb-primary-text, #909090);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.green-reference-meta small {
-  color: var(--rb-secondary-text, #707070);
-  font: inherit;
-}
-
 .glyph-preview-overlay,
 .active-glyph-overlay {
   position: absolute;
@@ -8760,11 +8697,6 @@ onBeforeUnmount(() => {
   visibility: hidden;
   pointer-events: none;
 }
-.runebender-canvas.drag-hover {
-  outline: 2px dashed var(--rb-accent, #18b86f);
-  outline-offset: -2px;
-}
-
 /* ----- Grid ----- */
 /* BENTO_GAP = 6px from xilem's views/glyph_grid/mod.rs */
 .grid-view {

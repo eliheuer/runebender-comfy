@@ -35,6 +35,15 @@ pub fn trace_image_to_glif(image_bytes: &[u8], config_json: &str) -> Result<Stri
         .map_err(|e| JsValue::from_str(&e))
 }
 
+#[wasm_bindgen(js_name = traceImageToGlifReport)]
+pub fn trace_image_to_glif_report(
+    image_bytes: &[u8],
+    config_json: &str,
+) -> Result<String, JsValue> {
+    crate::image_trace::trace_image_to_glif_report(image_bytes, config_json)
+        .map_err(|e| JsValue::from_str(&e))
+}
+
 fn text_codepoint_from_wasm(codepoint: u32) -> Option<char> {
     if codepoint == 0 {
         None

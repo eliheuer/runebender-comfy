@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-08-img2bez-current-n-guard"
+EXPECTED_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-10-no-drag-hover-outline"
 
 
 class WebBundleTests(unittest.TestCase):
@@ -122,8 +122,8 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn("Clear Font Sources", bundle)
         self.assertIn("Trace Image", bundle)
         self.assertIn("/runebender/workspace/trace_background", bundle)
-        self.assertIn("green-reference-overlay", bundle)
-        self.assertIn("Green References", bundle)
+        self.assertNotIn("green-reference-overlay", bundle)
+        self.assertNotIn("Green References", bundle)
         self.assertIn("/runebender/workspaces/clear", bundle)
         self.assertIn("All masters", bundle)
         self.assertIn(EXPECTED_BUNDLE_FINGERPRINT, bundle)
@@ -131,7 +131,10 @@ class WebBundleTests(unittest.TestCase):
         source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
         self.assertIn("clearBackgroundImage();", source)
         self.assertIn("const traceAlphaMax = 0.8;", source)
-        self.assertIn("traceImageToGlif", source)
+        self.assertIn("traceImageToGlifReport", source)
+        self.assertIn("trace wasm diagnostics", source)
+        self.assertIn("threshold=${traceArgs.threshold}", source)
+        self.assertIn("unrepaired final outline divergence", source)
         self.assertIn("trace wasm failed, falling back to backend", source)
         self.assertIn("globalFit: false", source)
         host = (ROOT / "web" / "src" / "hosts" / "comfy" / "comfyHost.ts").read_text(encoding="utf-8")
