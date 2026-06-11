@@ -1094,6 +1094,9 @@ let rafNeedsBackgroundImageFrame = false;
 let rafNeedsSelectionState = false;
 let rafNeedsCompatibilityMarkers = false;
 let rafNeedsCompatibilityErrors = false;
+// Latest unprocessed pointermove — coalesced into the rAF callback so
+// WASM is called once per frame regardless of input device Hz.
+let pendingPointerMove: PointerEvent | null = null;
 let compatibilityErrorRefreshTimer: number | null = null;
 let pendingNudgeSelectionState: Float64Array | null = null;
 let pendingNudgeSelectionRefresh = false;
@@ -1310,6 +1313,38 @@ function requestRender(options: RenderRequestOptions = {}) {
     rafNeedsCompatibilityMarkers = false;
     rafNeedsCompatibilityErrors = false;
     if (!editor || (viewMode.value !== "editor" && glyphNames.value.length > 0)) return;
+    // Drain the coalesced pointermove: one WASM call per frame regardless
+    // of input device Hz (mice at 1000Hz, tablets at 200Hz, etc.).
+    const pm = pendingPointerMove;
+    pendingPointerMove = null;
+    if (pm && editor) {
+      const c = canvasCoords(pm);
+      if (c) {
+        const pointerActive = pm.buttons !== 0;
+        if (!pointerActive && activeTool.value === "Select") {
+          const visualChanged = editor.pointerMoveVisualChanged(c[0], c[1], modBits(pm));
+          selectIdleHoverActive = pm.altKey;
+          if (!visualChanged) {
+            // suppress the render below if nothing changed
+          }
+        } else if (pointerActive && activeTool.value === "Select") {
+          const selectionState = editor.pointerMoveSelectionState(c[0], c[1], modBits(pm));
+          if (!(selectionState.length >= 2 && selectionState[0] <= 0 && selectionState[1] <= 0)) {
+            if (selectionState.length >= 13) {
+              if (selectionState[1] > 0) editorGlyphNeedsSync = true;
+              applySelectionState(selectionState, { reuseAnchorName: true }, 2);
+            }
+          }
+        } else {
+          editor.pointerMove(c[0], c[1], modBits(pm));
+          if (pointerActive) refreshMeasureState();
+          if (textPointerMayMutate && pointerActive) {
+            refreshTextLayoutFromEditor();
+            textKerningNeedsSync = true;
+          }
+        }
+      }
+    }
     const nudgePerf = pendingNudgePerf;
     if (nudgePerf) nudgePerf.renderStart = performance.now();
     editor?.render();
@@ -3876,12 +3911,8 @@ function applyContourContextMenuAction(
 
 function onPointerMove(e: PointerEvent) {
   if (!editor) return;
-  const c = canvasCoords(e);
-  if (!c) return;
   const pointerActive = e.buttons !== 0;
-  if (!textPointerMayMutate && isPlainTextLeftDrag(e)) {
-    return;
-  }
+  if (!textPointerMayMutate && isPlainTextLeftDrag(e)) return;
   if (
     !pointerActive &&
     (activeTool.value === "Knife" ||
@@ -3892,39 +3923,13 @@ function onPointerMove(e: PointerEvent) {
   ) {
     return;
   }
-  if (!pointerActive && activeTool.value === "Select") {
-    if (!e.altKey && !selectIdleHoverActive) {
-      return;
-    }
-    const visualChanged = editor.pointerMoveVisualChanged(c[0], c[1], modBits(e));
-    selectIdleHoverActive = e.altKey;
-    if (visualChanged) {
-      requestRender({ refreshDerivedState: false });
-    }
+  if (!pointerActive && activeTool.value === "Select" && !e.altKey && !selectIdleHoverActive) {
     return;
   }
-  if (pointerActive && activeTool.value === "Select") {
-    const selectionState = editor.pointerMoveSelectionState(c[0], c[1], modBits(e));
-    if (selectionState.length >= 2 && selectionState[0] <= 0 && selectionState[1] <= 0) {
-      return;
-    }
-    if (selectionState.length >= 13) {
-      if (selectionState[1] > 0) {
-        editorGlyphNeedsSync = true;
-      }
-      applySelectionState(selectionState, { reuseAnchorName: true }, 2);
-    }
-    requestRender({ refreshDerivedState: false });
-    return;
-  }
-  editor.pointerMove(c[0], c[1], modBits(e));
-  if (pointerActive) {
-    refreshMeasureState();
-  }
-  if (textPointerMayMutate && pointerActive) {
-    refreshTextLayoutFromEditor();
-    textKerningNeedsSync = true;
-  }
+  // Store the latest event; the rAF callback drains it once per frame.
+  // This coalesces high-Hz input (tablets at 200Hz, gaming mice at 1000Hz)
+  // down to one WASM call per rendered frame.
+  pendingPointerMove = e;
   requestRender({ refreshDerivedState: false });
 }
 

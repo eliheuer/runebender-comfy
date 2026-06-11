@@ -112,12 +112,13 @@ profiler says is already cheap.
       several snapshot getters. Memoize the layout in `TextBuffer`
       behind a dirty flag (invalidate on mutation / line-height
       change). This is the main cost while the text tool is active.
-- [ ] **Restrict Vello AA support to what's used.**
+- [x] **Restrict Vello AA support to what's used.**
       `AaSupport::all()` compiles MSAA8/MSAA16 pipeline variants that
       are never used (render always passes `AaConfig::Area`) —
       startup shader-compilation time and GPU memory for nothing.
       Use `AaSupport::area_only()`. (`renderer.rs:526`,
       `renderer.rs:2046`)
+      *Done 2026-06-11.*
 - [ ] **Selection signature scans per path per frame.**
       `path_selection_signature` linearly scans the selection per
       contour per frame (`renderer.rs:312`). Cheap-ish, but free to
@@ -126,7 +127,7 @@ profiler says is already cheap.
 
 ## Tier 2 — JS↔WASM boundary and event path
 
-- [ ] **Coalesce pointermove → one WASM call per frame.** Handlers
+- [x] **Coalesce pointermove → one WASM call per frame.** Handlers
       call into WASM per event (`Runebender.vue:3877-3929`); mice and
       tablets deliver 120–1000Hz. rAF already coalesces *rendering*,
       but `pointerMove*` / `pointerMoveSelectionState()` run per
@@ -136,6 +137,8 @@ profiler says is already cheap.
       for knife/pen). This also makes drag cost independent of input
       device Hz — the same trick xilem used (it throttled session
       rebuilds to every 3rd frame; canvas repaint stayed per-frame).
+      *Done 2026-06-11: `pendingPointerMove` stored in handler,
+      drained at top of rAF callback.*
 - [ ] **Restore Arc-style cheap snapshots for undo/drag.** xilem's
       `EditSession` held `paths: Arc<Vec<Path>>` + `glyph:
       Arc<Glyph>`, so undo snapshots and drag-begin clones were O(1).

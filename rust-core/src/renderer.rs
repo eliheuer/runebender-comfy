@@ -523,7 +523,7 @@ impl Renderer {
             &device,
             RendererOptions {
                 use_cpu: false,
-                antialiasing_support: vello::AaSupport::all(),
+                antialiasing_support: vello::AaSupport::area_only(),
                 num_init_threads: None,
                 pipeline_cache: None,
             },
