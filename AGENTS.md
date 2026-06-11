@@ -139,12 +139,18 @@ pnpm dev            # Vite at :5173
 
 # Rebuild WASM after ANY rust-core/ change:
 cd web
-pnpm wasm           # dev build → ../web/wasm/
-pnpm wasm:release   # release build
+pnpm wasm           # release build → ../web/wasm/ (the default — see note)
+pnpm wasm:debug     # unoptimized dev build, only when you need debug info
 
 # Or directly:
 cd rust-core
-wasm-pack build --target web --out-dir ../web/wasm --dev
+wasm-pack build --target web --out-dir ../web/wasm --release
+
+# ⚠ `pnpm wasm` deliberately builds RELEASE. A debug wasm is ~12MB and
+# 5–20× slower (it once shipped inside dist/ and tanked editor perf —
+# see .agents/PERFORMANCE_PLAN.md). test_web_bundle.py enforces a
+# bundle size cap so a debug binary can't land in dist/ silently.
+# Never run `pnpm build` on top of a `pnpm wasm:debug` output.
 
 # Rust tests + native build:
 cd rust-core

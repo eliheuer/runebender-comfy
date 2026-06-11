@@ -45,11 +45,13 @@ profiler says is already cheap.
       *Done 2026-06-10: release wasm (12MB dev → 2.4MB) rebuilt into
       dist (17MB → 3.7MB); user confirmed noticeably better
       performance in ComfyUI via run-mac.sh.*
-- [ ] **Make the dev loop default to release wasm.** Keep a
+- [x] **Make the dev loop default to release wasm.** Keep a
       `wasm:debug` script for when you actually need debug info;
       `pnpm wasm` should produce the fast build so a stale dev
       binary can't silently ship or skew perception again.
       (`web/package.json:12-13`)
+      *Done 2026-06-10: `pnpm wasm` now builds release; `wasm:debug`
+      added; AGENTS.md build docs updated.*
 - [ ] **Switch the release profile to speed.** In
       `rust-core/Cargo.toml`: `opt-level = "z"` → `opt-level = 3`
       (try `"s"` if binary size regresses unacceptably), add
@@ -68,10 +70,12 @@ profiler says is already cheap.
       the `.wasm` as a sibling asset in `dist/` and load by URL
       (copy step + `init(new URL(...))`, or a wasm plugin).
       (`web/vite.config.ts:15-25`)
-- [ ] **CI/test guard: dist must contain a release wasm.** The dist
+- [x] **CI/test guard: dist must contain a release wasm.** The dist
       built today embeds the dev binary. Add a check (e.g. in
       `tests/test_web_bundle.py`) on wasm size or a build fingerprint
       so a dev build can't be committed into `dist/` again.
+      *Done 2026-06-10: `test_built_bundle_embeds_release_wasm` caps
+      the dist bundle at 8MB (release ≈ 3.7MB, debug embed ≈ 17MB).*
 
 ## Tier 1 — Per-frame Rust costs (pan/zoom/drag hot path)
 

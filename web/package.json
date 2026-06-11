@@ -9,8 +9,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "gf-sidebar": "cd .. && node scripts/generate-gf-sidebar-data.mjs",
-    "wasm": "cd ../rust-core && wasm-pack build --target web --out-dir ../web/wasm --dev",
-    "wasm:release": "cd ../rust-core && wasm-pack build --target web --out-dir ../web/wasm --release"
+    "wasm": "cd ../rust-core && wasm-pack build --target web --out-dir ../web/wasm --release",
+    "wasm:release": "cd ../rust-core && wasm-pack build --target web --out-dir ../web/wasm --release",
+    "wasm:debug": "cd ../rust-core && wasm-pack build --target web --out-dir ../web/wasm --dev"
   },
   "dependencies": {
     "vue": "^3.4.0"
