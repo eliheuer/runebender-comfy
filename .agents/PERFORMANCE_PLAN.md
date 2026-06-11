@@ -65,7 +65,7 @@ profiler says is already cheap.
       `[package.metadata.wasm-pack.profile.release] wasm-opt =
       ["-O3"]` (try `-O4`).
       *Done 2026-06-11: wasm 2.7MB → 2.8MB, dist stays 4.2MB.*
-- [ ] **Stop base64-inlining the wasm in the dist bundle.** Vite lib
+- [x] **Stop base64-inlining the wasm in the dist bundle.** Vite lib
       mode inlines all assets — `web/dist/runebender-comfy.js` is
       17MB because the 12MB wasm rides inside as base64. This kills
       `WebAssembly.instantiateStreaming` (compile-during-download),
@@ -73,6 +73,10 @@ profiler says is already cheap.
       the `.wasm` as a sibling asset in `dist/` and load by URL
       (copy step + `init(new URL(...))`, or a wasm plugin).
       (`web/vite.config.ts:15-25`)
+      *Done 2026-06-11: wasmStreamingPlugin in vite.config.ts rewrites
+      the wasm-pack shim URL (build-mode only) and copies the wasm to
+      dist/assets/ in writeBundle. JS bundle 4.2MB → 557KB; wasm is
+      2.8MB separate file. Enables instantiateStreaming at load.*
 - [x] **CI/test guard: dist must contain a release wasm.** The dist
       built today embeds the dev binary. Add a check (e.g. in
       `tests/test_web_bundle.py`) on wasm size or a build fingerprint

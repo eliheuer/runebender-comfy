@@ -110,19 +110,36 @@ class WebBundleTests(unittest.TestCase):
         self.assertTrue((dist / "runebender-comfy.js").is_file())
         self.assertTrue((dist / "style.css").is_file())
 
-    def test_built_bundle_embeds_release_wasm(self) -> None:
-        # The wasm rides inside the bundle as base64 (Vite lib mode). A
-        # dev-profile wasm (`pnpm wasm:debug`) is ~12MB and inflates the
-        # bundle to ~17MB; the release build lands well under this cap.
-        # Editor performance depends on the release build — a cap breach
-        # means an unoptimized debug binary was rebuilt into dist.
+    def test_dist_wasm_is_separate_asset(self) -> None:
+        # The wasm must be emitted as a separate file in dist/assets/, NOT
+        # inlined as base64 in the JS bundle. Separate = streaming compile
+        # (WebAssembly.instantiateStreaming); inlined = decode-then-compile,
+        # which is slower and bloats the JS parse cost.
+        #
+        # A debug wasm (`pnpm wasm:debug`) is ~12MB; the release build lands
+        # around 2-4MB. Both caps are checked so neither a missing file nor
+        # a re-introduced debug binary can slip through silently.
+        wasm = ROOT / "web" / "dist" / "assets" / "runebender_comfy_core_bg.wasm"
+        self.assertTrue(
+            wasm.is_file(),
+            "wasm not found at dist/assets/runebender_comfy_core_bg.wasm — "
+            "run `pnpm wasm` then `pnpm build`.",
+        )
+        wasm_bytes = wasm.stat().st_size
+        self.assertGreater(wasm_bytes, 1 * 1024 * 1024, "wasm looks empty or truncated")
+        self.assertLessEqual(
+            wasm_bytes,
+            5 * 1024 * 1024,
+            "wasm exceeds the release-build size cap — was `pnpm wasm:debug` used? "
+            "Run `pnpm wasm` (release) then `pnpm build`.",
+        )
+        # JS bundle must NOT contain the wasm as a base64 blob.
         bundle = ROOT / "web" / "dist" / "runebender-comfy.js"
-        max_bytes = 8 * 1024 * 1024
         self.assertLessEqual(
             bundle.stat().st_size,
-            max_bytes,
-            "dist bundle exceeds the release-wasm size cap — was it built "
-            "from a debug wasm? Run `pnpm wasm` (release) then `pnpm build`.",
+            2 * 1024 * 1024,
+            "JS bundle is unexpectedly large — the wasm may have been re-inlined. "
+            "Check vite.config.ts wasmStreamingPlugin.",
         )
 
     def test_built_bundle_registers_comfy_extension(self) -> None:
@@ -177,7 +194,8 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn("scriptMatchesBundledPreset", source)
         self.assertIn("presetSourceCache", source)
 
-        # Only the entry module and its stylesheet are emitted at the top level.
+        # Only the entry module and its stylesheet are emitted at the top
+        # level as files (the wasm lives in assets/, codemirror in vendor/).
         top_level = sorted(p.name for p in dist.iterdir() if p.is_file())
         self.assertEqual(top_level, ["runebender-comfy.js", "style.css"])
 
