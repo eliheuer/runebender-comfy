@@ -7,11 +7,11 @@
 import { app } from "/scripts/app.js";
 import { createApp, ref } from "vue";
 
-import { runebenderHostKey, type WorkspaceChoice } from "./host/runebenderHost";
+import { runebenderHostKey, type WorkspaceChoice } from "runebender-web/src/host/runebenderHost";
 import { comfyHost } from "./hosts/comfy/comfyHost";
-import Runebender from "./Runebender.vue";
+import Runebender from "runebender-web/src/Runebender.vue";
 
-const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-10-no-drag-hover-outline";
+const RUNEBENDER_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-12-runebender-web-extraction";
 
 // Mirror our own console output to the ComfyUI terminal through the
 // injected Comfy host. Filters to messages prefixed with

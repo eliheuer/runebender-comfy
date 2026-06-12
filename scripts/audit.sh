@@ -12,6 +12,13 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 
+# The Rust editor crate lives in the runebender-web package (file: dep).
+EDITOR_CRATE="$ROOT/web/node_modules/runebender-web/core"
+if [[ ! -d "$EDITOR_CRATE" ]]; then
+    echo "runebender-web dependency not installed; run: cd web && pnpm install" >&2
+    exit 2
+fi
+
 failures=0
 
 echo "=== cargo deny check (RustSec + licenses + sources) ==="
@@ -20,7 +27,7 @@ if ! command -v cargo-deny >/dev/null 2>&1; then
     echo "    cargo install cargo-deny --locked" >&2
     exit 2
 fi
-( cd "$ROOT/rust-core" && cargo deny check ) || failures=$((failures + 1))
+( cd "$EDITOR_CRATE" && cargo deny check ) || failures=$((failures + 1))
 
 echo
 echo "=== check-crate-age (7-day cooldown) ==="
@@ -29,7 +36,7 @@ if [[ ! -x "$AGE_BIN" ]]; then
     echo "building check-crate-age..." >&2
     ( cd "$ROOT/tools/check-crate-age" && cargo build --release ) || exit 2
 fi
-"$AGE_BIN" "$ROOT/rust-core/Cargo.lock" "$@" || failures=$((failures + 1))
+"$AGE_BIN" "$EDITOR_CRATE/Cargo.lock" "$@" || failures=$((failures + 1))
 
 echo
 if [[ $failures -eq 0 ]]; then

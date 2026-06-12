@@ -30,17 +30,16 @@ Kurbo MIT-or-Apache) are all GPL-3.0-compatible.
   active/_template.md template for new claims
 docs/architecture/    durable architecture decisions and boundaries
 nodes/                ComfyUI Python nodes (runebender.py, designbot.py)
-rust-core/            Rust core compiled to WASM; src/{editor,renderer,wasm_api}.rs
-  deny.toml           cargo-deny config (supply-chain)
-scripts/audit.sh      runs cargo-deny + check-crate-age together
+scripts/audit.sh      runs cargo-deny + check-crate-age (against the
+                      runebender-web dependency's Rust crate)
 scripts/agent-doctor.sh preflight checks for new agent sessions
 tools/check-crate-age/  Rust binary querying crates.io for npm-style age cooldown
-web/                  Vue 3 + Vite frontend
-  src/Runebender.vue  layout root
-  src/components/     one .vue file per xilem components/*.rs (intentional 1:1)
-  src/devTestFont.ts  dev-mode UFO auto-loader (DEV only)
-  assets/test-fonts/  drop UFOs here for dev (gitignored)
-  wasm/               wasm-pack output (gitignored)
+web/                  ComfyUI extension build (thin since 2026-06-12)
+  src/extension.ts    ComfyUI widget registration (the only comfy entry)
+  src/hosts/comfy/    RunebenderHost implementation over the workspace API
+  package.json        depends on runebender-web (file:../../runebender-web) —
+                      the editor itself (Runebender.vue, components, Rust
+                      wasm core) lives in that repo now
   pnpm-workspace.yaml pnpm 10 config — see "pnpm 10 gotchas" below
 SECURITY.md           supply-chain policy
 ```
@@ -55,11 +54,13 @@ SECURITY.md           supply-chain policy
               │ custom widget registration (WEB_DIRECTORY)
 ┌─────────────▼────────────────────────────┐
 │ ComfyUI frontend (Vue 3)                 │
-│   web/src/Runebender.vue                 │
+│   web/src/extension.ts + hosts/comfy/    │
 └─────────────┬────────────────────────────┘
-              │ wasm-bindgen
+              │ imports (file: dep)
 ┌─────────────▼────────────────────────────┐
-│ rust-core (Vello + Kurbo, NO Xilem)      │
+│ runebender-web (separate repo)           │
+│   Runebender.vue + core/ wasm            │
+│   (Vello + Kurbo, NO Xilem)              │
 └──────────────────────────────────────────┘
 ```
 
@@ -127,42 +128,28 @@ the vello edge — the same trick `spline` already uses.
 
 ## Build and dev commands
 
-Primary workflow is the standalone Vite page, **not** running inside
-ComfyUI. If it works at `localhost:5173`, it'll work in ComfyUI;
-ComfyUI integration is deferred (Wave 4, unstarted).
+The editor itself (UI, Rust core, wasm) is developed in the sibling
+**runebender-web** repo — `cd ../runebender-web && pnpm dev` is the
+main loop, and its AGENTS.md covers it. This repo only wires the
+editor into ComfyUI.
 
 ```sh
-# Frontend dev (the main loop):
+# Build the ComfyUI extension bundle (dist/runebender-comfy.js):
 cd web
-pnpm install        # respects 7-day npm cooldown — see Conventions
-pnpm dev            # Vite at :5173
+pnpm install        # links runebender-web from ../../runebender-web
+pnpm build
 
-# Rebuild WASM after ANY rust-core/ change:
-cd web
-pnpm wasm           # release build → ../web/wasm/ (the default — see note)
-pnpm wasm:debug     # unoptimized dev build, only when you need debug info
+# After changing the editor in ../runebender-web, just rebuild here —
+# the file: dependency picks the sibling checkout up live. If the
+# editor wasm changed, run `pnpm wasm` over there first (its wasm/
+# output is committed in that repo).
 
-# Or directly:
-cd rust-core
-wasm-pack build --target web --out-dir ../web/wasm --release
+# ⚠ The bundle-size test (tests/test_web_bundle.py) guards against a
+# debug wasm landing in dist/ — keep runebender-web wasm/ a release
+# build (`pnpm wasm`, never `pnpm wasm:debug`, before committing).
 
-# ⚠ `pnpm wasm` deliberately builds RELEASE. A debug wasm is ~12MB and
-# 5–20× slower (it once shipped inside dist/ and tanked editor perf —
-# see .agents/PERFORMANCE_PLAN.md). test_web_bundle.py enforces a
-# bundle size cap so a debug binary can't land in dist/ silently.
-# Never run `pnpm build` on top of a `pnpm wasm:debug` output.
-
-# Rust tests + native build:
-cd rust-core
-cargo test                                  # currently ~13 tests
-cargo build --target wasm32-unknown-unknown
-
-# Supply-chain audit (run both layers):
+# Supply-chain audit (audits the runebender-web crate via node_modules):
 ./scripts/audit.sh
-# Or individually:
-cargo deny check
-cargo run --manifest-path tools/check-crate-age/Cargo.toml -- rust-core/Cargo.lock
-# (Requires: cargo install cargo-deny --locked)
 ```
 
 ### Stale-state cheat sheet (these all bit during development)
@@ -187,7 +174,7 @@ cargo run --manifest-path tools/check-crate-age/Cargo.toml -- rust-core/Cargo.lo
   `yes |` do NOT bypass it — it's resolution-level.
 - **Rust side** has no built-in age filter. Use the binary at
   `tools/check-crate-age/` (queries crates.io), plus `cargo-deny`
-  via `rust-core/deny.toml`. `scripts/audit.sh` runs both.
+  via the runebender-web crate `core/deny.toml`. `scripts/audit.sh` runs both.
 - Note: `cargo-deny` does **not** have age filtering despite older
   docs suggesting otherwise. That's why `check-crate-age` exists.
 - If adding any dep, run the relevant age check before merging.
@@ -259,12 +246,12 @@ The product north star is "xilem and comfy feel like the same tool."
 Concretely:
 
 - **Each xilem `src/components/*.rs` gets a 1:1 Vue sibling** with
-  the same filename stem in `web/src/components/`. Makes "look at
-  what xilem changed and mirror it" trivially obvious.
+  the same filename stem in runebender-web `src/components/`. Makes
+  "look at what xilem changed and mirror it" trivially obvious.
 - **Mirror xilem's palette byte-for-byte** so files round-trip.
   Background `#101010`, panels `#1C1C1C`, green accent `#66EE88`,
   `BENTO_GAP = 6px`, stroke widths `1.5×`. Reference values are in
-  `rust-core/src/renderer.rs` and `web/src/Runebender.vue`'s `<style>`.
+  runebender-web `core/src/renderer.rs` and `src/Runebender.vue` `<style>`.
 - **Glyph mark colors are semantic, not cosmetic** — the user's local
   AI workflows depend on the specific color slots. Don't tweak
   `MARK_RED / ORANGE / YELLOW / GREEN / BLUE / PURPLE / PINK`.

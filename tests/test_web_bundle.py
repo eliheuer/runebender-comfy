@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-10-no-drag-hover-outline"
+EXPECTED_BUNDLE_FINGERPRINT = "rb-bundle-2026-06-12-runebender-web-extraction"
 
 
 class WebBundleTests(unittest.TestCase):
@@ -119,10 +119,10 @@ class WebBundleTests(unittest.TestCase):
         # A debug wasm (`pnpm wasm:debug`) is ~12MB; the release build lands
         # around 2-4MB. Both caps are checked so neither a missing file nor
         # a re-introduced debug binary can slip through silently.
-        wasm = ROOT / "web" / "dist" / "assets" / "runebender_comfy_core_bg.wasm"
+        wasm = ROOT / "web" / "dist" / "assets" / "runebender_web_bg.wasm"
         self.assertTrue(
             wasm.is_file(),
-            "wasm not found at dist/assets/runebender_comfy_core_bg.wasm — "
+            "wasm not found at dist/assets/runebender_web_bg.wasm — "
             "run `pnpm wasm` then `pnpm build`.",
         )
         wasm_bytes = wasm.stat().st_size
@@ -160,7 +160,9 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn("All masters", bundle)
         self.assertIn(EXPECTED_BUNDLE_FINGERPRINT, bundle)
 
-        source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
+        # Editor sources live in the runebender-web package (file: dep).
+        pkg = ROOT / "web" / "node_modules" / "runebender-web"
+        source = (pkg / "src" / "Runebender.vue").read_text(encoding="utf-8")
         self.assertIn("clearBackgroundImage();", source)
         self.assertIn("const traceAlphaMax = 0.8;", source)
         self.assertIn("traceImageToGlifReport", source)
@@ -172,14 +174,14 @@ class WebBundleTests(unittest.TestCase):
         host = (ROOT / "web" / "src" / "hosts" / "comfy" / "comfyHost.ts").read_text(encoding="utf-8")
         self.assertIn('body.append("alphamax", String(args.alphamax ?? 0.8))', host)
         self.assertIn('if (args.globalFit) body.append("globalFit", "true")', host)
-        renderer = (ROOT / "rust-core" / "src" / "renderer.rs").read_text(encoding="utf-8")
+        renderer = (pkg / "core" / "src" / "renderer.rs").read_text(encoding="utf-8")
         self.assertNotIn("path_edit_fill", renderer)
         self.assertIn("controls.outline", renderer)
         self.assertIn("geometry.outline = Self::build_outline(path, view);", renderer)
         self.assertIn("path.append_to_bezpath(&mut outline);", renderer)
         self.assertIn("outline.apply_affine(view);", renderer)
         self.assertIn("clear_glyph_geometry_caches", renderer)
-        wasm_api = (ROOT / "rust-core" / "src" / "wasm_api.rs").read_text(encoding="utf-8")
+        wasm_api = (pkg / "core" / "src" / "wasm_api.rs").read_text(encoding="utf-8")
         self.assertIn("self.renderer.clear_glyph_geometry_caches();", wasm_api)
 
         # The DrawBot script editor loads CodeMirror from vendored assets that
@@ -272,11 +274,9 @@ class WebBundleTests(unittest.TestCase):
             "CLAUDE.md",
             "rebuild-icons.sh",
             "assets/runebender-icons.ufo/fontinfo.plist",
-            "rust-core/src/lib.rs",
             "tests/test_web_bundle.py",
             "tools/check-crate-age/Cargo.toml",
-            "web/src/Runebender.vue",
-            "web/wasm/runebender_comfy_core.js",
+            "web/src/extension.ts",
             "web/node_modules/.modules.yaml",
         ]
         for path in excluded:
@@ -448,8 +448,10 @@ class WebBundleTests(unittest.TestCase):
                 seen.add(codepoint)
 
     def test_glyph_grid_orders_encoded_glyphs_by_codepoint(self) -> None:
-        source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
-        sidebar = (ROOT / "web" / "src" / "components" / "CategorySidebar.vue").read_text(
+        # Editor sources live in the runebender-web package (file: dep).
+        pkg = ROOT / "web" / "node_modules" / "runebender-web"
+        source = (pkg / "src" / "Runebender.vue").read_text(encoding="utf-8")
+        sidebar = (ROOT / "web" / "node_modules" / "runebender-web" / "src" / "components" / "CategorySidebar.vue").read_text(
             encoding="utf-8"
         )
 
@@ -467,8 +469,10 @@ class WebBundleTests(unittest.TestCase):
         )
 
     def test_category_sidebar_copies_selected_glyph_text(self) -> None:
-        source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
-        sidebar = (ROOT / "web" / "src" / "components" / "CategorySidebar.vue").read_text(
+        # Editor sources live in the runebender-web package (file: dep).
+        pkg = ROOT / "web" / "node_modules" / "runebender-web"
+        source = (pkg / "src" / "Runebender.vue").read_text(encoding="utf-8")
+        sidebar = (ROOT / "web" / "node_modules" / "runebender-web" / "src" / "components" / "CategorySidebar.vue").read_text(
             encoding="utf-8"
         )
 
@@ -482,7 +486,9 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn("@copy-selected-text", source)
 
     def test_save_does_not_abort_on_noop_editor_flush(self) -> None:
-        source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
+        # Editor sources live in the runebender-web package (file: dep).
+        pkg = ROOT / "web" / "node_modules" / "runebender-web"
+        source = (pkg / "src" / "Runebender.vue").read_text(encoding="utf-8")
 
         self.assertIn("const needsEditorFlush =", source)
         self.assertIn("flushDeferredGlyphSync();", source)
@@ -493,7 +499,9 @@ class WebBundleTests(unittest.TestCase):
         )
 
     def test_nudge_preview_defers_coordinate_panel_until_after_paint(self) -> None:
-        source = (ROOT / "web" / "src" / "Runebender.vue").read_text(encoding="utf-8")
+        # Editor sources live in the runebender-web package (file: dep).
+        pkg = ROOT / "web" / "node_modules" / "runebender-web"
+        source = (pkg / "src" / "Runebender.vue").read_text(encoding="utf-8")
 
         self.assertIn("function schedulePostPaintNudgeSelectionState", source)
         self.assertIn("postPaintNudgeSelectionRaf = requestAnimationFrame", source)

@@ -7,7 +7,7 @@ import type {
   TraceBackgroundCandidateResult,
   TraceBackgroundGlyphResult,
   WorkspaceSlotPayload,
-} from "../../host/runebenderHost";
+} from "runebender-web/src/host/runebenderHost";
 
 export const comfyHost: RunebenderHost = {
   log(level, message) {

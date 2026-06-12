@@ -60,12 +60,10 @@ DEV_ONLY_FILES = [
     "CLAUDE.md",
     "rebuild-icons.sh",
     "assets/runebender-icons.ufo/fontinfo.plist",
-    "rust-core/src/lib.rs",
     "scripts/check_comfy_publish_ready.py",
     "tests/test_web_bundle.py",
     "tools/check-crate-age/Cargo.toml",
-    "web/src/Runebender.vue",
-    "web/wasm/runebender_comfy_core.js",
+    "web/src/extension.ts",
     "web/node_modules/.modules.yaml",
 ]
 

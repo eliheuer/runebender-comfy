@@ -6,10 +6,8 @@ CLAUDE.md
 rebuild-icons.sh
 
 # Development-only build inputs and caches.
-rust-core/
 tools/
 web/src/
-web/wasm/
 web/node_modules/
 web/.vite/
 web/index.html

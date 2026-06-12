@@ -8,28 +8,18 @@ __pycache__/
 .ruff_cache/
 
 # Rust
-/rust-core/target/
 /tools/check-crate-age/target/
 **/*.rs.bk
 Cargo.lock.user
 
 # WASM build output
-/web/wasm/
 /web/public/wasm/
-/rust-core/pkg/
 
 # Node / Vite
 /web/node_modules/
 /web/dist/
-/web/dist-site/
 /web/.vite/
 *.log
-
-# Dev-only test fonts. Convenience for the build phase; we'll
-# remove the auto-loader and this directory once the UI is done.
-# Drop UFO folders into web/assets/test-fonts/ and the dev server
-# will auto-load the first one on mount.
-/web/assets/test-fonts/
 
 # Runtime font workspace slots.
 /workspace/

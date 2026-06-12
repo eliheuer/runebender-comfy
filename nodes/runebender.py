@@ -4,7 +4,7 @@ This is the merged producer/editor: it owns the workspace selection
 widgets (so it can stand alone as a FONT producer) and also accepts an
 optional incoming FONT input for users who want to drive it from
 another producer in the graph. The editor itself is a Vue widget in
-`web/` backed by a Vello+Kurbo WASM module in `rust-core/`.
+`web/` backed by the runebender-web editor package (Vello+Kurbo WASM).
 """
 
 from __future__ import annotations

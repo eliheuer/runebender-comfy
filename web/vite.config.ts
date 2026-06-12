@@ -16,14 +16,14 @@ import { resolve } from "path";
 //    Rewrites the wasm-pack shim's built-in URL lookup from
 //      new URL('...bg.wasm', import.meta.url)
 //    to
-//      new URL(/*@vite-ignore*/ './assets/runebender_comfy_core_bg.wasm',
+//      new URL(/*@vite-ignore*/ './assets/runebender_web_bg.wasm',
 //               import.meta.url)
 //    The @vite-ignore comment prevents Vite from seeing a wasm reference
 //    here and trying to inline it.  At runtime the URL resolves relative
 //    to the bundle (which is in the same dist/ directory as assets/).
 //
 //  writeBundle:
-//    Copies wasm/runebender_comfy_core_bg.wasm → dist/assets/ with a
+//    Copies wasm/runebender_web_bg.wasm → dist/assets/ with a
 //    stable filename so the URL above stays correct across rebuilds.
 //    ComfyUI cache-busts at the node version level, not the file level.
 //
@@ -44,12 +44,12 @@ function wasmStreamingPlugin(): Plugin {
 
     transform(code: string, id: string) {
       if (!isBuildMode) return;
-      if (!id.includes("runebender_comfy_core")) return;
+      if (!id.includes("runebender_web")) return;
       // Rewrite the shim's default URL to the stable assets/ path and
       // suppress Vite's asset-inlining pass with @vite-ignore.
       return code.replace(
-        /new URL\(['"]runebender_comfy_core_bg\.wasm['"],\s*import\.meta\.url\)/g,
-        "new URL(/*@vite-ignore*/ './assets/runebender_comfy_core_bg.wasm', import.meta.url)",
+        /new URL\(['"]runebender_web_bg\.wasm['"],\s*import\.meta\.url\)/g,
+        "new URL(/*@vite-ignore*/ './assets/runebender_web_bg.wasm', import.meta.url)",
       );
     },
 
@@ -57,8 +57,8 @@ function wasmStreamingPlugin(): Plugin {
       const assetsDir = resolve(process.cwd(), outDir, "assets");
       mkdirSync(assetsDir, { recursive: true });
       copyFileSync(
-        resolve(process.cwd(), "wasm/runebender_comfy_core_bg.wasm"),
-        resolve(assetsDir, "runebender_comfy_core_bg.wasm"),
+        resolve(process.cwd(), "node_modules/runebender-web/wasm/runebender_web_bg.wasm"),
+        resolve(assetsDir, "runebender_web_bg.wasm"),
       );
     },
   };
