@@ -21,6 +21,7 @@ Cargo.lock.user
 # Node / Vite
 /web/node_modules/
 /web/dist/
+/web/dist-site/
 /web/.vite/
 *.log
 
