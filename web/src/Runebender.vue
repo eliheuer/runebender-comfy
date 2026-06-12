@@ -3252,6 +3252,25 @@ function onActiveGlyphNameChange(event: Event) {
 }
 
 function onToolSelect(tool: ToolId) {
+  // TEMP DIAGNOSTIC — remove once ghost bug is understood.
+  if (editor) {
+    try {
+      const dbg = JSON.parse(editor.textBufferState());
+      console.log("[rb-ghost] tool→", tool, {
+        hasTextSession: dbg.buffer?.hasTextSession,
+        activeSort: dbg.buffer?.activeSort,
+        cursor: dbg.buffer?.cursor,
+        sorts: (dbg.buffer?.sorts ?? []).map(
+          (s: { kind: string; glyphName?: string }) =>
+            s.kind === "glyph" ? s.glyphName : "<br>",
+        ),
+        currentGlyph: currentGlyph.value,
+        editorContours: editor.editorPanelState ? "(see panel)" : undefined,
+      });
+    } catch (e) {
+      console.warn("[rb-ghost] dump failed", e);
+    }
+  }
   const wasTextSession = activeTool.value === "Text" && activeTextSortIndex.value !== null;
   selectIdleHoverActive = false;
   activeTool.value = tool;
@@ -3418,6 +3437,50 @@ function insertTextCharacter(char: string): boolean {
     return false;
   }
   refreshTextStateFromEditor();
+  return true;
+}
+
+/// Paste a clipboard string into the text buffer at the cursor.
+/// Each character maps to a glyph by Unicode; newlines become line
+/// breaks. Characters with no glyph in the font are skipped. State is
+/// refreshed once at the end rather than per character so long pastes
+/// stay snappy.
+async function pasteTextIntoBuffer(): Promise<boolean> {
+  if (!editor || !textModeActive.value) return false;
+  let text = "";
+  try {
+    text = (await navigator.clipboard?.readText()) ?? "";
+  } catch (e) {
+    console.warn("clipboard read failed:", e);
+    status.value = "clipboard read blocked — check browser permissions";
+    return false;
+  }
+  if (!text) return false;
+
+  let inserted = 0;
+  let skipped = 0;
+  for (const char of Array.from(text)) {
+    if (char === "\r") continue;
+    if (char === "\n") {
+      editor.insertTextLineBreak();
+      inserted++;
+      continue;
+    }
+    const codepoint = char.codePointAt(0);
+    if (codepoint === undefined) continue;
+    if (editor.insertTextCharacter(codepoint)) {
+      inserted++;
+    } else {
+      skipped++;
+    }
+  }
+
+  if (inserted === 0 && skipped === 0) return false;
+  refreshTextStateFromEditor();
+  requestRender();
+  status.value = skipped
+    ? `pasted ${inserted} character${inserted === 1 ? "" : "s"} (${skipped} with no glyph skipped)`
+    : `pasted ${inserted} character${inserted === 1 ? "" : "s"}`;
   return true;
 }
 
@@ -7028,7 +7091,13 @@ function onKeyDown(e: KeyboardEvent) {
       e.preventDefault();
     }
   } else if (meta && !e.shiftKey && e.key.toLowerCase() === "v") {
-    if (pasteSelection()) {
+    if (textModeActive.value) {
+      // Paste a copied text string into the buffer instead of glyph
+      // contours. Clipboard reads are async; preventDefault now so the
+      // browser doesn't also fire its own paste.
+      e.preventDefault();
+      void pasteTextIntoBuffer();
+    } else if (pasteSelection()) {
       e.preventDefault();
     }
   } else if (
@@ -8431,10 +8500,11 @@ onBeforeUnmount(() => {
 }
 
 .active-glyph-overlay {
-  left: 50%;
-  width: min(860px, calc(100% - 32px));
+  left: calc(232px + var(--rb-editor-edge-inset, 8px) * 2);
+  right: calc(232px + var(--rb-editor-edge-inset, 8px) * 2);
+  width: auto;
   padding: 8px;
-  transform: translateX(-50%);
+  transform: none;
   display: grid;
   gap: 6px;
 }

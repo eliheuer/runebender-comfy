@@ -716,7 +716,13 @@ impl Renderer {
                 text_mode_active,
                 text_layout.as_ref(),
             );
-            if !preview_mode && !text_mode_active {
+            // Only draw the single-glyph editor's outline + handles when a
+            // sort is actually active — that's the glyph being edited in
+            // context, drawn at the active sort's origin. With no active
+            // sort (e.g. right after typing a run), glyph_view falls back
+            // to the run origin and the editor would render whatever glyph
+            // was last open as a ghost over the start of the text.
+            if !preview_mode && !text_mode_active && state.text_buffer.active_sort().is_some() {
                 self.draw_edit_controls(state, glyph_view, changed_path_indices);
             }
             return;
